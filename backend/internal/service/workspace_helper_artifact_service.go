@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"path"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 var ErrWorkspaceHelperArtifactInvalidInput = errors.New("invalid workspace helper artifact input")
@@ -97,7 +100,10 @@ func (s *WorkspaceHelperArtifactService) Upload(ctx context.Context, capabilityT
 		value := strings.TrimSpace(stepID)
 		persistedStepID = &value
 	}
-	declaration := artifactDeclarationForJob(build, job, collected.LogicalPath)
+	declaration, declarationErr := s.artifactDeclarationForJob(ctx, build, job, collected.LogicalPath)
+	if declarationErr != nil {
+		return declarationErr
+	}
 	artifactType := declaration.Type
 	if artifactType == "" {
 		artifactType = domain.InferArtifactType(collected.LogicalPath, collected.ContentType)
@@ -109,25 +115,40 @@ func (s *WorkspaceHelperArtifactService) Upload(ctx context.Context, capabilityT
 	return createErr
 }
 
-func artifactDeclarationForJob(build domain.Build, job domain.ExecutionJob, logicalPath string) domain.ArtifactDeclaration {
+func (s *WorkspaceHelperArtifactService) artifactDeclarationForJob(ctx context.Context, build domain.Build, job domain.ExecutionJob, logicalPath string) (domain.ArtifactDeclaration, error) {
 	if build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
-		return domain.ArtifactDeclaration{}
+		return domain.ArtifactDeclaration{}, nil
+	}
+	steps, stepsErr := s.builds.GetStepsByBuildID(ctx, build.ID)
+	if stepsErr != nil {
+		return domain.ArtifactDeclaration{}, stepsErr
+	}
+	workingDir := ""
+	for _, buildStep := range steps {
+		if buildStep.ID == job.StepID {
+			workingDir = buildStep.WorkingDir
+			break
+		}
 	}
 	resolved, err := pipeline.LoadAndResolve([]byte(*build.PipelineConfigYAML))
 	if err != nil {
-		return domain.ArtifactDeclaration{}
+		return domain.ArtifactDeclaration{}, err
 	}
 	for _, step := range resolved.Steps {
 		if step.NodeID != job.NodeID {
 			continue
 		}
 		for _, declaration := range step.ArtifactDecls {
-			if declaration.Path == logicalPath {
-				return declaration
+			declarationPath, pathErr := workspaceArtifactPath(workingDir, declaration.Path)
+			if pathErr != nil {
+				return domain.ArtifactDeclaration{}, pathErr
+			}
+			if declarationPath == logicalPath {
+				return declaration, nil
 			}
 		}
 	}
-	return domain.ArtifactDeclaration{}
+	return domain.ArtifactDeclaration{}, nil
 }
 
 func (s *WorkspaceHelperArtifactService) authorizeAndResolve(ctx context.Context, token, executionJobID, podUID string, buildSucceeded bool) (domain.Build, domain.ExecutionJob, bool, error) {
@@ -211,7 +232,15 @@ func artifactScopesForBuild(build domain.Build, builds workspaceHelperCacheBuild
 	scopes := make([]WorkspaceHelperArtifactScope, 0, len(steps)+1)
 	for _, step := range steps {
 		if len(step.ArtifactPaths) > 0 {
-			scopes = append(scopes, WorkspaceHelperArtifactScope{StepID: step.ID, Patterns: append([]string(nil), step.ArtifactPaths...)})
+			patterns := make([]string, 0, len(step.ArtifactPaths))
+			for _, artifactPath := range step.ArtifactPaths {
+				workspacePath, pathErr := workspaceArtifactPath(step.WorkingDir, artifactPath)
+				if pathErr != nil {
+					return nil, fmt.Errorf("step %q artifact path: %w", step.ID, pathErr)
+				}
+				patterns = append(patterns, workspacePath)
+			}
+			scopes = append(scopes, WorkspaceHelperArtifactScope{StepID: step.ID, Patterns: patterns})
 		}
 	}
 	if build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
@@ -225,6 +254,23 @@ func artifactScopesForBuild(build domain.Build, builds workspaceHelperCacheBuild
 		scopes = append(scopes, WorkspaceHelperArtifactScope{Patterns: append([]string(nil), resolved.Artifacts.Paths...)})
 	}
 	return scopes, nil
+}
+
+func workspaceArtifactPath(workingDir, artifactPath string) (string, error) {
+	normalizedWorkingDir := strings.TrimSpace(workingDir)
+	if normalizedWorkingDir == "" || normalizedWorkingDir == "." {
+		normalizedWorkingDir = ""
+	} else if err := workspace.New("", "").ValidateArtifactPath(normalizedWorkingDir); err != nil {
+		return "", fmt.Errorf("invalid working directory %q: %w", workingDir, err)
+	}
+	if err := workspace.New("", "").ValidateArtifactPath(artifactPath); err != nil {
+		return "", err
+	}
+	resolved := path.Clean(path.Join(normalizedWorkingDir, strings.ReplaceAll(strings.TrimSpace(artifactPath), "\\", "/")))
+	if err := workspace.New("", "").ValidateArtifactPath(resolved); err != nil {
+		return "", err
+	}
+	return resolved, nil
 }
 
 func scopeMatchesArtifact(scopes []WorkspaceHelperArtifactScope, stepID, logicalPath string) bool {

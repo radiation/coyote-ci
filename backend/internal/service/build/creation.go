@@ -27,6 +27,12 @@ func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []doma
 			trimmed := strings.TrimSpace(rs.GroupName)
 			groupName = &trimmed
 		}
+		artifactPaths := append([]string(nil), rs.ArtifactPaths...)
+		for _, declaration := range rs.ArtifactDecls {
+			if path := strings.TrimSpace(declaration.Path); path != "" {
+				artifactPaths = append(artifactPaths, path)
+			}
+		}
 		out = append(out, domain.BuildStep{
 			ID:                uuid.NewString(),
 			BuildID:           buildID,
@@ -43,7 +49,7 @@ func pipelineStepsToDomain(buildID string, steps []pipeline.ResolvedStep) []doma
 			Env:               env,
 			WorkingDir:        workingDir,
 			TimeoutSeconds:    rs.TimeoutSeconds,
-			ArtifactPaths:     append([]string{}, rs.ArtifactPaths...),
+			ArtifactPaths:     artifactPaths,
 			Cache:             rs.Cache.Clone(),
 			Status:            domain.BuildStepStatusPending,
 			RequestedImageRef: buildOptionalStringPtr(strings.TrimSpace(rs.Image)),

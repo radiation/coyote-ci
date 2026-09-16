@@ -34,3 +34,21 @@ func TestPipelineStepsToDomainPreservesImageBuildArtifactInputs(t *testing.T) {
 		t.Fatalf("source artifact input was mutated: %q", resolvedInputs[0].Name)
 	}
 }
+
+func TestPipelineStepsToDomainIncludesNamedArtifactDeclarationPaths(t *testing.T) {
+	steps := pipelineStepsToDomain("build-1", []pipeline.ResolvedStep{{
+		ArtifactPaths: []string{"reports/*.txt"},
+		ArtifactDecls: []domain.ArtifactDeclaration{
+			{Name: "coyote-server", Path: "dist/coyote-server"},
+			{Name: "coyote-worker", Path: "dist/coyote-worker"},
+		},
+	}})
+
+	if len(steps) != 1 {
+		t.Fatalf("steps = %+v", steps)
+	}
+	paths := steps[0].ArtifactPaths
+	if len(paths) != 3 || paths[0] != "reports/*.txt" || paths[1] != "dist/coyote-server" || paths[2] != "dist/coyote-worker" {
+		t.Fatalf("artifact paths = %+v", paths)
+	}
+}

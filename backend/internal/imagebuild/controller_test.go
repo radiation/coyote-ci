@@ -238,7 +238,7 @@ func TestControllerResolveArtifactInputsUsesKubernetesProducerStepIDs(t *testing
 	workerStepID := "build-step-worker"
 	serverContent := []byte("server executable")
 	workerContent := []byte("worker executable")
-	createImageBuildArtifact(t, context, artifacts, store, domain.BuildArtifact{ID: "artifact-server", BuildID: execution.job.BuildID, StepID: &serverStepID, Name: "coyote-server", LogicalPath: "dist/coyote-server", StorageKey: "artifacts/server", SizeBytes: int64(len(serverContent)), ChecksumSHA256: checksumPointer(serverContent)}, serverContent)
+	createImageBuildArtifact(t, context, artifacts, store, domain.BuildArtifact{ID: "artifact-server", BuildID: execution.job.BuildID, StepID: &serverStepID, Name: "coyote-server", LogicalPath: "backend/dist/coyote-server", StorageKey: "artifacts/server", SizeBytes: int64(len(serverContent)), ChecksumSHA256: checksumPointer(serverContent)}, serverContent)
 	createImageBuildArtifact(t, context, artifacts, store, domain.BuildArtifact{ID: "artifact-worker", BuildID: execution.job.BuildID, StepID: &workerStepID, Name: "coyote-worker", LogicalPath: "dist/coyote-worker", StorageKey: "artifacts/worker", SizeBytes: int64(len(workerContent)), ChecksumSHA256: checksumPointer(workerContent)}, workerContent)
 	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), &builderFake{}, &stagerFake{}, &sourceFake{})
 	if newErr != nil {
