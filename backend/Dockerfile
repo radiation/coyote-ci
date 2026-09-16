@@ -20,21 +20,13 @@ WORKDIR /app
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
+    git \
   && rm -rf /var/lib/apt/lists/*
 
 FROM runtime-base AS artifact-runtime
 
 COPY dist/coyote-server /app/server
 COPY dist/coyote-worker /app/worker
-
-EXPOSE 8080
-
-ENTRYPOINT ["/app/server"]
-
-FROM runtime-base
-
-COPY --from=source-builder /app/server /app/server
-COPY --from=source-builder /app/worker /app/worker
 
 EXPOSE 8080
 
@@ -49,3 +41,12 @@ COPY . .
 EXPOSE 8080
 
 CMD ["air", "-c", ".air.toml"]
+
+FROM runtime-base AS source-runtime
+
+COPY --from=source-builder /app/server /app/server
+COPY --from=source-builder /app/worker /app/worker
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/server"]

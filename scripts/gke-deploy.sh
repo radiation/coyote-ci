@@ -82,6 +82,10 @@ sed \
   -e "s|__CLOUD_BUILD_SOURCE_BUCKET__|$cloud_build_source_bucket|g" \
   -e "s|__WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS__|$max_in_flight_jobs|g" \
   "$repo_root/deploy/kubernetes/gke/worker.yaml" | kubectl apply -f -
-kubectl -n "$namespace" rollout status deployment/coyote-kubernetes-worker --timeout="${GKE_DEPLOY_TIMEOUT_SECONDS:-300}s"
+if [[ "${GKE_DEPLOY_WAIT:-true}" == "true" ]]; then
+  kubectl -n "$namespace" rollout status deployment/coyote-kubernetes-worker --timeout="${GKE_DEPLOY_TIMEOUT_SECONDS:-300}s"
+else
+  echo "Skipping rollout wait (GKE_DEPLOY_WAIT=${GKE_DEPLOY_WAIT})"
+fi
 kubectl -n "$namespace" get deployment,pods -l app.kubernetes.io/name=coyote-kubernetes-worker -o wide
 kubectl -n "$namespace" get deployment coyote-kubernetes-worker -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
