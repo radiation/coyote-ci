@@ -38,10 +38,32 @@ func (s ImageBuildStatus) Terminal() bool {
 
 // RemoteImageBuildSpec is a provider-neutral execution contract.
 type RemoteImageBuildSpec struct {
-	ContextPath          string            `json:"context_path"`
-	DockerfilePath       string            `json:"dockerfile_path"`
-	BuildArgs            map[string]string `json:"build_args,omitempty"`
-	TargetImageReference string            `json:"target_image_reference"`
+	ContextPath          string                    `json:"context_path"`
+	DockerfilePath       string                    `json:"dockerfile_path"`
+	Target               string                    `json:"target,omitempty"`
+	BuildArgs            map[string]string         `json:"build_args,omitempty"`
+	TargetImageReference string                    `json:"target_image_reference"`
+	ArtifactInputs       []ImageBuildArtifactInput `json:"artifact_inputs,omitempty"`
+}
+
+// ImageBuildArtifactInput declares a named artifact from an upstream step that
+// must be materialized at Destination relative to the Docker build context.
+type ImageBuildArtifactInput struct {
+	Name        string `json:"name"`
+	Destination string `json:"destination"`
+	Platform    string `json:"platform,omitempty"`
+}
+
+// ImageBuildArtifact records one verified artifact consumed to assemble an
+// image. It is persisted with the image build for provenance and debugging.
+type ImageBuildArtifact struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	StorageKey     string `json:"storage_key"`
+	ChecksumSHA256 string `json:"checksum_sha256"`
+	SizeBytes      int64  `json:"size_bytes"`
+	TargetPlatform string `json:"target_platform,omitempty"`
+	Destination    string `json:"destination"`
 }
 
 type ImageBuildSource struct {
@@ -55,6 +77,7 @@ type ImageBuildRequest struct {
 	Source         ImageBuildSource
 	Spec           RemoteImageBuildSpec
 	Timeout        time.Duration
+	Artifacts      []ImageBuildArtifact
 }
 
 type ImageBuildHandle struct {
@@ -77,6 +100,7 @@ type ExternalImageBuild struct {
 	ExternalBuildID      string
 	ExternalResourceName string
 	Source               ImageBuildSource
+	ConsumedArtifacts    []ImageBuildArtifact
 	TargetImageReference string
 	SubmittedAt          *time.Time
 	LastProviderStatus   string

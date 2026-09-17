@@ -11,13 +11,13 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
-func TestWorkspaceHelperArtifactServiceTerminalPlanIncludesAllBuildScopes(t *testing.T) {
+func TestWorkspaceHelperArtifactServiceTerminalPlanIncludesBuildWideScopes(t *testing.T) {
 	harness := newWorkspaceHelperArtifactHarness(t)
 	plan, err := harness.service.Plan(context.Background(), "token", harness.job.ID, "pod-uid", true)
 	if err != nil || !plan.Collect {
 		t.Fatalf("plan=%#v err=%v", plan, err)
 	}
-	if len(plan.Scopes) != 3 || !hasArtifactScope(plan.Scopes, "step-1", "first/*.txt") || !hasArtifactScope(plan.Scopes, "step-2", "second/*.txt") || !hasArtifactScope(plan.Scopes, "", "shared/*.txt") {
+	if len(plan.Scopes) != 1 || !hasArtifactScope(plan.Scopes, "", "shared/*.txt") {
 		t.Fatalf("terminal scopes=%#v", plan.Scopes)
 	}
 }
@@ -48,26 +48,77 @@ func TestWorkspaceHelperArtifactServiceDefersNonterminalFailedCollection(t *test
 	}
 }
 
+func TestWorkspaceHelperArtifactServiceSuccessfulProducerPlanUsesDurableStepID(t *testing.T) {
+	harness := newWorkspaceHelperArtifactHarness(t)
+	harness.job.StepID, harness.job.StepIndex = "step-1", 0
+	harness.job.NodeID = "node-000"
+	harness.service.executionJobs = &workspaceHelperCacheExecutionJobFake{job: harness.job}
+	pipelineYAML := "version: 1\nsteps:\n  - name: first\n    run: true\n    artifacts:\n      - name: coyote-server\n        path: first/output.txt\n"
+	harness.build.PipelineConfigYAML = &pipelineYAML
+	harness.builds.build = harness.build
+
+	plan, err := harness.service.Plan(context.Background(), "token", harness.job.ID, "pod-uid", true)
+	if err != nil || !plan.Collect || len(plan.Scopes) != 1 || !hasArtifactScope(plan.Scopes, "step-1", "first/*.txt") {
+		t.Fatalf("plan=%#v err=%v", plan, err)
+	}
+	if uploadErr := harness.service.Upload(context.Background(), "token", harness.job.ID, "pod-uid", "step-1", "first/output.txt", true, strings.NewReader("first")); uploadErr != nil {
+		t.Fatalf("upload producer artifact: %v", uploadErr)
+	}
+	artifacts, listErr := harness.artifacts.ListByBuildID(context.Background(), harness.build.ID)
+	if listErr != nil || len(artifacts) != 1 || !hasPersistedArtifact(artifacts, "first/output.txt", "step-1") {
+		t.Fatalf("artifacts=%#v err=%v", artifacts, listErr)
+	}
+	if artifacts[0].Name != "coyote-server" {
+		t.Fatalf("artifact name=%q", artifacts[0].Name)
+	}
+}
+
+func TestWorkspaceHelperArtifactServiceCollectsNonRootProducerArtifact(t *testing.T) {
+	harness := newWorkspaceHelperArtifactHarness(t)
+	harness.job.StepID, harness.job.StepIndex, harness.job.NodeID = "step-1", 0, "node-000"
+	harness.service.executionJobs = &workspaceHelperCacheExecutionJobFake{job: harness.job}
+	harness.builds.steps[0].WorkingDir, harness.builds.steps[0].ArtifactPaths = "backend", []string{"dist/coyote-server"}
+	pipelineYAML := "version: 1\nsteps:\n  - name: first\n    working_dir: backend\n    run: true\n    artifacts:\n      - name: coyote-server\n        path: dist/coyote-server\n"
+	harness.build.PipelineConfigYAML = &pipelineYAML
+	harness.builds.build = harness.build
+
+	plan, planErr := harness.service.Plan(context.Background(), "token", harness.job.ID, "pod-uid", true)
+	if planErr != nil || !plan.Collect || len(plan.Scopes) != 1 || !hasArtifactScope(plan.Scopes, "step-1", "backend/dist/coyote-server") {
+		t.Fatalf("plan=%#v err=%v", plan, planErr)
+	}
+	uploadErr := harness.service.Upload(context.Background(), "token", harness.job.ID, "pod-uid", "step-1", "backend/dist/coyote-server", true, strings.NewReader("server"))
+	if uploadErr != nil {
+		t.Fatalf("upload producer artifact: %v", uploadErr)
+	}
+	artifacts, listErr := harness.artifacts.ListByBuildID(context.Background(), harness.build.ID)
+	if listErr != nil || len(artifacts) != 1 || !hasPersistedArtifact(artifacts, "backend/dist/coyote-server", "step-1") || artifacts[0].Name != "coyote-server" {
+		t.Fatalf("artifacts=%#v err=%v", artifacts, listErr)
+	}
+}
+
+func TestWorkspaceHelperArtifactServiceRejectsArtifactPathEscapingWorkspace(t *testing.T) {
+	harness := newWorkspaceHelperArtifactHarness(t)
+	harness.builds.steps[0].ArtifactPaths = []string{"../outside"}
+	_, planErr := harness.service.Plan(context.Background(), "token", harness.job.ID, "pod-uid", false)
+	if planErr == nil {
+		t.Fatal("expected escaping artifact path rejection")
+	}
+}
+
 func TestWorkspaceHelperArtifactServicePersistsBuildWideScopesAndConvergesRetries(t *testing.T) {
 	harness := newWorkspaceHelperArtifactHarness(t)
 	context := context.Background()
-	if err := harness.service.Upload(context, "token", harness.job.ID, "pod-uid", "step-1", "first/output.txt", true, strings.NewReader("first")); err != nil {
-		t.Fatalf("upload first step artifact: %v", err)
-	}
-	if err := harness.service.Upload(context, "token", harness.job.ID, "pod-uid", "step-2", "second/output.txt", true, strings.NewReader("second")); err != nil {
-		t.Fatalf("upload prior step artifact: %v", err)
-	}
 	if err := harness.service.Upload(context, "token", harness.job.ID, "pod-uid", "", "shared/output.txt", true, strings.NewReader("shared")); err != nil {
 		t.Fatalf("upload shared artifact: %v", err)
 	}
-	if err := harness.service.Upload(context, "token", harness.job.ID, "pod-uid", "step-1", "first/output.txt", true, bytes.NewBufferString("retry")); err != nil {
-		t.Fatalf("retry first step artifact: %v", err)
+	if err := harness.service.Upload(context, "token", harness.job.ID, "pod-uid", "", "shared/output.txt", true, bytes.NewBufferString("retry")); err != nil {
+		t.Fatalf("retry shared artifact: %v", err)
 	}
 	artifacts, err := harness.artifacts.ListByBuildID(context, harness.build.ID)
-	if err != nil || len(artifacts) != 3 {
+	if err != nil || len(artifacts) != 1 {
 		t.Fatalf("artifacts=%#v err=%v", artifacts, err)
 	}
-	if !hasPersistedArtifact(artifacts, "first/output.txt", "step-1") || !hasPersistedArtifact(artifacts, "second/output.txt", "step-2") || !hasPersistedArtifact(artifacts, "shared/output.txt", "") {
+	if !hasPersistedArtifact(artifacts, "shared/output.txt", "") {
 		t.Fatalf("persisted artifacts=%#v", artifacts)
 	}
 }
@@ -76,7 +127,7 @@ func TestWorkspaceHelperArtifactServiceConvergesMetadataConflictAfterCollection(
 	harness := newWorkspaceHelperArtifactHarness(t)
 	harness.artifacts.createErr = repository.ErrArtifactConflict
 
-	uploadErr := harness.service.Upload(context.Background(), "token", harness.job.ID, "pod-uid", "step-1", "first/output.txt", true, strings.NewReader("first"))
+	uploadErr := harness.service.Upload(context.Background(), "token", harness.job.ID, "pod-uid", "", "shared/output.txt", true, strings.NewReader("shared"))
 	if uploadErr != nil {
 		t.Fatalf("upload should converge after a metadata conflict: %v", uploadErr)
 	}

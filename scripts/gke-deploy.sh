@@ -12,6 +12,11 @@ cloud_build_runtime_service_account="${CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT:-coyo
 cloud_build_artifact_registry_repository="${CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY:-${gcp_region}-docker.pkg.dev/${gcp_project}/${artifact_repository}}"
 cloud_build_source_bucket="${CLOUD_BUILD_SOURCE_BUCKET:-${ARTIFACT_GCS_BUCKET:-bryanchoate-coyote-ci-artifacts}}"
 max_in_flight_jobs="${WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS:-8}"
+artifact_storage_provider="${ARTIFACT_STORAGE_PROVIDER:-gcs}"
+artifact_gcs_bucket="${ARTIFACT_GCS_BUCKET:-${gcp_project}-coyote-ci-artifacts}"
+artifact_gcs_prefix="${ARTIFACT_GCS_PREFIX:-builds}"
+artifact_gcs_project="${ARTIFACT_GCS_PROJECT:-${gcp_project}}"
+artifact_storage_strict="${ARTIFACT_STORAGE_STRICT:-false}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 require_command() {
@@ -55,6 +60,13 @@ if [[ -z "$cloud_build_source_bucket" ]]; then
   exit 1
 fi
 
+for artifact_setting in artifact_storage_provider artifact_gcs_bucket artifact_gcs_project; do
+  if [[ -z "${!artifact_setting}" ]]; then
+    echo "${artifact_setting} must not be empty" >&2
+    exit 1
+  fi
+done
+
 if ! kubectl -n "$namespace" get serviceaccount coyote-kubernetes-worker >/dev/null 2>&1; then
   echo "missing externally bootstrapped ServiceAccount coyote-kubernetes-worker in namespace $namespace" >&2
   exit 1
@@ -81,7 +93,16 @@ sed \
   -e "s|__CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY__|$cloud_build_artifact_registry_repository|g" \
   -e "s|__CLOUD_BUILD_SOURCE_BUCKET__|$cloud_build_source_bucket|g" \
   -e "s|__WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS__|$max_in_flight_jobs|g" \
+  -e "s|__ARTIFACT_STORAGE_PROVIDER__|$artifact_storage_provider|g" \
+  -e "s|__ARTIFACT_GCS_BUCKET__|$artifact_gcs_bucket|g" \
+  -e "s|__ARTIFACT_GCS_PREFIX__|$artifact_gcs_prefix|g" \
+  -e "s|__ARTIFACT_GCS_PROJECT__|$artifact_gcs_project|g" \
+  -e "s|__ARTIFACT_STORAGE_STRICT__|$artifact_storage_strict|g" \
   "$repo_root/deploy/kubernetes/gke/worker.yaml" | kubectl apply -f -
-kubectl -n "$namespace" rollout status deployment/coyote-kubernetes-worker --timeout="${GKE_DEPLOY_TIMEOUT_SECONDS:-300}s"
+if [[ "${GKE_DEPLOY_WAIT:-true}" == "true" ]]; then
+  kubectl -n "$namespace" rollout status deployment/coyote-kubernetes-worker --timeout="${GKE_DEPLOY_TIMEOUT_SECONDS:-300}s"
+else
+  echo "Skipping rollout wait (GKE_DEPLOY_WAIT=${GKE_DEPLOY_WAIT})"
+fi
 kubectl -n "$namespace" get deployment,pods -l app.kubernetes.io/name=coyote-kubernetes-worker -o wide
 kubectl -n "$namespace" get deployment coyote-kubernetes-worker -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'

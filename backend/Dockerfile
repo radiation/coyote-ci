@@ -1,5 +1,3 @@
-# Default matches backend/go.mod toolchain directive.
-# docker-compose overrides via build arg; standalone builds use this default.
 ARG GO_VERSION=1.27.1
 
 FROM golang:${GO_VERSION} AS base
@@ -8,6 +6,31 @@ WORKDIR /app
 
 COPY go.mod go.sum ./
 RUN go mod download
+
+FROM base AS source-builder
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd/worker
+
+FROM debian:bookworm-slim AS runtime-base
+
+WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
+  && rm -rf /var/lib/apt/lists/*
+
+FROM runtime-base AS artifact-runtime
+
+COPY dist/coyote-server /app/server
+COPY dist/coyote-worker /app/worker
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/server"]
 
 FROM base AS dev
 
@@ -19,32 +42,10 @@ EXPOSE 8080
 
 CMD ["air", "-c", ".air.toml"]
 
-FROM base AS builder
+FROM runtime-base AS source-runtime
 
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
-RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd/worker
-
-FROM debian:bookworm-slim
-
-WORKDIR /app
-
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    ca-certificates curl gnupg git \
-  && install -m 0755 -d /etc/apt/keyrings \
-  && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
-  && chmod a+r /etc/apt/keyrings/docker.gpg \
-  && echo \
-    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-    https://download.docker.com/linux/debian \
-    bookworm stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
-  && apt-get update \
-  && apt-get install -y docker-ce-cli \
-  && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /app/server /app/server
-COPY --from=builder /app/worker /app/worker
+COPY --from=source-builder /app/server /app/server
+COPY --from=source-builder /app/worker /app/worker
 
 EXPOSE 8080
 

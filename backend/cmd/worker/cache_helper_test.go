@@ -266,6 +266,31 @@ func TestCacheKeyForHelperUsesBackendGoSum(t *testing.T) {
 	}
 }
 
+func TestCacheKeysForHelperGoBuildUsesBuildImageIdentity(t *testing.T) {
+	configureCacheHelperForTest(t, "http://127.0.0.1:1", domain.CachePolicyPullPush)
+	t.Setenv(cacheHelperComponents, "split")
+	components, componentErr := cacheComponentsForHelper("go", ".")
+	if componentErr != nil {
+		t.Fatalf("resolve components: %v", componentErr)
+	}
+	t.Setenv(cacheHelperBuildImage, "golang:1.27.1@sha256:first")
+	first, firstErr := cacheKeysForHelper(components)
+	if firstErr != nil {
+		t.Fatalf("first keys: %v", firstErr)
+	}
+	t.Setenv(cacheHelperBuildImage, "golang:1.28.0@sha256:second")
+	second, secondErr := cacheKeysForHelper(components)
+	if secondErr != nil {
+		t.Fatalf("second keys: %v", secondErr)
+	}
+	if first["go-module"] != second["go-module"] {
+		t.Fatalf("module key changed with build image: %q != %q", first["go-module"], second["go-module"])
+	}
+	if first["go-build"] == second["go-build"] {
+		t.Fatal("build key did not change with build image identity")
+	}
+}
+
 func TestCacheHelperRoundTripRestoresSavedCache(t *testing.T) {
 	var savedArchive []byte
 	var savedDigest string

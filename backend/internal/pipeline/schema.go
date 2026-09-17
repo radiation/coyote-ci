@@ -41,10 +41,18 @@ type StepDef struct {
 }
 
 type ImageBuildDef struct {
-	Context    string            `yaml:"context"`
-	Dockerfile string            `yaml:"dockerfile"`
-	BuildArgs  map[string]string `yaml:"build_args,omitempty"`
-	Image      string            `yaml:"image"`
+	Context    string                       `yaml:"context"`
+	Dockerfile string                       `yaml:"dockerfile"`
+	Target     string                       `yaml:"target,omitempty"`
+	BuildArgs  map[string]string            `yaml:"build_args,omitempty"`
+	Image      string                       `yaml:"image"`
+	Artifacts  []ImageBuildArtifactInputDef `yaml:"artifacts,omitempty"`
+}
+
+type ImageBuildArtifactInputDef struct {
+	Name        string `yaml:"name"`
+	Destination string `yaml:"destination"`
+	Platform    string `yaml:"platform,omitempty"`
 }
 
 type StepGroupDef struct {
@@ -64,10 +72,11 @@ type ArtifactDef struct {
 }
 
 type artifactPathObject struct {
-	Name    string               `yaml:"name,omitempty"`
-	Path    string               `yaml:"path"`
-	Type    string               `yaml:"type,omitempty"`
-	Version *artifactVersionSpec `yaml:"version,omitempty"`
+	Name     string               `yaml:"name,omitempty"`
+	Path     string               `yaml:"path"`
+	Type     string               `yaml:"type,omitempty"`
+	Platform string               `yaml:"platform,omitempty"`
+	Version  *artifactVersionSpec `yaml:"version,omitempty"`
 }
 
 type artifactVersionSpec struct {
@@ -151,7 +160,7 @@ func parseArtifactDeclaration(node *yaml.Node) (domain.ArtifactDeclaration, erro
 		if err := node.Decode(&obj); err != nil {
 			return domain.ArtifactDeclaration{}, err
 		}
-		declaration := domain.ArtifactDeclaration{Name: obj.Name, Path: obj.Path}
+		declaration := domain.ArtifactDeclaration{Name: obj.Name, Path: obj.Path, Platform: obj.Platform}
 		if artifactType, ok := domain.ParseArtifactType(obj.Type); ok {
 			declaration.Type = artifactType
 		}

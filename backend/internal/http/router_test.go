@@ -122,7 +122,7 @@ func TestNewRouter_HealthAndNotFound(t *testing.T) {
 	}
 }
 
-func TestLimitRequestBodyExemptsWorkspaceHelperPublish(t *testing.T) {
+func TestLimitRequestBodyExemptsWorkspaceHelperUploadRoutes(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
@@ -141,6 +141,7 @@ func TestLimitRequestBodyExemptsWorkspaceHelperPublish(t *testing.T) {
 		{name: "workspace publish exempt", path: "/api/internal/workspace-helper/publish", want: http.StatusOK},
 		{name: "cache restore exempt", path: "/api/internal/workspace-helper/cache/restore", want: http.StatusOK},
 		{name: "cache save exempt", path: "/api/internal/workspace-helper/cache/save", want: http.StatusOK},
+		{name: "artifact upload exempt", path: "/api/internal/workspace-helper/artifacts/upload", want: http.StatusOK},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, testCase.path, bytes.NewBufferString("archive"))

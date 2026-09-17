@@ -3,6 +3,9 @@
 .vscode
 tmp
 dist
+!dist/
+!dist/coyote-server
+!dist/coyote-worker
 bin
 coverage
 *.log

@@ -15,6 +15,7 @@ import (
 // validEnvKey matches POSIX-style environment variable names: letters, digits, underscore, starting with letter or underscore.
 var validEnvKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 var validLogicalImageName = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
+var validDockerStageName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
 
 // Validate checks a parsed PipelineFile for semantic correctness.
 // Returns nil on success or a ValidationErrors with all problems found.
@@ -208,6 +209,11 @@ func hasDependencyCycle(dependenciesByName map[string][]string) bool {
 	return false
 }
 
+func validTargetPlatform(value string) bool {
+	parts := strings.Split(strings.TrimSpace(value), "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] != "" && !strings.ContainsAny(value, "\\ ")
+}
+
 func validateGroupWrapperStep(step StepDef, prefix string) ValidationErrors {
 	var errs ValidationErrors
 
@@ -286,9 +292,30 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 		} else if !validLogicalImageName.MatchString(step.ImageBuild.Image) || path.Clean(step.ImageBuild.Image) != step.ImageBuild.Image || strings.HasPrefix(step.ImageBuild.Image, "/") {
 			errs = append(errs, ValidationError{Field: prefix + ".image_build.image", Message: "must be a relative logical image name"})
 		}
+		if target := strings.TrimSpace(step.ImageBuild.Target); target != "" && !validDockerStageName.MatchString(target) {
+			errs = append(errs, ValidationError{Field: prefix + ".image_build.target", Message: "must be a valid Docker stage name"})
+		}
 		for key, value := range step.ImageBuild.BuildArgs {
 			if !validEnvKey.MatchString(key) || strings.TrimSpace(value) == "" {
 				errs = append(errs, ValidationError{Field: prefix + ".image_build.build_args", Message: fmt.Sprintf("invalid build argument %q", key)})
+			}
+		}
+		seenArtifacts := make(map[string]struct{}, len(step.ImageBuild.Artifacts))
+		for index, input := range step.ImageBuild.Artifacts {
+			inputPrefix := fmt.Sprintf("%s.image_build.artifacts[%d]", prefix, index)
+			name := strings.TrimSpace(input.Name)
+			if name == "" {
+				errs = append(errs, ValidationError{Field: inputPrefix + ".name", Message: "is required"})
+			} else if _, duplicate := seenArtifacts[name]; duplicate {
+				errs = append(errs, ValidationError{Field: inputPrefix + ".name", Message: fmt.Sprintf("duplicate artifact %q", name)})
+			} else {
+				seenArtifacts[name] = struct{}{}
+			}
+			if !validImageBuildContextPath(input.Destination) {
+				errs = append(errs, ValidationError{Field: inputPrefix + ".destination", Message: "must be a normalized build-context-relative path"})
+			}
+			if strings.TrimSpace(input.Platform) != "" && !validTargetPlatform(input.Platform) {
+				errs = append(errs, ValidationError{Field: inputPrefix + ".platform", Message: "must be an os/arch platform"})
 			}
 		}
 	}
@@ -342,6 +369,11 @@ func validImageBuildRepositoryPath(value string, allowCurrentDirectory bool) boo
 		return false
 	}
 	return allowCurrentDirectory || trimmed != "."
+}
+
+func validImageBuildContextPath(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return validImageBuildRepositoryPath(trimmed, false) && trimmed != ".." && !strings.HasPrefix(trimmed, "../")
 }
 
 func declarationsForValidation(def ArtifactDef) []domain.ArtifactDeclaration {

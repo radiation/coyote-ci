@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"path"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	"github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 var ErrWorkspaceHelperArtifactInvalidInput = errors.New("invalid workspace helper artifact input")
@@ -54,11 +57,11 @@ func NewWorkspaceHelperArtifactService(config WorkspaceHelperArtifactServiceConf
 }
 
 func (s *WorkspaceHelperArtifactService) Plan(ctx context.Context, capabilityToken, executionJobID, podUID string, buildSucceeded bool) (WorkspaceHelperArtifactPlan, error) {
-	build, _, due, err := s.authorizeAndResolve(ctx, capabilityToken, executionJobID, podUID, buildSucceeded)
+	build, job, due, err := s.authorizeAndResolve(ctx, capabilityToken, executionJobID, podUID, buildSucceeded)
 	if err != nil || !due {
 		return WorkspaceHelperArtifactPlan{Collect: false}, err
 	}
-	return artifactPlanForBuild(build, s.builds, ctx)
+	return artifactPlanForJob(build, job, s.builds, ctx, buildSucceeded)
 }
 
 func (s *WorkspaceHelperArtifactService) Upload(ctx context.Context, capabilityToken, executionJobID, podUID, stepID, logicalPath string, buildSucceeded bool, source io.Reader) error {
@@ -69,7 +72,7 @@ func (s *WorkspaceHelperArtifactService) Upload(ctx context.Context, capabilityT
 	if !due || source == nil {
 		return ErrWorkspaceHelperArtifactInvalidInput
 	}
-	scopes, planErr := artifactScopesForBuild(build, s.builds, ctx)
+	scopes, planErr := artifactScopesForJob(build, job, s.builds, ctx, buildSucceeded)
 	if planErr != nil {
 		return planErr
 	}
@@ -97,11 +100,55 @@ func (s *WorkspaceHelperArtifactService) Upload(ctx context.Context, capabilityT
 		value := strings.TrimSpace(stepID)
 		persistedStepID = &value
 	}
-	_, createErr := s.artifacts.Create(ctx, domain.BuildArtifact{ID: collected.GeneratedID, BuildID: job.BuildID, StepID: persistedStepID, LogicalPath: collected.LogicalPath, ArtifactType: domain.InferArtifactType(collected.LogicalPath, collected.ContentType), StorageKey: collected.StorageKey, StorageProvider: s.provider, SizeBytes: collected.SizeBytes, ContentType: collected.ContentType, ChecksumSHA256: collected.ChecksumSHA256, CreatedAt: time.Now().UTC()})
+	declaration, declarationErr := s.artifactDeclarationForJob(ctx, build, job, collected.LogicalPath)
+	if declarationErr != nil {
+		return declarationErr
+	}
+	artifactType := declaration.Type
+	if artifactType == "" {
+		artifactType = domain.InferArtifactType(collected.LogicalPath, collected.ContentType)
+	}
+	_, createErr := s.artifacts.Create(ctx, domain.BuildArtifact{ID: collected.GeneratedID, BuildID: job.BuildID, StepID: persistedStepID, Name: declaration.Name, LogicalPath: collected.LogicalPath, ArtifactType: artifactType, StorageKey: collected.StorageKey, StorageProvider: s.provider, SizeBytes: collected.SizeBytes, ContentType: collected.ContentType, ChecksumSHA256: collected.ChecksumSHA256, TargetPlatform: declaration.Platform, CreatedAt: time.Now().UTC()})
 	if errors.Is(createErr, repository.ErrArtifactConflict) {
 		return nil
 	}
 	return createErr
+}
+
+func (s *WorkspaceHelperArtifactService) artifactDeclarationForJob(ctx context.Context, build domain.Build, job domain.ExecutionJob, logicalPath string) (domain.ArtifactDeclaration, error) {
+	if build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
+		return domain.ArtifactDeclaration{}, nil
+	}
+	steps, stepsErr := s.builds.GetStepsByBuildID(ctx, build.ID)
+	if stepsErr != nil {
+		return domain.ArtifactDeclaration{}, stepsErr
+	}
+	workingDir := ""
+	for _, buildStep := range steps {
+		if buildStep.ID == job.StepID {
+			workingDir = buildStep.WorkingDir
+			break
+		}
+	}
+	resolved, err := pipeline.LoadAndResolve([]byte(*build.PipelineConfigYAML))
+	if err != nil {
+		return domain.ArtifactDeclaration{}, err
+	}
+	for _, step := range resolved.Steps {
+		if step.NodeID != job.NodeID {
+			continue
+		}
+		for _, declaration := range step.ArtifactDecls {
+			declarationPath, pathErr := workspaceArtifactPath(workingDir, declaration.Path)
+			if pathErr != nil {
+				return domain.ArtifactDeclaration{}, pathErr
+			}
+			if artifact.MatchPathPattern(declarationPath, logicalPath) {
+				return declaration, nil
+			}
+		}
+	}
+	return domain.ArtifactDeclaration{}, nil
 }
 
 func (s *WorkspaceHelperArtifactService) authorizeAndResolve(ctx context.Context, token, executionJobID, podUID string, buildSucceeded bool) (domain.Build, domain.ExecutionJob, bool, error) {
@@ -120,23 +167,61 @@ func (s *WorkspaceHelperArtifactService) authorizeAndResolve(ctx context.Context
 	if err != nil {
 		return domain.Build{}, domain.ExecutionJob{}, false, err
 	}
+	if buildSucceeded {
+		return build, job, true, nil
+	}
 	for _, step := range steps {
 		if step.ID == job.StepID || domain.IsTerminalStepStatus(step.Status) {
 			continue
 		}
-		if buildSucceeded || step.StepIndex < job.StepIndex {
+		if step.StepIndex < job.StepIndex {
 			return build, job, false, nil
 		}
 	}
 	return build, job, true, nil
 }
 
-func artifactPlanForBuild(build domain.Build, builds workspaceHelperCacheBuildRepository, ctx context.Context) (WorkspaceHelperArtifactPlan, error) {
-	scopes, err := artifactScopesForBuild(build, builds, ctx)
+func artifactPlanForJob(build domain.Build, job domain.ExecutionJob, builds workspaceHelperCacheBuildRepository, ctx context.Context, buildSucceeded bool) (WorkspaceHelperArtifactPlan, error) {
+	scopes, err := artifactScopesForJob(build, job, builds, ctx, buildSucceeded)
 	if err != nil {
 		return WorkspaceHelperArtifactPlan{}, err
 	}
 	return WorkspaceHelperArtifactPlan{Collect: len(scopes) > 0, Scopes: scopes}, nil
+}
+
+func artifactScopesForJob(build domain.Build, job domain.ExecutionJob, builds workspaceHelperCacheBuildRepository, ctx context.Context, buildSucceeded bool) ([]WorkspaceHelperArtifactScope, error) {
+	scopes, err := artifactScopesForBuild(build, builds, ctx)
+	if err != nil {
+		return nil, err
+	}
+	if buildSucceeded {
+		return scopesForSuccessfulJob(scopes, job, build, builds, ctx)
+	}
+	return scopes, nil
+}
+
+func scopesForSuccessfulJob(scopes []WorkspaceHelperArtifactScope, job domain.ExecutionJob, build domain.Build, builds workspaceHelperCacheBuildRepository, ctx context.Context) ([]WorkspaceHelperArtifactScope, error) {
+	filtered := make([]WorkspaceHelperArtifactScope, 0, len(scopes))
+	for _, scope := range scopes {
+		if scope.StepID == job.StepID {
+			filtered = append(filtered, scope)
+		}
+	}
+	steps, err := builds.GetStepsByBuildID(ctx, build.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, step := range steps {
+		if step.ID != job.StepID && (step.StepIndex > job.StepIndex || !domain.IsTerminalStepStatus(step.Status)) {
+			return filtered, nil
+		}
+	}
+	for _, scope := range scopes {
+		if scope.StepID == "" {
+			filtered = append(filtered, scope)
+		}
+	}
+	return filtered, nil
 }
 
 func artifactScopesForBuild(build domain.Build, builds workspaceHelperCacheBuildRepository, ctx context.Context) ([]WorkspaceHelperArtifactScope, error) {
@@ -147,7 +232,15 @@ func artifactScopesForBuild(build domain.Build, builds workspaceHelperCacheBuild
 	scopes := make([]WorkspaceHelperArtifactScope, 0, len(steps)+1)
 	for _, step := range steps {
 		if len(step.ArtifactPaths) > 0 {
-			scopes = append(scopes, WorkspaceHelperArtifactScope{StepID: step.ID, Patterns: append([]string(nil), step.ArtifactPaths...)})
+			patterns := make([]string, 0, len(step.ArtifactPaths))
+			for _, artifactPath := range step.ArtifactPaths {
+				workspacePath, pathErr := workspaceArtifactPath(step.WorkingDir, artifactPath)
+				if pathErr != nil {
+					return nil, fmt.Errorf("step %q artifact path: %w", step.ID, pathErr)
+				}
+				patterns = append(patterns, workspacePath)
+			}
+			scopes = append(scopes, WorkspaceHelperArtifactScope{StepID: step.ID, Patterns: patterns})
 		}
 	}
 	if build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
@@ -161,6 +254,23 @@ func artifactScopesForBuild(build domain.Build, builds workspaceHelperCacheBuild
 		scopes = append(scopes, WorkspaceHelperArtifactScope{Patterns: append([]string(nil), resolved.Artifacts.Paths...)})
 	}
 	return scopes, nil
+}
+
+func workspaceArtifactPath(workingDir, artifactPath string) (string, error) {
+	normalizedWorkingDir := strings.TrimSpace(workingDir)
+	if normalizedWorkingDir == "" || normalizedWorkingDir == "." {
+		normalizedWorkingDir = ""
+	} else if err := workspace.New("", "").ValidateArtifactPath(normalizedWorkingDir); err != nil {
+		return "", fmt.Errorf("invalid working directory %q: %w", workingDir, err)
+	}
+	if err := workspace.New("", "").ValidateArtifactPath(artifactPath); err != nil {
+		return "", err
+	}
+	resolved := path.Clean(path.Join(normalizedWorkingDir, strings.ReplaceAll(strings.TrimSpace(artifactPath), "\\", "/")))
+	if err := workspace.New("", "").ValidateArtifactPath(resolved); err != nil {
+		return "", err
+	}
+	return resolved, nil
 }
 
 func scopeMatchesArtifact(scopes []WorkspaceHelperArtifactScope, stepID, logicalPath string) bool {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ var ErrWorkspaceHelperCacheInvalidInput = errors.New("invalid workspace helper c
 const (
 	defaultWorkspaceHelperCacheMaxUncompressedBytes int64 = 4 * 1024 * 1024 * 1024
 	defaultWorkspaceHelperCacheMaxArchiveEntries          = 100000
+	defaultWorkspaceHelperCachePublishLease               = 10 * time.Minute
 )
 
 type WorkspaceHelperCachePayload struct {
@@ -80,6 +82,21 @@ func (s *WorkspaceHelperCacheService) Restore(ctx context.Context, capabilityTok
 	if err != nil || !found {
 		return WorkspaceHelperCachePayload{}, found, err
 	}
+	if archiveStore, ok := s.store.(cachepkg.ArchiveStore); ok && directCacheArchiveCompatible(entry) {
+		archive, result, openErr := archiveStore.Open(ctx, entry.ObjectKey)
+		if openErr != nil || !result.Hit {
+			return WorkspaceHelperCachePayload{}, result.Hit, openErr
+		}
+		if result.SizeBytes != entry.SizeBytes {
+			_ = archive.Close()
+			return WorkspaceHelperCachePayload{}, false, workspace.ErrWorkspaceRevisionDigestMismatch
+		}
+		if markErr := s.entries.MarkAccessed(ctx, entry.ID, s.now()); markErr != nil && !errors.Is(markErr, repository.ErrCacheEntryNotFound) {
+			_ = archive.Close()
+			return WorkspaceHelperCachePayload{}, false, markErr
+		}
+		return WorkspaceHelperCachePayload{Archive: archive, Publication: domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: entry.ContentDigest, SizeBytes: &entry.SizeBytes}}, true, nil
+	}
 	directory, directoryErr := os.MkdirTemp("", "coyote-cache-restore-*")
 	if directoryErr != nil {
 		return WorkspaceHelperCachePayload{}, false, directoryErr
@@ -107,23 +124,121 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 	if archive == nil || publication.Validate() != nil {
 		return ErrWorkspaceHelperCacheInvalidInput
 	}
-	directory, directoryErr := os.MkdirTemp("", "coyote-cache-save-*")
-	if directoryErr != nil {
-		return directoryErr
+	jobID := cacheJobID(build)
+	if s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication.ContentDigest) {
+		log.Printf("INFO cache publish skipped unchanged job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+		return nil
 	}
-	defer func() { _ = os.RemoveAll(directory) }()
-	payloadRoot := filepath.Join(directory, "payload")
+	claim, acquired, claimErr := s.entries.TryAcquirePublishClaim(ctx, jobID, preset, cacheKey, executionJobID, s.now(), defaultWorkspaceHelperCachePublishLease)
+	if claimErr != nil {
+		return claimErr
+	}
+	if !acquired {
+		log.Printf("INFO cache publish skipped writer_busy job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+		return nil
+	}
+	if claim.Reclaimed {
+		log.Printf("INFO cache publish claim reclaimed job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+	} else {
+		log.Printf("INFO cache publish claim acquired job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+	}
+	defer func() {
+		if releaseErr := s.entries.ReleasePublishClaim(ctx, claim); releaseErr != nil {
+			log.Printf("WARN cache publish claim release failed job_id=%s preset=%s key=%s err=%v", jobID, preset, cacheKey, releaseErr)
+		}
+	}()
+	if s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication.ContentDigest) {
+		log.Printf("INFO cache publish skipped unchanged_after_claim job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+		return nil
+	}
+	previous, hadPrevious, previousErr := s.entries.FindReadyByKey(ctx, jobID, preset, cacheKey)
+	if previousErr != nil {
+		return previousErr
+	}
 	limits := workspace.WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: s.maxUncompressedBytes, MaxEntries: s.maxArchiveEntries}
-	if restoreErr := workspace.RestoreArchiveWithLimits(ctx, archive, publication, payloadRoot, limits); restoreErr != nil {
-		return fmt.Errorf("%w: cache archive: %w", ErrWorkspaceHelperCacheInvalidInput, restoreErr)
-	}
-	objectKey := cacheObjectKey(cacheJobID(build), preset, cacheKey)
-	saved, saveErr := s.store.Save(ctx, objectKey, payloadRoot)
+	objectKey := cacheObjectKey(jobID, preset, cacheKey, publication.ContentDigest)
+	saved, saveErr := s.saveArchive(ctx, objectKey, claim.ClaimToken, archive, publication, limits)
 	if saveErr != nil {
+		log.Printf("WARN cache publish failed job_id=%s preset=%s key=%s err=%v", jobID, preset, cacheKey, saveErr)
 		return saveErr
 	}
-	_, upsertErr := s.entries.Upsert(ctx, repository.CacheEntryUpsertInput{JobID: cacheJobID(build), Preset: preset, CacheKey: cacheKey, StorageProvider: s.store.Provider(), ObjectKey: objectKey, SizeBytes: saved.SizeBytes, Checksum: saved.Checksum, Compression: saved.Compression, Status: domain.CacheEntryStatusReady, CreatedByBuildID: build.ID, CreatedByStepID: step.ID})
-	return upsertErr
+	entry, upsertErr := s.entries.CompletePublishClaim(ctx, claim, repository.CacheEntryUpsertInput{JobID: jobID, Preset: preset, CacheKey: cacheKey, StorageProvider: s.store.Provider(), ObjectKey: objectKey, SizeBytes: saved.SizeBytes, Checksum: saved.Checksum, ContentDigest: publication.ContentDigest, Compression: saved.Compression, Status: domain.CacheEntryStatusReady, CreatedByBuildID: build.ID, CreatedByStepID: step.ID}, s.now())
+	if errors.Is(upsertErr, repository.ErrCachePublishClaimStale) {
+		log.Printf("INFO cache publish skipped stale_claim job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+		return nil
+	}
+	if upsertErr != nil {
+		return upsertErr
+	}
+	if hadPrevious && strings.TrimSpace(previous.ObjectKey) != "" && previous.StorageProvider == entry.StorageProvider && previous.ObjectKey != entry.ObjectKey {
+		if archiveStore, ok := s.store.(cachepkg.ArchiveStore); ok {
+			if deleteErr := archiveStore.DeleteArchive(ctx, previous.ObjectKey); deleteErr != nil {
+				log.Printf("WARN cache archive replacement cleanup failed key=%s err=%v", previous.ObjectKey, deleteErr)
+			}
+		}
+	}
+	log.Printf("INFO cache publish succeeded job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+	return nil
+}
+
+func (s *WorkspaceHelperCacheService) saveArchive(ctx context.Context, objectKey string, claimToken string, archive io.Reader, publication domain.WorkspaceRevisionPublication, limits workspace.WorkspaceRevisionRestoreLimits) (cachepkg.SaveResult, error) {
+	archiveStore, ok := s.store.(cachepkg.ArchiveStore)
+	if !ok {
+		directory, directoryErr := os.MkdirTemp("", "coyote-cache-save-*")
+		if directoryErr != nil {
+			return cachepkg.SaveResult{}, directoryErr
+		}
+		defer func() { _ = os.RemoveAll(directory) }()
+		payloadRoot := filepath.Join(directory, "payload")
+		if restoreErr := workspace.RestoreArchiveWithLimits(ctx, archive, publication, payloadRoot, limits); restoreErr != nil {
+			return cachepkg.SaveResult{}, fmt.Errorf("%w: cache archive: %w", ErrWorkspaceHelperCacheInvalidInput, restoreErr)
+		}
+		return s.store.Save(ctx, objectKey, payloadRoot)
+	}
+	stagingKey := cacheArchiveStagingKey(objectKey, claimToken)
+	promoted := false
+	defer func() {
+		if !promoted {
+			if deleteErr := archiveStore.DeleteArchive(context.Background(), stagingKey); deleteErr != nil {
+				log.Printf("WARN cache archive staging cleanup failed key=%s err=%v", stagingKey, deleteErr)
+			}
+		}
+	}()
+	reader, writer := io.Pipe()
+	validation := make(chan error, 1)
+	go func() {
+		validateErr := workspace.ValidateArchiveWithLimits(ctx, io.TeeReader(archive, writer), publication, limits)
+		_ = writer.CloseWithError(validateErr)
+		validation <- validateErr
+	}()
+	saved, saveErr := archiveStore.SaveArchive(ctx, stagingKey, reader)
+	if saveErr != nil {
+		_ = reader.CloseWithError(saveErr)
+	}
+	validationErr := <-validation
+	if validationErr != nil {
+		return cachepkg.SaveResult{}, fmt.Errorf("%w: cache archive: %w", ErrWorkspaceHelperCacheInvalidInput, validationErr)
+	}
+	if saveErr != nil {
+		return cachepkg.SaveResult{}, saveErr
+	}
+	if strings.TrimSpace(saved.Checksum) != strings.TrimPrefix(strings.TrimSpace(publication.ContentDigest), "sha256:") || (publication.SizeBytes != nil && saved.SizeBytes != *publication.SizeBytes) {
+		return cachepkg.SaveResult{}, fmt.Errorf("%w: cache archive storage result does not match validated archive", ErrWorkspaceHelperCacheInvalidInput)
+	}
+	if promoteErr := archiveStore.PromoteArchive(ctx, stagingKey, objectKey); promoteErr != nil {
+		return cachepkg.SaveResult{}, promoteErr
+	}
+	promoted = true
+	return saved, nil
+}
+
+func directCacheArchiveCompatible(entry domain.CacheEntry) bool {
+	return entry.Compression == "tar.gz" && strings.TrimSpace(entry.ContentDigest) == "sha256:"+strings.TrimSpace(entry.Checksum)
+}
+
+func (s *WorkspaceHelperCacheService) cacheContentIsReady(ctx context.Context, jobID, preset, cacheKey, contentDigest string) bool {
+	entry, found, err := s.entries.FindReadyByKey(ctx, jobID, preset, cacheKey)
+	return err == nil && found && strings.TrimSpace(entry.ContentDigest) == strings.TrimSpace(contentDigest)
 }
 
 func (s *WorkspaceHelperCacheService) authorizeAndValidate(ctx context.Context, token string, executionJobID string, podUID string, preset string, cacheKey string, role domain.WorkspaceHelperRole) (domain.Build, domain.BuildStep, error) {
@@ -149,6 +264,15 @@ func (s *WorkspaceHelperCacheService) authorizeAndValidate(ctx context.Context, 
 		resolved, resolveErr := cachepkg.ResolvePreset(step.Cache.Preset, step.WorkingDir)
 		if resolveErr == nil && resolved.Name == strings.TrimSpace(preset) && validCacheKey(resolved.Name, cacheKey) {
 			return build, step, nil
+		}
+		components, resolveErr := cachepkg.ResolvePresetComponents(step.Cache.Preset, step.WorkingDir)
+		if resolveErr != nil {
+			continue
+		}
+		for _, component := range components {
+			if component.Name == strings.TrimSpace(preset) && validCacheKey(component.Name, cacheKey) {
+				return build, step, nil
+			}
 		}
 	}
 	return domain.Build{}, domain.BuildStep{}, ErrWorkspaceHelperCacheInvalidInput
@@ -176,9 +300,14 @@ func cacheJobID(build domain.Build) string {
 	return "build:" + strings.TrimSpace(build.ID)
 }
 
-func cacheObjectKey(jobID string, preset string, cacheKey string) string {
+func cacheObjectKey(jobID string, preset string, cacheKey string, contentDigest string) string {
 	hash := sha256.Sum256([]byte(strings.TrimSpace(cacheKey)))
-	return fmt.Sprintf("v1/jobs/%s/%s/%s", sanitizeCacheKeyPart(jobID), sanitizeCacheKeyPart(preset), hex.EncodeToString(hash[:]))
+	return fmt.Sprintf("v1/jobs/%s/%s/%s/%s", sanitizeCacheKeyPart(jobID), sanitizeCacheKeyPart(preset), hex.EncodeToString(hash[:]), strings.TrimSpace(contentDigest))
+}
+
+func cacheArchiveStagingKey(objectKey string, claimToken string) string {
+	tokenHash := sha256.Sum256([]byte(strings.TrimSpace(claimToken)))
+	return fmt.Sprintf("%s.staging.%x", objectKey, tokenHash[:])
 }
 
 func sanitizeCacheKeyPart(value string) string {

@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"io"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
@@ -25,4 +26,13 @@ type Store interface {
 	Restore(ctx context.Context, key string, destinationRoot string) (RestoreResult, error)
 	// Save stores a snapshot from sourceRoot for key.
 	Save(ctx context.Context, key string, sourceRoot string) (SaveResult, error)
+}
+
+// ArchiveStore is an optional capability for stores that can transfer the
+// durable tar.gz representation without extracting and recreating it.
+type ArchiveStore interface {
+	Open(ctx context.Context, key string) (io.ReadCloser, RestoreResult, error)
+	SaveArchive(ctx context.Context, key string, archive io.Reader) (SaveResult, error)
+	PromoteArchive(ctx context.Context, sourceKey string, destinationKey string) error
+	DeleteArchive(ctx context.Context, key string) error
 }

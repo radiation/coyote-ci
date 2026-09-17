@@ -130,6 +130,10 @@ func (w *ExecutionWorkerService) GetBuild(ctx context.Context, buildID string) (
 	return w.builds.GetBuild(ctx, buildID)
 }
 
+func (w *ExecutionWorkerService) GetBuildSteps(ctx context.Context, buildID string) ([]domain.BuildStep, error) {
+	return w.builds.GetBuildSteps(ctx, buildID)
+}
+
 func (w *ExecutionWorkerService) CompleteKubernetesRunnableStep(ctx context.Context, step WorkerRunnableStep, result runner.RunStepResult) (repository.StepCompletionOutcome, error) {
 	boundary, ok := w.builds.(kubernetesExecutionBoundary)
 	if !ok {
