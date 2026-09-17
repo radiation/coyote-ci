@@ -233,18 +233,19 @@ func TestControllerResolveArtifactInputsUsesKubernetesProducerStepIDs(t *testing
 		{ID: "build-step-other", BuildID: execution.job.BuildID, NodeID: "node-other"},
 	}
 	store := artifactpkg.NewFilesystemStore(t.TempDir())
+	stores := artifactpkg.NewStoreResolver(domain.StorageProviderFilesystem, map[domain.StorageProvider]artifactpkg.Store{domain.StorageProviderFilesystem: store})
 	artifacts := &imageBuildArtifactRepositoryFake{}
 	serverStepID := "build-step-server"
 	workerStepID := "build-step-worker"
 	serverContent := []byte("server executable")
 	workerContent := []byte("worker executable")
-	createImageBuildArtifact(t, context, artifacts, store, domain.BuildArtifact{ID: "artifact-server", BuildID: execution.job.BuildID, StepID: &serverStepID, Name: "coyote-server", LogicalPath: "backend/dist/coyote-server", StorageKey: "artifacts/server", SizeBytes: int64(len(serverContent)), ChecksumSHA256: checksumPointer(serverContent)}, serverContent)
-	createImageBuildArtifact(t, context, artifacts, store, domain.BuildArtifact{ID: "artifact-worker", BuildID: execution.job.BuildID, StepID: &workerStepID, Name: "coyote-worker", LogicalPath: "dist/coyote-worker", StorageKey: "artifacts/worker", SizeBytes: int64(len(workerContent)), ChecksumSHA256: checksumPointer(workerContent)}, workerContent)
+	createImageBuildArtifact(t, context, artifacts, store, domain.BuildArtifact{ID: "artifact-server", BuildID: execution.job.BuildID, StepID: &serverStepID, Name: "coyote-server", LogicalPath: "backend/dist/coyote-server", StorageKey: "artifacts/server", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: int64(len(serverContent)), ChecksumSHA256: checksumPointer(serverContent)}, serverContent)
+	createImageBuildArtifact(t, context, artifacts, store, domain.BuildArtifact{ID: "artifact-worker", BuildID: execution.job.BuildID, StepID: &workerStepID, Name: "coyote-worker", LogicalPath: "dist/coyote-worker", StorageKey: "artifacts/worker", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: int64(len(workerContent)), ChecksumSHA256: checksumPointer(workerContent)}, workerContent)
 	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), &builderFake{}, &stagerFake{}, &sourceFake{})
 	if newErr != nil {
 		t.Fatalf("new controller: %v", newErr)
 	}
-	controller.WithArtifactInputs(artifacts, store)
+	controller.WithArtifactInputs(artifacts, stores)
 	inputs, resolveErr := controller.resolveArtifactInputs(context, execution.job, domain.RemoteImageBuildSpec{ArtifactInputs: []domain.ImageBuildArtifactInput{{Name: "coyote-server", Destination: "dist/coyote-server"}, {Name: "coyote-worker", Destination: "dist/coyote-worker"}}})
 	if resolveErr != nil || len(inputs) != 2 {
 		t.Fatalf("inputs=%#v err=%v", inputs, resolveErr)
@@ -259,12 +260,100 @@ func TestControllerResolveArtifactInputsUsesKubernetesProducerStepIDs(t *testing
 
 	nonUpstreamArtifacts := &imageBuildArtifactRepositoryFake{}
 	otherStepID := "build-step-other"
-	createImageBuildArtifact(t, context, nonUpstreamArtifacts, store, domain.BuildArtifact{ID: "artifact-other", BuildID: execution.job.BuildID, StepID: &otherStepID, Name: "coyote-server", LogicalPath: "dist/coyote-server", StorageKey: "artifacts/other", SizeBytes: int64(len(serverContent)), ChecksumSHA256: checksumPointer(serverContent)}, serverContent)
-	controller.WithArtifactInputs(nonUpstreamArtifacts, store)
+	createImageBuildArtifact(t, context, nonUpstreamArtifacts, store, domain.BuildArtifact{ID: "artifact-other", BuildID: execution.job.BuildID, StepID: &otherStepID, Name: "coyote-server", LogicalPath: "dist/coyote-server", StorageKey: "artifacts/other", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: int64(len(serverContent)), ChecksumSHA256: checksumPointer(serverContent)}, serverContent)
+	controller.WithArtifactInputs(nonUpstreamArtifacts, stores)
 	_, resolveErr = controller.resolveArtifactInputs(context, execution.job, domain.RemoteImageBuildSpec{ArtifactInputs: []domain.ImageBuildArtifactInput{{Name: "coyote-server", Destination: "dist/coyote-server"}}})
 	if resolveErr == nil || resolveErr.Error() != "image build artifact \"coyote-server\" is not available from an upstream dependency" {
 		t.Fatalf("resolve non-upstream artifact error=%v", resolveErr)
 	}
+}
+
+func TestControllerResolveArtifactInputsUsesArtifactStorageProvider(t *testing.T) {
+	context := context.Background()
+	execution := newExecutionFake(t)
+	execution.job.DependsOnNodeIDs = []string{"node-producer"}
+	producerStepID := "build-step-producer"
+	execution.steps = []domain.BuildStep{{ID: producerStepID, BuildID: execution.job.BuildID, NodeID: "node-producer"}}
+
+	filesystemStore := &recordingArtifactStore{content: map[string][]byte{"artifacts/filesystem": []byte("filesystem executable"), "artifacts/checksum": []byte("corrupt executable")}}
+	gcsStore := &recordingArtifactStore{content: map[string][]byte{"artifacts/gcs": []byte("gcs executable")}}
+	stores := artifactpkg.NewStoreResolver(domain.StorageProviderFilesystem, map[domain.StorageProvider]artifactpkg.Store{
+		domain.StorageProviderFilesystem: filesystemStore,
+		domain.StorageProviderGCS:        gcsStore,
+	})
+	artifacts := &imageBuildArtifactRepositoryFake{items: []domain.BuildArtifact{
+		{ID: "artifact-gcs", BuildID: execution.job.BuildID, StepID: &producerStepID, Name: "gcs-artifact", StorageKey: "artifacts/gcs", StorageProvider: domain.StorageProviderGCS, SizeBytes: int64(len("gcs executable")), ChecksumSHA256: checksumPointer([]byte("gcs executable"))},
+		{ID: "artifact-filesystem", BuildID: execution.job.BuildID, StepID: &producerStepID, Name: "filesystem-artifact", StorageKey: "artifacts/filesystem", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: int64(len("filesystem executable")), ChecksumSHA256: checksumPointer([]byte("filesystem executable"))},
+		{ID: "artifact-checksum", BuildID: execution.job.BuildID, StepID: &producerStepID, Name: "checksum-artifact", StorageKey: "artifacts/checksum", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: int64(len("corrupt executable")), ChecksumSHA256: checksumPointer([]byte("expected executable"))},
+		{ID: "artifact-unavailable", BuildID: execution.job.BuildID, StepID: &producerStepID, Name: "unavailable-artifact", StorageKey: "artifacts/unavailable", StorageProvider: domain.StorageProvider("unavailable"), SizeBytes: 1, ChecksumSHA256: checksumPointer([]byte("x"))},
+	}}
+	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), &builderFake{}, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+	controller.WithArtifactInputs(artifacts, stores)
+
+	for _, testCase := range []struct {
+		name             string
+		input            string
+		wantContent      string
+		wantResolveError string
+		wantReadError    string
+		wantFilesystem   int
+		wantGCS          int
+	}{
+		{name: "gcs uses gcs store", input: "gcs-artifact", wantContent: "gcs executable", wantGCS: 1},
+		{name: "filesystem uses filesystem store", input: "filesystem-artifact", wantContent: "filesystem executable", wantFilesystem: 1, wantGCS: 1},
+		{name: "checksum validation remains active", input: "checksum-artifact", wantReadError: "checksum or size mismatch", wantFilesystem: 2, wantGCS: 1},
+		{name: "unavailable provider does not fall back", input: "unavailable-artifact", wantResolveError: "no store configured for provider \"unavailable\"", wantFilesystem: 2, wantGCS: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			inputs, resolveErr := controller.resolveArtifactInputs(context, execution.job, domain.RemoteImageBuildSpec{ArtifactInputs: []domain.ImageBuildArtifactInput{{Name: testCase.input}}})
+			if testCase.wantResolveError != "" {
+				if resolveErr == nil || !strings.Contains(resolveErr.Error(), testCase.wantResolveError) {
+					t.Fatalf("resolve error=%v, want %q", resolveErr, testCase.wantResolveError)
+				}
+			} else if resolveErr != nil || len(inputs) != 1 {
+				t.Fatalf("inputs=%#v error=%v", inputs, resolveErr)
+			} else {
+				content, readErr := io.ReadAll(inputs[0].Source)
+				closeErr := inputs[0].Source.Close()
+				if testCase.wantReadError != "" {
+					if readErr == nil || !strings.Contains(readErr.Error(), testCase.wantReadError) {
+						t.Fatalf("read error=%v, want %q", readErr, testCase.wantReadError)
+					}
+				} else if readErr != nil || closeErr != nil || string(content) != testCase.wantContent {
+					t.Fatalf("content=%q readErr=%v closeErr=%v", content, readErr, closeErr)
+				}
+			}
+			if len(filesystemStore.opened) != testCase.wantFilesystem || len(gcsStore.opened) != testCase.wantGCS {
+				t.Fatalf("filesystem opens=%q gcs opens=%q", filesystemStore.opened, gcsStore.opened)
+			}
+		})
+	}
+}
+
+type recordingArtifactStore struct {
+	content map[string][]byte
+	opened  []string
+}
+
+func (s *recordingArtifactStore) Save(_ context.Context, key string, source io.Reader) (int64, error) {
+	content, readErr := io.ReadAll(source)
+	if readErr != nil {
+		return 0, readErr
+	}
+	s.content[key] = content
+	return int64(len(content)), nil
+}
+
+func (s *recordingArtifactStore) Open(_ context.Context, key string) (io.ReadCloser, error) {
+	s.opened = append(s.opened, key)
+	content, ok := s.content[key]
+	if !ok {
+		return nil, errors.New("unexpected artifact store key")
+	}
+	return io.NopCloser(bytes.NewReader(content)), nil
 }
 
 func createImageBuildArtifact(t *testing.T, context context.Context, artifacts *imageBuildArtifactRepositoryFake, store artifactpkg.Store, item domain.BuildArtifact, content []byte) {

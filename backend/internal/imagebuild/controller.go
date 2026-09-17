@@ -31,19 +31,19 @@ type executionService interface {
 }
 
 type Controller struct {
-	service       executionService
-	records       repository.ExternalImageBuildRepository
-	builder       service.ImageBuilder
-	stager        service.ImageBuildSourceStager
-	sources       service.WorkspaceSourceArchivePreparer
-	artifacts     repository.ArtifactRepository
-	artifactStore artifactpkg.Store
-	active        *workersvc.WorkerRunnableStep
-	now           func() time.Time
+	service        executionService
+	records        repository.ExternalImageBuildRepository
+	builder        service.ImageBuilder
+	stager         service.ImageBuildSourceStager
+	sources        service.WorkspaceSourceArchivePreparer
+	artifacts      repository.ArtifactRepository
+	artifactStores *artifactpkg.StoreResolver
+	active         *workersvc.WorkerRunnableStep
+	now            func() time.Time
 }
 
-func (c *Controller) WithArtifactInputs(artifacts repository.ArtifactRepository, store artifactpkg.Store) *Controller {
-	c.artifacts, c.artifactStore = artifacts, store
+func (c *Controller) WithArtifactInputs(artifacts repository.ArtifactRepository, stores *artifactpkg.StoreResolver) *Controller {
+	c.artifacts, c.artifactStores = artifacts, stores
 	return c
 }
 
@@ -183,7 +183,7 @@ func (c *Controller) resolveArtifactInputs(ctx context.Context, job domain.Execu
 	if len(spec.ArtifactInputs) == 0 {
 		return nil, nil
 	}
-	if c.artifacts == nil || c.artifactStore == nil {
+	if c.artifacts == nil || c.artifactStores == nil {
 		return nil, errors.New("image build artifact inputs require artifact metadata and storage")
 	}
 	steps, err := c.service.GetBuildSteps(ctx, job.BuildID)
@@ -225,7 +225,11 @@ func (c *Controller) resolveArtifactInputs(ctx context.Context, job domain.Execu
 		if match.ChecksumSHA256 == nil || len(*match.ChecksumSHA256) != 64 {
 			return nil, fmt.Errorf("image build artifact %q has no valid checksum", input.Name)
 		}
-		reader, openErr := c.artifactStore.Open(ctx, match.StorageKey)
+		store, storeErr := c.artifactStores.Resolve(match.StorageProvider)
+		if storeErr != nil {
+			return nil, fmt.Errorf("resolving image build artifact %q storage provider %q: %w", input.Name, match.StorageProvider, storeErr)
+		}
+		reader, openErr := store.Open(ctx, match.StorageKey)
 		if openErr != nil {
 			return nil, fmt.Errorf("opening image build artifact %q: %w", input.Name, openErr)
 		}
