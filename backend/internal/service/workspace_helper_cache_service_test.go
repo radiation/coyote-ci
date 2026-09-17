@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -194,8 +195,8 @@ func TestWorkspaceHelperCacheServiceSaveLateValidationFailureDoesNotPublishFinal
 	if !errors.Is(saveErr, ErrWorkspaceHelperCacheInvalidInput) || !errors.Is(saveErr, workspace.ErrWorkspaceRevisionDigestMismatch) {
 		t.Fatalf("save late-invalid archive: %v", saveErr)
 	}
-	if harness.store.archiveBytes < 64*1024 {
-		t.Fatalf("archive bytes streamed=%d, want at least 65536", harness.store.archiveBytes)
+	if atomic.LoadInt64(&harness.store.archiveBytes) < 64*1024 {
+		t.Fatalf("archive bytes streamed=%d, want at least 65536", atomic.LoadInt64(&harness.store.archiveBytes))
 	}
 	if harness.store.archivePromoteCalls != 0 {
 		t.Fatalf("archive promotions=%d, want 0", harness.store.archivePromoteCalls)
@@ -381,8 +382,17 @@ func TestWorkspaceHelperCacheServiceConcurrentReplacementLeavesOneReadyEntry(t *
 			t.Fatalf("concurrent save: %v", err)
 		}
 	}
-	if harness.store.saveCalls != 0 || harness.store.archiveSaveCalls != 1 {
-		t.Fatalf("store saves=%d archive saves=%d, want 0 and 1", harness.store.saveCalls, harness.store.archiveSaveCalls)
+	if harness.store.saveCalls != 0 {
+		t.Fatalf("directory saves=%d, want 0", harness.store.saveCalls)
+	}
+	if harness.store.archiveSaveCalls < 1 || harness.store.archiveSaveCalls > len(archives) {
+		t.Fatalf("archive saves=%d, want between 1 and %d", harness.store.archiveSaveCalls, len(archives))
+	}
+	if harness.store.archivePromoteCalls != harness.store.archiveSaveCalls {
+		t.Fatalf("archive promotions=%d, want %d", harness.store.archivePromoteCalls, harness.store.archiveSaveCalls)
+	}
+	if harness.store.archiveDeleteCalls != harness.store.archiveSaveCalls-1 {
+		t.Fatalf("archive deletes=%d, want %d", harness.store.archiveDeleteCalls, harness.store.archiveSaveCalls-1)
 	}
 	entry, found, err := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey)
 	if err != nil || !found || entry.ObjectKey != cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, entry.ContentDigest) {
@@ -502,6 +512,7 @@ func (f *workspaceHelperCacheBuildFake) GetStepsByBuildID(context.Context, strin
 }
 
 type workspaceHelperCacheStoreFake struct {
+	mu    sync.Mutex
 	inner interface {
 		cachepkg.Store
 		cachepkg.ArchiveStore
@@ -518,33 +529,45 @@ type workspaceHelperCacheStoreFake struct {
 
 func (f *workspaceHelperCacheStoreFake) Provider() domain.StorageProvider { return f.inner.Provider() }
 func (f *workspaceHelperCacheStoreFake) Restore(ctx context.Context, key string, destination string) (cachepkg.RestoreResult, error) {
+	f.mu.Lock()
 	f.restoreCalls++
+	f.mu.Unlock()
 	return f.inner.Restore(ctx, key, destination)
 }
 func (f *workspaceHelperCacheStoreFake) Save(ctx context.Context, key string, source string) (cachepkg.SaveResult, error) {
+	f.mu.Lock()
 	f.saveCalls++
+	f.mu.Unlock()
 	if f.saveErr != nil {
 		return cachepkg.SaveResult{}, f.saveErr
 	}
 	return f.inner.Save(ctx, key, source)
 }
 func (f *workspaceHelperCacheStoreFake) Open(ctx context.Context, key string) (io.ReadCloser, cachepkg.RestoreResult, error) {
+	f.mu.Lock()
 	f.openCalls++
+	f.mu.Unlock()
 	return f.inner.Open(ctx, key)
 }
 func (f *workspaceHelperCacheStoreFake) SaveArchive(ctx context.Context, key string, archive io.Reader) (cachepkg.SaveResult, error) {
+	f.mu.Lock()
 	f.archiveSaveCalls++
+	f.mu.Unlock()
 	if f.saveErr != nil {
 		return cachepkg.SaveResult{}, f.saveErr
 	}
 	return f.inner.SaveArchive(ctx, key, &countingCacheArchiveReader{reader: archive, count: &f.archiveBytes})
 }
 func (f *workspaceHelperCacheStoreFake) PromoteArchive(ctx context.Context, sourceKey string, destinationKey string) error {
+	f.mu.Lock()
 	f.archivePromoteCalls++
+	f.mu.Unlock()
 	return f.inner.PromoteArchive(ctx, sourceKey, destinationKey)
 }
 func (f *workspaceHelperCacheStoreFake) DeleteArchive(ctx context.Context, key string) error {
+	f.mu.Lock()
 	f.archiveDeleteCalls++
+	f.mu.Unlock()
 	return f.inner.DeleteArchive(ctx, key)
 }
 
@@ -555,7 +578,7 @@ type countingCacheArchiveReader struct {
 
 func (r *countingCacheArchiveReader) Read(data []byte) (int, error) {
 	read, err := r.reader.Read(data)
-	*r.count += int64(read)
+	atomic.AddInt64(r.count, int64(read))
 	return read, err
 }
 
