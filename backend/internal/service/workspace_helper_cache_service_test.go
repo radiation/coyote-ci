@@ -125,6 +125,47 @@ func TestWorkspaceHelperCacheServiceSaveUpsertsReadyEntry(t *testing.T) {
 	}
 }
 
+func TestWorkspaceHelperCacheServiceSaveReplacementDeletesPreviousArchive(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	previous := cacheArchive(t, "cache.txt", "old cache")
+	defer func() { _ = previous.archive.Close() }()
+	previousObjectKey := cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, previous.publication.ContentDigest)
+	previousSaved, previousSaveErr := harness.store.SaveArchive(context.Background(), previousObjectKey, previous.archive)
+	if previousSaveErr != nil {
+		t.Fatalf("save previous archive: %v", previousSaveErr)
+	}
+	previousEntry := cacheEntryInput(harness, previousObjectKey)
+	previousEntry.SizeBytes = previousSaved.SizeBytes
+	previousEntry.Checksum = previousSaved.Checksum
+	previousEntry.ContentDigest = previous.publication.ContentDigest
+	if _, upsertErr := harness.entries.Upsert(context.Background(), previousEntry); upsertErr != nil {
+		t.Fatalf("seed previous cache entry: %v", upsertErr)
+	}
+
+	replacement := cacheArchive(t, "cache.txt", "replacement cache")
+	defer func() { _ = replacement.archive.Close() }()
+	if saveErr := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, replacement.archive, replacement.publication); saveErr != nil {
+		t.Fatalf("save replacement: %v", saveErr)
+	}
+	entry, found, findErr := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey)
+	if findErr != nil || !found || entry.ObjectKey == previousObjectKey {
+		t.Fatalf("replacement entry=%#v found=%t err=%v", entry, found, findErr)
+	}
+	if harness.store.archiveDeleteCalls != 1 {
+		t.Fatalf("archive delete calls=%d, want 1", harness.store.archiveDeleteCalls)
+	}
+	previousReader, previousResult, previousOpenErr := harness.store.inner.Open(context.Background(), previousObjectKey)
+	if previousOpenErr != nil || previousResult.Hit || previousReader != nil {
+		t.Fatalf("previous archive hit=%t reader=%v err=%v", previousResult.Hit, previousReader, previousOpenErr)
+	}
+	currentReader, currentResult, currentOpenErr := harness.store.inner.Open(context.Background(), entry.ObjectKey)
+	if currentOpenErr != nil || !currentResult.Hit || currentReader == nil {
+		t.Fatalf("replacement archive hit=%t reader=%v err=%v", currentResult.Hit, currentReader, currentOpenErr)
+	}
+	defer func() { _ = currentReader.Close() }()
+}
+
 func TestWorkspaceHelperCacheServiceSaveRejectsCorruptArchiveWithoutReadyEntry(t *testing.T) {
 	harness := newWorkspaceHelperCacheServiceTestHarness(t)
 	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave

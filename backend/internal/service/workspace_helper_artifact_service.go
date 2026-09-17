@@ -143,7 +143,7 @@ func (s *WorkspaceHelperArtifactService) artifactDeclarationForJob(ctx context.C
 			if pathErr != nil {
 				return domain.ArtifactDeclaration{}, pathErr
 			}
-			if declarationPath == logicalPath {
+			if artifact.MatchPathPattern(declarationPath, logicalPath) {
 				return declaration, nil
 			}
 		}

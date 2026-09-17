@@ -80,6 +80,7 @@ func (c *Controller) ReconcileClaimed(ctx context.Context, step workersvc.Worker
 		if inputErr != nil {
 			return false, c.complete(ctx, step, false, inputErr.Error(), nil)
 		}
+		defer closeImageBuildArtifactInputs(inputs)
 		payload, sourceErr := c.sources.OpenSourceArchive(ctx, build, job, spec)
 		if sourceErr != nil {
 			return true, sourceErr
@@ -217,25 +218,38 @@ func (c *Controller) resolveArtifactInputs(ctx context.Context, job domain.Execu
 			}
 		}
 		if match == nil {
+			closeImageBuildArtifactInputs(resolved)
 			return nil, fmt.Errorf("image build artifact %q is not available from an upstream dependency", input.Name)
 		}
 		if strings.TrimSpace(match.TargetPlatform) != strings.TrimSpace(input.Platform) {
+			closeImageBuildArtifactInputs(resolved)
 			return nil, fmt.Errorf("image build artifact %q platform %q does not match required platform %q", input.Name, match.TargetPlatform, input.Platform)
 		}
 		if match.ChecksumSHA256 == nil || len(*match.ChecksumSHA256) != 64 {
+			closeImageBuildArtifactInputs(resolved)
 			return nil, fmt.Errorf("image build artifact %q has no valid checksum", input.Name)
 		}
 		store, storeErr := c.artifactStores.Resolve(match.StorageProvider)
 		if storeErr != nil {
+			closeImageBuildArtifactInputs(resolved)
 			return nil, fmt.Errorf("resolving image build artifact %q storage provider %q: %w", input.Name, match.StorageProvider, storeErr)
 		}
 		reader, openErr := store.Open(ctx, match.StorageKey)
 		if openErr != nil {
+			closeImageBuildArtifactInputs(resolved)
 			return nil, fmt.Errorf("opening image build artifact %q: %w", input.Name, openErr)
 		}
 		resolved = append(resolved, service.ImageBuildContextArtifact{Artifact: domain.ImageBuildArtifact{ID: match.ID, Name: match.Name, StorageKey: match.StorageKey, ChecksumSHA256: *match.ChecksumSHA256, SizeBytes: match.SizeBytes, TargetPlatform: match.TargetPlatform, Destination: input.Destination}, Source: &checksumReader{ReadCloser: reader, hash: sha256.New(), expected: *match.ChecksumSHA256, size: match.SizeBytes}})
 	}
 	return resolved, nil
+}
+
+func closeImageBuildArtifactInputs(inputs []service.ImageBuildContextArtifact) {
+	for _, input := range inputs {
+		if input.Source != nil {
+			_ = input.Source.Close()
+		}
+	}
 }
 
 func imageBuildArtifacts(inputs []service.ImageBuildContextArtifact) []domain.ImageBuildArtifact {

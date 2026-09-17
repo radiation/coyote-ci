@@ -151,6 +151,10 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 		log.Printf("INFO cache publish skipped unchanged_after_claim job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
 		return nil
 	}
+	previous, hadPrevious, previousErr := s.entries.FindReadyByKey(ctx, jobID, preset, cacheKey)
+	if previousErr != nil {
+		return previousErr
+	}
 	limits := workspace.WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: s.maxUncompressedBytes, MaxEntries: s.maxArchiveEntries}
 	objectKey := cacheObjectKey(jobID, preset, cacheKey, publication.ContentDigest)
 	saved, saveErr := s.saveArchive(ctx, objectKey, claim.ClaimToken, archive, publication, limits)
@@ -158,15 +162,23 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 		log.Printf("WARN cache publish failed job_id=%s preset=%s key=%s err=%v", jobID, preset, cacheKey, saveErr)
 		return saveErr
 	}
-	_, upsertErr := s.entries.CompletePublishClaim(ctx, claim, repository.CacheEntryUpsertInput{JobID: jobID, Preset: preset, CacheKey: cacheKey, StorageProvider: s.store.Provider(), ObjectKey: objectKey, SizeBytes: saved.SizeBytes, Checksum: saved.Checksum, ContentDigest: publication.ContentDigest, Compression: saved.Compression, Status: domain.CacheEntryStatusReady, CreatedByBuildID: build.ID, CreatedByStepID: step.ID}, s.now())
+	entry, upsertErr := s.entries.CompletePublishClaim(ctx, claim, repository.CacheEntryUpsertInput{JobID: jobID, Preset: preset, CacheKey: cacheKey, StorageProvider: s.store.Provider(), ObjectKey: objectKey, SizeBytes: saved.SizeBytes, Checksum: saved.Checksum, ContentDigest: publication.ContentDigest, Compression: saved.Compression, Status: domain.CacheEntryStatusReady, CreatedByBuildID: build.ID, CreatedByStepID: step.ID}, s.now())
 	if errors.Is(upsertErr, repository.ErrCachePublishClaimStale) {
 		log.Printf("INFO cache publish skipped stale_claim job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
 		return nil
 	}
-	if upsertErr == nil {
-		log.Printf("INFO cache publish succeeded job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+	if upsertErr != nil {
+		return upsertErr
 	}
-	return upsertErr
+	if hadPrevious && strings.TrimSpace(previous.ObjectKey) != "" && previous.StorageProvider == entry.StorageProvider && previous.ObjectKey != entry.ObjectKey {
+		if archiveStore, ok := s.store.(cachepkg.ArchiveStore); ok {
+			if deleteErr := archiveStore.DeleteArchive(ctx, previous.ObjectKey); deleteErr != nil {
+				log.Printf("WARN cache archive replacement cleanup failed key=%s err=%v", previous.ObjectKey, deleteErr)
+			}
+		}
+	}
+	log.Printf("INFO cache publish succeeded job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+	return nil
 }
 
 func (s *WorkspaceHelperCacheService) saveArchive(ctx context.Context, objectKey string, claimToken string, archive io.Reader, publication domain.WorkspaceRevisionPublication, limits workspace.WorkspaceRevisionRestoreLimits) (cachepkg.SaveResult, error) {

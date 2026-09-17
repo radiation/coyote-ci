@@ -21,13 +21,14 @@ func TestCloneStepForAttemptPreservesRemoteImageBuild(t *testing.T) {
 		RemoteImageBuild: &domain.RemoteImageBuildSpec{
 			ContextPath:          "backend",
 			DockerfilePath:       "backend/Dockerfile",
+			Target:               "artifact-runtime",
 			BuildArgs:            map[string]string{"GO_VERSION": "1.27.1"},
 			TargetImageReference: "coyote-ci/backend",
 		},
 	}
 
 	cloned := cloneStepForAttempt("build-2", source, 0)
-	if cloned.ExecutionKind != domain.ExecutionKindImageBuild || cloned.RemoteImageBuild == nil || cloned.RemoteImageBuild.TargetImageReference != "coyote-ci/backend" {
+	if cloned.ExecutionKind != domain.ExecutionKindImageBuild || cloned.RemoteImageBuild == nil || cloned.RemoteImageBuild.TargetImageReference != "coyote-ci/backend" || cloned.RemoteImageBuild.Target != "artifact-runtime" {
 		t.Fatalf("clone did not preserve image build: %#v", cloned)
 	}
 	cloned.RemoteImageBuild.BuildArgs["GO_VERSION"] = "other"

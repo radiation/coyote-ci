@@ -109,6 +109,7 @@ steps:
     image_build:
       context: backend
       dockerfile: backend/Dockerfile
+      target: artifact-runtime
       artifacts:
         - name: coyote-server
           destination: dist/coyote-server

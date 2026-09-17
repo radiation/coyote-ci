@@ -99,8 +99,8 @@ func (c *Client) buildRequest(request domain.ImageBuildRequest) (*googlecloudbui
 		return nil, targetErr
 	}
 	args := []string{"build", "--file=" + request.Spec.DockerfilePath, "--tag=" + targetImage}
-	if len(request.Artifacts) > 0 {
-		args = append(args, "--target=artifact-runtime")
+	if target := strings.TrimSpace(request.Spec.Target); target != "" {
+		args = append(args, "--target="+target)
 	}
 	for key, value := range request.Spec.BuildArgs {
 		args = append(args, "--build-arg="+key+"="+value)

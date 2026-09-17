@@ -40,6 +40,7 @@ func (s ImageBuildStatus) Terminal() bool {
 type RemoteImageBuildSpec struct {
 	ContextPath          string                    `json:"context_path"`
 	DockerfilePath       string                    `json:"dockerfile_path"`
+	Target               string                    `json:"target,omitempty"`
 	BuildArgs            map[string]string         `json:"build_args,omitempty"`
 	TargetImageReference string                    `json:"target_image_reference"`
 	ArtifactInputs       []ImageBuildArtifactInput `json:"artifact_inputs,omitempty"`

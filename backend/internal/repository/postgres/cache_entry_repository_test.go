@@ -107,7 +107,7 @@ func TestCacheEntryRepository_CompletePublishClaim(t *testing.T) {
 	now := time.Now().UTC()
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT claim_expires_at FROM cache_publish_claims").
-		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken).
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, now).
 		WillReturnRows(sqlmock.NewRows([]string{"claim_expires_at"}).AddRow(now.Add(time.Minute)))
 	mock.ExpectQuery("INSERT INTO cache_entries").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "job_id", "preset", "cache_key", "storage_provider", "object_key", "size_bytes", "checksum", "content_digest", "compression", "status", "created_by_build_id", "created_by_step_id", "created_at", "updated_at", "last_accessed_at"}).

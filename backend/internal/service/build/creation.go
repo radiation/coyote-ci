@@ -68,7 +68,7 @@ func cloneRemoteImageBuildSpec(spec *domain.RemoteImageBuildSpec) *domain.Remote
 		buildArgs[key] = value
 	}
 	artifactInputs := append([]domain.ImageBuildArtifactInput(nil), spec.ArtifactInputs...)
-	return &domain.RemoteImageBuildSpec{ContextPath: spec.ContextPath, DockerfilePath: spec.DockerfilePath, BuildArgs: buildArgs, TargetImageReference: spec.TargetImageReference, ArtifactInputs: artifactInputs}
+	return &domain.RemoteImageBuildSpec{ContextPath: spec.ContextPath, DockerfilePath: spec.DockerfilePath, Target: spec.Target, BuildArgs: buildArgs, TargetImageReference: spec.TargetImageReference, ArtifactInputs: artifactInputs}
 }
 
 func defaultBuildSteps(buildID string) []domain.BuildStep {

@@ -45,9 +45,9 @@ func TestBuildRequestDerivesConfiguredArtifactRegistryDestination(t *testing.T) 
 	}
 }
 
-func TestBuildRequestSelectsArtifactRuntimeTargetWhenArtifactsAreStaged(t *testing.T) {
+func TestBuildRequestSelectsExplicitTarget(t *testing.T) {
 	client := &Client{artifactRegistryRepository: "registry.example/ci"}
-	request := domain.ImageBuildRequest{ExecutionJobID: "job-1", Source: domain.ImageBuildSource{Generation: "1"}, Spec: domain.RemoteImageBuildSpec{ContextPath: "backend", DockerfilePath: "backend/Dockerfile", TargetImageReference: "coyote-ci/backend"}, Artifacts: []domain.ImageBuildArtifact{{Name: "coyote-server"}}}
+	request := domain.ImageBuildRequest{ExecutionJobID: "job-1", Source: domain.ImageBuildSource{Generation: "1"}, Spec: domain.RemoteImageBuildSpec{ContextPath: "backend", DockerfilePath: "backend/Dockerfile", Target: "artifact-runtime", TargetImageReference: "coyote-ci/backend"}, Artifacts: []domain.ImageBuildArtifact{{Name: "coyote-server"}}}
 	build, err := client.buildRequest(request)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -55,10 +55,10 @@ func TestBuildRequestSelectsArtifactRuntimeTargetWhenArtifactsAreStaged(t *testi
 	if strings.Join(build.Steps[0].Args, " ") == "" || !contains(build.Steps[0].Args, "--target=artifact-runtime") {
 		t.Fatalf("build args=%#v, want artifact runtime target", build.Steps[0].Args)
 	}
-	request.Artifacts = nil
+	request.Spec.Target = ""
 	build, err = client.buildRequest(request)
 	if err != nil || contains(build.Steps[0].Args, "--target=artifact-runtime") {
-		t.Fatalf("source build args=%#v err=%v", build.Steps[0].Args, err)
+		t.Fatalf("artifact build args=%#v err=%v", build.Steps[0].Args, err)
 	}
 }
 

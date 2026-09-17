@@ -150,8 +150,10 @@ func (s *GCSStore) SaveArchive(ctx context.Context, key string, archive io.Reade
 
 func (s *GCSStore) PromoteArchive(ctx context.Context, sourceKey string, destinationKey string) error {
 	bucket := s.client.Bucket(s.bucket)
-	_, err := bucket.Object(s.objectKey(destinationKey)).CopierFrom(bucket.Object(s.objectKey(sourceKey))).Run(ctx)
-	return err
+	if _, err := bucket.Object(s.objectKey(destinationKey)).CopierFrom(bucket.Object(s.objectKey(sourceKey))).Run(ctx); err != nil {
+		return err
+	}
+	return s.DeleteArchive(ctx, sourceKey)
 }
 
 func (s *GCSStore) DeleteArchive(ctx context.Context, key string) error {

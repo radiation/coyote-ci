@@ -21,7 +21,7 @@ func NewArtifactRepository(db *sql.DB) *ArtifactRepository {
 	return &ArtifactRepository{db: db}
 }
 
-const artifactColumns = `id, build_id, package_id, step_id, artifact_name, logical_path, artifact_type, storage_key, storage_provider, size_bytes, content_type, checksum_sha256, created_at`
+const artifactColumns = `id, build_id, package_id, step_id, artifact_name, logical_path, artifact_type, storage_key, storage_provider, size_bytes, content_type, checksum_sha256, target_platform, created_at`
 
 func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error) {
 	const buildScopeQuery = `
@@ -55,9 +55,10 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 			size_bytes,
 			content_type,
 			checksum_sha256,
+			target_platform,
 			created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13, NOW()))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, NOW()))
 		RETURNING ` + artifactColumns
 
 	var createdAt any
@@ -122,6 +123,7 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 		artifact.SizeBytes,
 		artifact.ContentType,
 		artifact.ChecksumSHA256,
+		strings.TrimSpace(artifact.TargetPlatform),
 		createdAt,
 	))
 	if err != nil {
@@ -204,6 +206,7 @@ func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 	var storageProvider string
 	var contentType sql.NullString
 	var checksum sql.NullString
+	var targetPlatform string
 
 	err := scanner.Scan(
 		&artifact.ID,
@@ -218,6 +221,7 @@ func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 		&artifact.SizeBytes,
 		&contentType,
 		&checksum,
+		&targetPlatform,
 		&artifact.CreatedAt,
 	)
 	if err != nil {
@@ -243,6 +247,7 @@ func scanArtifact(scanner rowScanner) (domain.BuildArtifact, error) {
 		v := checksum.String
 		artifact.ChecksumSHA256 = &v
 	}
+	artifact.TargetPlatform = targetPlatform
 
 	return artifact, nil
 }
@@ -255,6 +260,7 @@ func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, 
 	var artifactStorageProvider string
 	var artifactContentType sql.NullString
 	var artifactChecksum sql.NullString
+	var artifactTargetPlatform string
 	var buildNulls buildNullFields
 	var stepID sql.NullString
 	var stepIndex sql.NullInt64
@@ -273,6 +279,7 @@ func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, 
 		&record.Artifact.SizeBytes,
 		&artifactContentType,
 		&artifactChecksum,
+		&artifactTargetPlatform,
 		&record.Artifact.CreatedAt,
 		&record.Build.ID,
 		&record.Build.BuildNumber,
@@ -361,6 +368,7 @@ func scanArtifactBrowseRecord(scanner rowScanner) (domain.ArtifactBrowseRecord, 
 		v := artifactChecksum.String
 		record.Artifact.ChecksumSHA256 = &v
 	}
+	record.Artifact.TargetPlatform = artifactTargetPlatform
 	buildNulls.applyTo(&record.Build)
 	if stepID.Valid {
 		record.Step = &domain.BuildStep{

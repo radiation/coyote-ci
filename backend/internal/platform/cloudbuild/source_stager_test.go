@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -81,6 +82,47 @@ func TestCopySourceArchiveWithArtifactsAddsResolvedInputsToDockerContext(t *test
 		if checksum != wantChecksum {
 			t.Fatalf("artifact %q checksum = %s, want %s", name, hex.EncodeToString(checksum[:]), hex.EncodeToString(wantChecksum[:]))
 		}
+	}
+}
+
+func TestCopySourceArchiveWithArtifactsRejectsInvalidInputs(t *testing.T) {
+	tests := []struct {
+		name      string
+		archive   []byte
+		artifacts []service.ImageBuildContextArtifact
+		wantError string
+	}{
+		{
+			name:      "invalid source archive",
+			archive:   []byte("not a gzip archive"),
+			artifacts: []service.ImageBuildContextArtifact{imageBuildContextArtifact("server", "dist/server", []byte("server"))},
+			wantError: "opening source archive",
+		},
+		{
+			name:    "duplicate destination",
+			archive: gzipArchive(t, map[string]string{"backend/Dockerfile": "FROM scratch\n"}),
+			artifacts: []service.ImageBuildContextArtifact{
+				imageBuildContextArtifact("server", "dist/server", []byte("server")),
+				imageBuildContextArtifact("worker", "dist/server", []byte("worker")),
+			},
+			wantError: "duplicate artifact destination",
+		},
+		{
+			name:      "destination already exists in source",
+			archive:   gzipArchive(t, map[string]string{"backend/dist/server": "source"}),
+			artifacts: []service.ImageBuildContextArtifact{imageBuildContextArtifact("server", "dist/server", []byte("server"))},
+			wantError: "already exists in source context",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			writer := &sourceWriterFake{}
+			err := copySourceArchiveWithArtifacts(writer, bytes.NewReader(testCase.archive), "backend", testCase.artifacts)
+			if err == nil || !strings.Contains(err.Error(), testCase.wantError) {
+				t.Fatalf("error=%v, want %q", err, testCase.wantError)
+			}
+		})
 	}
 }
 

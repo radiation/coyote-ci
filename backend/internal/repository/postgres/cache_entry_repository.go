@@ -161,13 +161,13 @@ func (r *CacheEntryRepository) ReleasePublishClaim(ctx context.Context, claim do
 	return err
 }
 
-func (r *CacheEntryRepository) CompletePublishClaim(ctx context.Context, claim domain.CachePublishClaim, input repository.CacheEntryUpsertInput, _ time.Time) (domain.CacheEntry, error) {
+func (r *CacheEntryRepository) CompletePublishClaim(ctx context.Context, claim domain.CachePublishClaim, input repository.CacheEntryUpsertInput, now time.Time) (domain.CacheEntry, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return domain.CacheEntry{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	err = tx.QueryRowContext(ctx, `SELECT claim_expires_at FROM cache_publish_claims WHERE job_id = $1 AND preset = $2 AND cache_key = $3 AND claim_token = $4 AND claim_expires_at > NOW() FOR UPDATE`, claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken).Scan(new(time.Time))
+	err = tx.QueryRowContext(ctx, `SELECT claim_expires_at FROM cache_publish_claims WHERE job_id = $1 AND preset = $2 AND cache_key = $3 AND claim_token = $4 AND claim_expires_at > $5 FOR UPDATE`, claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, now.UTC()).Scan(new(time.Time))
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.CacheEntry{}, repository.ErrCachePublishClaimStale
 	}

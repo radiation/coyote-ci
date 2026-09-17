@@ -15,6 +15,7 @@ import (
 // validEnvKey matches POSIX-style environment variable names: letters, digits, underscore, starting with letter or underscore.
 var validEnvKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 var validLogicalImageName = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
+var validDockerStageName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
 
 // Validate checks a parsed PipelineFile for semantic correctness.
 // Returns nil on success or a ValidationErrors with all problems found.
@@ -290,6 +291,9 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 			errs = append(errs, ValidationError{Field: prefix + ".image_build.image", Message: "is required"})
 		} else if !validLogicalImageName.MatchString(step.ImageBuild.Image) || path.Clean(step.ImageBuild.Image) != step.ImageBuild.Image || strings.HasPrefix(step.ImageBuild.Image, "/") {
 			errs = append(errs, ValidationError{Field: prefix + ".image_build.image", Message: "must be a relative logical image name"})
+		}
+		if target := strings.TrimSpace(step.ImageBuild.Target); target != "" && !validDockerStageName.MatchString(target) {
+			errs = append(errs, ValidationError{Field: prefix + ".image_build.target", Message: "must be a valid Docker stage name"})
 		}
 		for key, value := range step.ImageBuild.BuildArgs {
 			if !validEnvKey.MatchString(key) || strings.TrimSpace(value) == "" {

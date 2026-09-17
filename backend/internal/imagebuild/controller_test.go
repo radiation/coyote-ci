@@ -333,9 +333,104 @@ func TestControllerResolveArtifactInputsUsesArtifactStorageProvider(t *testing.T
 	}
 }
 
+func TestControllerResolveArtifactInputsClosesReadersAfterLaterFailure(t *testing.T) {
+	context := context.Background()
+	execution := newExecutionFake(t)
+	execution.job.DependsOnNodeIDs = []string{"node-producer"}
+	producerStepID := "build-step-producer"
+	execution.steps = []domain.BuildStep{{ID: producerStepID, BuildID: execution.job.BuildID, NodeID: "node-producer"}}
+	store := &trackingArtifactStore{content: map[string][]byte{"artifacts/first": []byte("first")}}
+	stores := artifactpkg.NewStoreResolver(domain.StorageProviderFilesystem, map[domain.StorageProvider]artifactpkg.Store{domain.StorageProviderFilesystem: store})
+	artifacts := &imageBuildArtifactRepositoryFake{items: []domain.BuildArtifact{
+		{ID: "first", BuildID: execution.job.BuildID, StepID: &producerStepID, Name: "first", StorageKey: "artifacts/first", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: 5, ChecksumSHA256: checksumPointer([]byte("first"))},
+		{ID: "second", BuildID: execution.job.BuildID, StepID: &producerStepID, Name: "second", StorageKey: "artifacts/second", StorageProvider: domain.StorageProvider("missing"), SizeBytes: 6, ChecksumSHA256: checksumPointer([]byte("second"))},
+	}}
+	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), &builderFake{}, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+	controller.WithArtifactInputs(artifacts, stores)
+
+	_, resolveErr := controller.resolveArtifactInputs(context, execution.job, domain.RemoteImageBuildSpec{ArtifactInputs: []domain.ImageBuildArtifactInput{{Name: "first"}, {Name: "second"}}})
+	if resolveErr == nil || !strings.Contains(resolveErr.Error(), "no store configured") {
+		t.Fatalf("resolve error=%v", resolveErr)
+	}
+	if store.closeCalls != 1 {
+		t.Fatalf("close calls=%d, want 1", store.closeCalls)
+	}
+}
+
+func TestControllerReconcileClosesArtifactReadersOnEarlyExit(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		source  service.WorkspaceSourceArchivePreparer
+		stager  *stagerFake
+		wantErr string
+	}{
+		{name: "source preparation failure", source: failingSourceFake{err: errors.New("source failed")}, stager: &stagerFake{}, wantErr: "source failed"},
+		{name: "staging failure", source: &sourceFake{}, stager: &stagerFake{err: errors.New("stage failed")}, wantErr: "stage failed"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			execution := newExecutionFake(t)
+			execution.job.DependsOnNodeIDs = []string{"node-producer"}
+			producerStepID := "build-step-producer"
+			execution.steps = []domain.BuildStep{{ID: producerStepID, BuildID: execution.job.BuildID, NodeID: "node-producer"}}
+			spec := domain.ExecutionJobSpec{ExecutionKind: domain.ExecutionKindImageBuild, RemoteImageBuild: &domain.RemoteImageBuildSpec{ContextPath: "backend", DockerfilePath: "backend/Dockerfile", TargetImageReference: "coyote-ci/backend", ArtifactInputs: []domain.ImageBuildArtifactInput{{Name: "artifact"}}}}
+			encodedSpec, marshalErr := json.Marshal(spec)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			execution.job.ResolvedSpecJSON = string(encodedSpec)
+			store := &trackingArtifactStore{content: map[string][]byte{"artifacts/input": []byte("input")}}
+			stores := artifactpkg.NewStoreResolver(domain.StorageProviderFilesystem, map[domain.StorageProvider]artifactpkg.Store{domain.StorageProviderFilesystem: store})
+			artifacts := &imageBuildArtifactRepositoryFake{items: []domain.BuildArtifact{{ID: "artifact", BuildID: execution.job.BuildID, StepID: &producerStepID, Name: "artifact", StorageKey: "artifacts/input", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: 5, ChecksumSHA256: checksumPointer([]byte("input"))}}}
+			controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), &builderFake{}, testCase.stager, testCase.source)
+			if newErr != nil {
+				t.Fatalf("new controller: %v", newErr)
+			}
+			controller.WithArtifactInputs(artifacts, stores)
+
+			_, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+			if reconcileErr == nil || !strings.Contains(reconcileErr.Error(), testCase.wantErr) {
+				t.Fatalf("reconcile error=%v", reconcileErr)
+			}
+			if store.closeCalls != 1 {
+				t.Fatalf("close calls=%d, want 1", store.closeCalls)
+			}
+		})
+	}
+}
+
 type recordingArtifactStore struct {
 	content map[string][]byte
 	opened  []string
+}
+
+type trackingArtifactStore struct {
+	content    map[string][]byte
+	closeCalls int
+}
+
+func (s *trackingArtifactStore) Save(context.Context, string, io.Reader) (int64, error) {
+	return 0, errors.New("unexpected save")
+}
+
+func (s *trackingArtifactStore) Open(_ context.Context, key string) (io.ReadCloser, error) {
+	content, ok := s.content[key]
+	if !ok {
+		return nil, errors.New("unexpected artifact store key")
+	}
+	return &trackingReadCloser{Reader: bytes.NewReader(content), closeCalls: &s.closeCalls}, nil
+}
+
+type trackingReadCloser struct {
+	*bytes.Reader
+	closeCalls *int
+}
+
+func (r *trackingReadCloser) Close() error {
+	*r.closeCalls++
+	return nil
 }
 
 func (s *recordingArtifactStore) Save(_ context.Context, key string, source io.Reader) (int64, error) {
@@ -529,6 +624,12 @@ type sourceFake struct{}
 
 func (*sourceFake) OpenSourceArchive(context.Context, domain.Build, domain.ExecutionJob, domain.ExecutionJobSpec) (service.WorkspacePreparePayload, error) {
 	return service.WorkspacePreparePayload{Archive: io.NopCloser(bytes.NewReader([]byte("archive")))}, nil
+}
+
+type failingSourceFake struct{ err error }
+
+func (f failingSourceFake) OpenSourceArchive(context.Context, domain.Build, domain.ExecutionJob, domain.ExecutionJobSpec) (service.WorkspacePreparePayload, error) {
+	return service.WorkspacePreparePayload{}, f.err
 }
 
 var _ service.ImageBuilder = (*builderFake)(nil)
