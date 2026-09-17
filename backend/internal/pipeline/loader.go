@@ -232,7 +232,11 @@ func resolveStepDef(sd StepDef, pipelineEnv map[string]string, pipelineCache *do
 	}
 	if sd.ImageBuild != nil {
 		step.ExecutionKind = domain.ExecutionKindImageBuild
-		step.RemoteImageBuild = &domain.RemoteImageBuildSpec{ContextPath: strings.TrimSpace(sd.ImageBuild.Context), DockerfilePath: strings.TrimSpace(sd.ImageBuild.Dockerfile), BuildArgs: copyEnv(sd.ImageBuild.BuildArgs), TargetImageReference: strings.TrimSpace(sd.ImageBuild.Image)}
+		inputs := make([]domain.ImageBuildArtifactInput, 0, len(sd.ImageBuild.Artifacts))
+		for _, input := range sd.ImageBuild.Artifacts {
+			inputs = append(inputs, domain.ImageBuildArtifactInput{Name: strings.TrimSpace(input.Name), Destination: strings.TrimSpace(input.Destination), Platform: strings.TrimSpace(input.Platform)})
+		}
+		step.RemoteImageBuild = &domain.RemoteImageBuildSpec{ContextPath: strings.TrimSpace(sd.ImageBuild.Context), DockerfilePath: strings.TrimSpace(sd.ImageBuild.Dockerfile), Target: strings.TrimSpace(sd.ImageBuild.Target), BuildArgs: copyEnv(sd.ImageBuild.BuildArgs), TargetImageReference: strings.TrimSpace(sd.ImageBuild.Image), ArtifactInputs: inputs}
 		step.Image = ""
 		step.Run = ""
 	}

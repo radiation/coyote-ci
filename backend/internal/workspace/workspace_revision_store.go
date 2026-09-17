@@ -194,6 +194,33 @@ func RestoreArchiveWithLimits(ctx context.Context, archive io.Reader, publicatio
 	return workspaceRevisionRename(staging, destinationRoot)
 }
 
+func ValidateArchiveWithLimits(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, limits WorkspaceRevisionRestoreLimits) error {
+	if archive == nil || publication.Validate() != nil {
+		return ErrInvalidWorkspaceRevisionObject
+	}
+	hasher := sha256.New()
+	countingReader := &workspaceRevisionCountingReader{reader: archive, writer: hasher}
+	gzipReader, gzipErr := gzip.NewReader(countingReader)
+	if gzipErr != nil {
+		return gzipErr
+	}
+	if validateErr := validateWorkspaceRevisionArchive(ctx, tar.NewReader(gzipReader), limits); validateErr != nil {
+		_ = gzipReader.Close()
+		return validateErr
+	}
+	if _, copyErr := copyWorkspaceRevision(ctx, io.Discard, gzipReader); copyErr != nil {
+		_ = gzipReader.Close()
+		return copyErr
+	}
+	if closeErr := gzipReader.Close(); closeErr != nil {
+		return closeErr
+	}
+	if "sha256:"+hex.EncodeToString(hasher.Sum(nil)) != publication.ContentDigest || publication.SizeBytes == nil || countingReader.size != *publication.SizeBytes {
+		return ErrWorkspaceRevisionDigestMismatch
+	}
+	return nil
+}
+
 type removingReadCloser struct {
 	io.ReadCloser
 	path string
@@ -550,6 +577,60 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 			}
 			if err := createWorkspaceRevisionSymlink(safeTarget, target); err != nil {
 				return err
+			}
+		default:
+			return fmt.Errorf("%w: tar type %d", ErrUnsupportedWorkspaceRevisionEntry, header.Typeflag)
+		}
+	}
+}
+
+func validateWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, limits WorkspaceRevisionRestoreLimits) error {
+	seenEntries := make(map[string]struct{})
+	var entries int
+	var uncompressedBytes int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		entries++
+		if limits.MaxEntries > 0 && entries > limits.MaxEntries {
+			return &WorkspaceRevisionEntryLimitError{ObservedEntries: entries, MaxEntries: limits.MaxEntries}
+		}
+		if header.Name == "." || header.Name == "./" {
+			if header.Typeflag != tar.TypeDir {
+				return ErrUnsafeWorkspaceRevisionPath
+			}
+			continue
+		}
+		archiveEntryPath := filepath.FromSlash(header.Name)
+		if strings.Contains(header.Name, "\\") || looksLikeWindowsDrivePath(header.Name) || filepath.IsAbs(archiveEntryPath) || !filepath.IsLocal(archiveEntryPath) || archiveEntryPath == "." {
+			return ErrUnsafeWorkspaceRevisionPath
+		}
+		entryKey := filepath.Clean(archiveEntryPath)
+		if _, found := seenEntries[entryKey]; found {
+			return ErrUnsafeWorkspaceRevisionPath
+		}
+		seenEntries[entryKey] = struct{}{}
+		switch header.Typeflag {
+		case tar.TypeDir:
+		case tar.TypeReg:
+			if limits.MaxUncompressedBytes > 0 && (header.Size > limits.MaxUncompressedBytes || uncompressedBytes > limits.MaxUncompressedBytes-header.Size) {
+				return &WorkspaceRevisionSizeLimitError{ObservedBytes: uncompressedBytes + header.Size, MaxBytes: limits.MaxUncompressedBytes}
+			}
+			uncompressedBytes += header.Size
+			if _, copyErr := copyWorkspaceRevision(ctx, io.Discard, reader); copyErr != nil {
+				return copyErr
+			}
+		case tar.TypeSymlink:
+			if _, targetErr := parseWorkspaceRevisionSymlinkTarget(filepath.ToSlash(archiveEntryPath), header.Linkname); targetErr != nil {
+				return targetErr
 			}
 		default:
 			return fmt.Errorf("%w: tar type %d", ErrUnsupportedWorkspaceRevisionEntry, header.Typeflag)

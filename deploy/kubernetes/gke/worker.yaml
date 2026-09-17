@@ -98,6 +98,16 @@ spec:
               value: "__CLOUD_BUILD_SOURCE_BUCKET__"
             - name: WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS
               value: "__WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS__"
+            - name: ARTIFACT_STORAGE_PROVIDER
+              value: "__ARTIFACT_STORAGE_PROVIDER__"
+            - name: ARTIFACT_GCS_BUCKET
+              value: "__ARTIFACT_GCS_BUCKET__"
+            - name: ARTIFACT_GCS_PREFIX
+              value: "__ARTIFACT_GCS_PREFIX__"
+            - name: ARTIFACT_GCS_PROJECT
+              value: "__ARTIFACT_GCS_PROJECT__"
+            - name: ARTIFACT_STORAGE_STRICT
+              value: "__ARTIFACT_STORAGE_STRICT__"
             - name: WORKER_KUBERNETES_HELPER_IMAGE
               value: us-central1-docker.pkg.dev/bryanchoate/coyote-ci/coyote-worker:gke-smoke
             - name: WORKER_KUBERNETES_INTERNAL_API_URL

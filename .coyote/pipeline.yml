@@ -72,6 +72,9 @@ steps:
     cache:
       preset: go
       policy: pull-push
+    artifacts:
+      - name: coyote-server
+        path: dist/coyote-server
 
   - name: Backend Build Worker
     depends_on:
@@ -83,6 +86,9 @@ steps:
     cache:
       preset: go
       policy: pull-push
+    artifacts:
+      - name: coyote-worker
+        path: dist/coyote-worker
 
   - name: Frontend Build
     depends_on:
@@ -103,8 +109,12 @@ steps:
     image_build:
       context: backend
       dockerfile: backend/Dockerfile
-      build_args:
-        GO_VERSION: "1.27.1"
+      target: artifact-runtime
+      artifacts:
+        - name: coyote-server
+          destination: dist/coyote-server
+        - name: coyote-worker
+          destination: dist/coyote-worker
       image: coyote-ci/backend
     timeout_seconds: 600
 

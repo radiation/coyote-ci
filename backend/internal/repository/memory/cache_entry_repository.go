@@ -16,13 +16,55 @@ type CacheEntryRepository struct {
 	mu      sync.RWMutex
 	entries map[string]domain.CacheEntry
 	index   map[string]string
+	claims  map[string]domain.CachePublishClaim
 }
 
 func NewCacheEntryRepository() *CacheEntryRepository {
 	return &CacheEntryRepository{
 		entries: make(map[string]domain.CacheEntry),
 		index:   make(map[string]string),
+		claims:  make(map[string]domain.CachePublishClaim),
 	}
+}
+
+func (r *CacheEntryRepository) TryAcquirePublishClaim(_ context.Context, jobID, preset, cacheKey, claimant string, now time.Time, lease time.Duration) (domain.CachePublishClaim, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := composeCacheKey(jobID, preset, cacheKey)
+	if existing, found := r.claims[key]; found && existing.ExpiresAt.After(now.UTC()) {
+		return existing, false, nil
+	}
+	claim := domain.CachePublishClaim{JobID: strings.TrimSpace(jobID), Preset: strings.TrimSpace(strings.ToLower(preset)), CacheKey: strings.TrimSpace(cacheKey), ClaimToken: uuid.NewString(), ClaimedBy: strings.TrimSpace(claimant), ClaimedAt: now.UTC(), ExpiresAt: now.UTC().Add(lease)}
+	if _, found := r.claims[key]; found {
+		claim.Reclaimed = true
+	}
+	r.claims[key] = claim
+	return claim, true, nil
+}
+
+func (r *CacheEntryRepository) ReleasePublishClaim(_ context.Context, claim domain.CachePublishClaim) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := composeCacheKey(claim.JobID, claim.Preset, claim.CacheKey)
+	existing, found := r.claims[key]
+	if !found || existing.ClaimToken != claim.ClaimToken {
+		return nil
+	}
+	delete(r.claims, key)
+	return nil
+}
+
+func (r *CacheEntryRepository) CompletePublishClaim(_ context.Context, claim domain.CachePublishClaim, input repository.CacheEntryUpsertInput, now time.Time) (domain.CacheEntry, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := composeCacheKey(claim.JobID, claim.Preset, claim.CacheKey)
+	existing, found := r.claims[key]
+	if !found || existing.ClaimToken != claim.ClaimToken || !existing.ExpiresAt.After(now.UTC()) {
+		return domain.CacheEntry{}, repository.ErrCachePublishClaimStale
+	}
+	entry := r.upsertLocked(input, now.UTC())
+	delete(r.claims, key)
+	return entry, nil
 }
 
 func (r *CacheEntryRepository) FindReadyByKey(_ context.Context, jobID string, preset string, cacheKey string) (domain.CacheEntry, bool, error) {
@@ -43,8 +85,10 @@ func (r *CacheEntryRepository) FindReadyByKey(_ context.Context, jobID string, p
 func (r *CacheEntryRepository) Upsert(_ context.Context, input repository.CacheEntryUpsertInput) (domain.CacheEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.upsertLocked(input, time.Now().UTC()), nil
+}
 
-	now := time.Now().UTC()
+func (r *CacheEntryRepository) upsertLocked(input repository.CacheEntryUpsertInput, now time.Time) domain.CacheEntry {
 	indexKey := composeCacheKey(input.JobID, input.Preset, input.CacheKey)
 	id, found := r.index[indexKey]
 	entry := domain.CacheEntry{}
@@ -62,6 +106,7 @@ func (r *CacheEntryRepository) Upsert(_ context.Context, input repository.CacheE
 	entry.ObjectKey = strings.TrimSpace(input.ObjectKey)
 	entry.SizeBytes = input.SizeBytes
 	entry.Checksum = strings.TrimSpace(input.Checksum)
+	entry.ContentDigest = strings.TrimSpace(input.ContentDigest)
 	entry.Compression = strings.TrimSpace(input.Compression)
 	entry.Status = input.Status
 	entry.CreatedByBuildID = strings.TrimSpace(input.CreatedByBuildID)
@@ -73,7 +118,7 @@ func (r *CacheEntryRepository) Upsert(_ context.Context, input repository.CacheE
 
 	r.entries[entry.ID] = entry
 	r.index[indexKey] = entry.ID
-	return entry, nil
+	return entry
 }
 
 func (r *CacheEntryRepository) MarkAccessed(_ context.Context, id string, accessedAt time.Time) error {

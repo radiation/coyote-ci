@@ -16,6 +16,16 @@ type Preset struct {
 	FingerprintFiles []string
 }
 
+// Component is one independently stored portion of a cache preset.
+// A preset may retain multiple components for backwards-compatible YAML while
+// allowing each portion to have an appropriate reuse key and publish policy.
+type Component struct {
+	Name             string
+	CachePath        string
+	FingerprintFiles []string
+	KeyDimensions    []string
+}
+
 func ResolvePreset(name string, workingDir string) (Preset, error) {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	baseDir := normalizeWorkingDir(workingDir)
@@ -42,6 +52,23 @@ func ResolvePreset(name string, workingDir string) (Preset, error) {
 	default:
 		return Preset{}, ErrUnknownPreset
 	}
+}
+
+// ResolvePresetComponents expands a user-facing preset into independently
+// stored cache components. Single-path presets intentionally retain one
+// component named after the preset.
+func ResolvePresetComponents(name string, workingDir string) ([]Component, error) {
+	preset, err := ResolvePreset(name, workingDir)
+	if err != nil {
+		return nil, err
+	}
+	if preset.Name != "go" {
+		return []Component{{Name: preset.Name, CachePath: preset.CachePaths[0], FingerprintFiles: preset.FingerprintFiles}}, nil
+	}
+	return []Component{
+		{Name: "go-module", CachePath: "/go/pkg/mod", FingerprintFiles: preset.FingerprintFiles, KeyDimensions: []string{"cache-v2"}},
+		{Name: "go-build", CachePath: "/root/.cache/go-build", FingerprintFiles: preset.FingerprintFiles, KeyDimensions: []string{"cache-v2"}},
+	}, nil
 }
 
 func SupportedPresets() []string {

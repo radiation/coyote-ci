@@ -76,6 +76,28 @@ func (s *FilesystemStore) Restore(_ context.Context, key string, destinationRoot
 	return RestoreResult{Hit: true, SizeBytes: info.Size(), Compression: "tar.gz"}, nil
 }
 
+func (s *FilesystemStore) Open(_ context.Context, key string) (io.ReadCloser, RestoreResult, error) {
+	archivePath, err := s.resolvePathForKey(key)
+	if err != nil {
+		return nil, RestoreResult{}, err
+	}
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, RestoreResult{Hit: false, Compression: "tar.gz"}, nil
+		}
+		return nil, RestoreResult{}, err
+	}
+	if info.IsDir() {
+		return nil, RestoreResult{}, fmt.Errorf("cache entry is not an archive file: %s", archivePath)
+	}
+	archive, openErr := os.Open(archivePath)
+	if openErr != nil {
+		return nil, RestoreResult{}, openErr
+	}
+	return archive, RestoreResult{Hit: true, SizeBytes: info.Size(), Compression: "tar.gz"}, nil
+}
+
 func (s *FilesystemStore) Save(_ context.Context, key string, sourceRoot string) (SaveResult, error) {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
@@ -123,6 +145,76 @@ func (s *FilesystemStore) Save(_ context.Context, key string, sourceRoot string)
 	}
 
 	return SaveResult{SizeBytes: size, Checksum: checksum, Compression: "tar.gz"}, nil
+}
+
+func (s *FilesystemStore) SaveArchive(_ context.Context, key string, archive io.Reader) (SaveResult, error) {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	if archive == nil {
+		return SaveResult{}, errors.New("cache archive is required")
+	}
+	archivePath, err := s.resolvePathForKey(key)
+	if err != nil {
+		return SaveResult{}, err
+	}
+	if mkdirErr := os.MkdirAll(filepath.Dir(archivePath), 0o755); mkdirErr != nil {
+		return SaveResult{}, mkdirErr
+	}
+	temporary, createErr := os.CreateTemp(filepath.Dir(archivePath), ".cache-archive-*.tar.gz")
+	if createErr != nil {
+		return SaveResult{}, createErr
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	hasher := sha256.New()
+	size, copyErr := io.Copy(io.MultiWriter(temporary, hasher), archive)
+	if copyErr != nil {
+		_ = temporary.Close()
+		return SaveResult{}, copyErr
+	}
+	if closeErr := temporary.Close(); closeErr != nil {
+		return SaveResult{}, closeErr
+	}
+	if renameErr := os.Rename(temporaryPath, archivePath); renameErr != nil {
+		return SaveResult{}, renameErr
+	}
+	if evictErr := s.evictIfNeeded(); evictErr != nil {
+		return SaveResult{}, evictErr
+	}
+	return SaveResult{SizeBytes: size, Checksum: hex.EncodeToString(hasher.Sum(nil)), Compression: "tar.gz"}, nil
+}
+
+func (s *FilesystemStore) PromoteArchive(_ context.Context, sourceKey string, destinationKey string) error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	sourcePath, sourceErr := s.resolvePathForKey(sourceKey)
+	if sourceErr != nil {
+		return sourceErr
+	}
+	destinationPath, destinationErr := s.resolvePathForKey(destinationKey)
+	if destinationErr != nil {
+		return destinationErr
+	}
+	if mkdirErr := os.MkdirAll(filepath.Dir(destinationPath), 0o755); mkdirErr != nil {
+		return mkdirErr
+	}
+	if renameErr := os.Rename(sourcePath, destinationPath); renameErr != nil {
+		return renameErr
+	}
+	return s.evictIfNeeded()
+}
+
+func (s *FilesystemStore) DeleteArchive(_ context.Context, key string) error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	archivePath, pathErr := s.resolvePathForKey(key)
+	if pathErr != nil {
+		return pathErr
+	}
+	if removeErr := os.Remove(archivePath); removeErr != nil && !os.IsNotExist(removeErr) {
+		return removeErr
+	}
+	return nil
 }
 
 func (s *FilesystemStore) TotalSizeBytes() (int64, error) {

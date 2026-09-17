@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Euo pipefail
 
 namespace="${GKE_NAMESPACE:-coyote-ci}"
 api_url="${API_URL:-${COYOTE_INTERNAL_API_URL:-}}"
@@ -9,6 +9,9 @@ timeout_seconds="${GKE_SMOKE_TIMEOUT_SECONDS:-600}"
 build_id=""
 job_name=""
 pod_name=""
+last_api_status=""
+last_api_body=""
+diagnostics_printed=0
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || { echo "$1 is required" >&2; exit 1; }
@@ -44,8 +47,16 @@ require_smoke_api_authentication() {
 }
 
 print_diagnostics() {
+  if [[ "$diagnostics_printed" == "1" ]]; then
+    return
+  fi
+  diagnostics_printed=1
   set +e
   echo "GKE Autopilot smoke diagnostics"
+  if [[ -n "$last_api_status" ]]; then
+    echo "last API readiness status: $last_api_status"
+    printf '%s\n' "$last_api_body"
+  fi
   kubectl get nodes -o wide
   kubectl -n "$namespace" get pods -o wide
   kubectl -n "$namespace" get jobs -o wide
@@ -60,7 +71,34 @@ print_diagnostics() {
     coyote_api_curl "$api_url/api/builds/$build_id/steps/0/logs" | jq .
   fi
 }
-trap print_diagnostics ERR
+
+on_error() {
+  local exit_code="$1"
+  local line_number="$2"
+  local command="$3"
+  echo "gke smoke failed: exit=$exit_code line=$line_number command=$command" >&2
+  print_diagnostics
+  exit "$exit_code"
+}
+
+wait_for_api_ready() {
+  local response
+  local deadline=$(( $(date +%s) + timeout_seconds ))
+  while (( $(date +%s) < deadline )); do
+    response=$(coyote_api_curl --connect-timeout 5 --max-time 20 -sS -w '\n%{http_code}' "$api_url/api/readyz" 2>&1) || true
+    last_api_status="${response##*$'\n'}"
+    last_api_body="${response%$'\n'*}"
+    if [[ "$last_api_status" == "200" ]]; then
+      return
+    fi
+    echo "waiting for Coyote API readiness: HTTP $last_api_status" >&2
+    sleep 3
+  done
+  echo "Coyote API readiness did not return HTTP 200 within ${timeout_seconds}s" >&2
+  return 1
+}
+
+trap 'on_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 require_command curl
 require_command jq
@@ -88,7 +126,7 @@ jq -e '.spec.volumes[] | select(.name == "database-url") | .csi.driver == "secre
 jq -e '.spec.containers[] | select(.name == "worker") | .volumeMounts[] | select(.name == "database-url" and .mountPath == "/var/run/secrets/coyote" and .readOnly == true)' <<<"$worker_pod_json" >/dev/null
 jq -e '.spec.containers[] | select(.name == "cloud-sql-proxy") | .ports[] | select(.name == "postgres" and .containerPort == 5432)' <<<"$worker_pod_json" >/dev/null
 jq -e '.status.containerStatuses[] | select(.name == "cloud-sql-proxy") | .ready == true and .state.running != null' <<<"$worker_pod_json" >/dev/null
-coyote_api_curl -f "$api_url/api/readyz" >/dev/null
+wait_for_api_ready
 require_smoke_api_authentication
 
 project_result=$(coyote_api_curl -w '\n%{http_code}' -X POST "$api_url/api/projects" -H 'Content-Type: application/json' --data '{"name":"gke autopilot smoke","slug":"gke-autopilot-smoke"}')

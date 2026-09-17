@@ -227,6 +227,9 @@ func TestBuildJobWithCacheHelpersUsesOrderedLifecycleAndIsolatedCredentials(t *t
 		t.Fatalf("save mounts=%#v", pod.Containers[2].VolumeMounts)
 	}
 	for _, container := range []corev1.Container{pod.InitContainers[2], pod.Containers[2]} {
+		if value := environmentValue(container.Env, "COYOTE_CACHE_BUILD_IMAGE"); value != step.Image {
+			t.Fatalf("%s build image identity=%q, want %q", container.Name, value, step.Image)
+		}
 		if fieldPath := downwardAPIFieldPath(container.Env, "COYOTE_WORKSPACE_HELPER_POD_NAME"); fieldPath != "metadata.name" {
 			t.Fatalf("%s pod name field=%q", container.Name, fieldPath)
 		}
@@ -243,6 +246,15 @@ func downwardAPIFieldPath(environment []corev1.EnvVar, name string) string {
 	for _, value := range environment {
 		if value.Name == name && value.ValueFrom != nil && value.ValueFrom.FieldRef != nil {
 			return value.ValueFrom.FieldRef.FieldPath
+		}
+	}
+	return ""
+}
+
+func environmentValue(environment []corev1.EnvVar, name string) string {
+	for _, value := range environment {
+		if value.Name == name {
+			return value.Value
 		}
 	}
 	return ""

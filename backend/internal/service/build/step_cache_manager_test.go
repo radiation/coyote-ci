@@ -61,6 +61,18 @@ func (r *failingUpsertRepo) MarkAccessed(ctx context.Context, id string, accesse
 	return r.inner.MarkAccessed(ctx, id, accessedAt)
 }
 
+func (r *failingUpsertRepo) TryAcquirePublishClaim(ctx context.Context, jobID, preset, cacheKey, claimant string, now time.Time, lease time.Duration) (domain.CachePublishClaim, bool, error) {
+	return r.inner.TryAcquirePublishClaim(ctx, jobID, preset, cacheKey, claimant, now, lease)
+}
+
+func (r *failingUpsertRepo) CompletePublishClaim(ctx context.Context, claim domain.CachePublishClaim, input repository.CacheEntryUpsertInput, now time.Time) (domain.CacheEntry, error) {
+	return r.inner.CompletePublishClaim(ctx, claim, input, now)
+}
+
+func (r *failingUpsertRepo) ReleasePublishClaim(ctx context.Context, claim domain.CachePublishClaim) error {
+	return r.inner.ReleasePublishClaim(ctx, claim)
+}
+
 func TestStepCacheManager_PushPolicySkipsRestoreAndSaves(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	buildID := "build-1"
