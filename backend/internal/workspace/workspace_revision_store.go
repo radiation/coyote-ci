@@ -87,6 +87,13 @@ type WorkspaceRevisionRestoreLimits struct {
 	MaxEntries           int
 }
 
+// ArchiveValidationMetrics summarizes one streamed tar.gz validation pass.
+type ArchiveValidationMetrics struct {
+	CompressedBytes   int64
+	UncompressedBytes int64
+	Entries           int
+}
+
 type WorkspaceRevisionSizeLimitError struct {
 	ObservedBytes int64
 	MaxBytes      int64
@@ -195,30 +202,39 @@ func RestoreArchiveWithLimits(ctx context.Context, archive io.Reader, publicatio
 }
 
 func ValidateArchiveWithLimits(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, limits WorkspaceRevisionRestoreLimits) error {
+	_, err := ValidateArchiveWithMetrics(ctx, archive, publication, limits)
+	return err
+}
+
+// ValidateArchiveWithMetrics verifies an archive while reporting aggregate bytes
+// and entries observed during the same streaming pass.
+func ValidateArchiveWithMetrics(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, limits WorkspaceRevisionRestoreLimits) (ArchiveValidationMetrics, error) {
 	if archive == nil || publication.Validate() != nil {
-		return ErrInvalidWorkspaceRevisionObject
+		return ArchiveValidationMetrics{}, ErrInvalidWorkspaceRevisionObject
 	}
 	hasher := sha256.New()
 	countingReader := &workspaceRevisionCountingReader{reader: archive, writer: hasher}
 	gzipReader, gzipErr := gzip.NewReader(countingReader)
 	if gzipErr != nil {
-		return gzipErr
+		return ArchiveValidationMetrics{}, gzipErr
 	}
-	if validateErr := validateWorkspaceRevisionArchive(ctx, tar.NewReader(gzipReader), limits); validateErr != nil {
+	metrics, validateErr := validateWorkspaceRevisionArchive(ctx, tar.NewReader(gzipReader), limits)
+	if validateErr != nil {
 		_ = gzipReader.Close()
-		return validateErr
+		return ArchiveValidationMetrics{}, validateErr
 	}
 	if _, copyErr := copyWorkspaceRevision(ctx, io.Discard, gzipReader); copyErr != nil {
 		_ = gzipReader.Close()
-		return copyErr
+		return ArchiveValidationMetrics{}, copyErr
 	}
 	if closeErr := gzipReader.Close(); closeErr != nil {
-		return closeErr
+		return ArchiveValidationMetrics{}, closeErr
 	}
 	if "sha256:"+hex.EncodeToString(hasher.Sum(nil)) != publication.ContentDigest || publication.SizeBytes == nil || countingReader.size != *publication.SizeBytes {
-		return ErrWorkspaceRevisionDigestMismatch
+		return ArchiveValidationMetrics{}, ErrWorkspaceRevisionDigestMismatch
 	}
-	return nil
+	metrics.CompressedBytes = countingReader.size
+	return metrics, nil
 }
 
 type removingReadCloser struct {
@@ -584,56 +600,56 @@ func extractWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, de
 	}
 }
 
-func validateWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, limits WorkspaceRevisionRestoreLimits) error {
+func validateWorkspaceRevisionArchive(ctx context.Context, reader *tar.Reader, limits WorkspaceRevisionRestoreLimits) (ArchiveValidationMetrics, error) {
 	seenEntries := make(map[string]struct{})
 	var entries int
 	var uncompressedBytes int64
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return ArchiveValidationMetrics{}, err
 		}
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			return ArchiveValidationMetrics{UncompressedBytes: uncompressedBytes, Entries: entries}, nil
 		}
 		if err != nil {
-			return err
+			return ArchiveValidationMetrics{}, err
 		}
 		entries++
 		if limits.MaxEntries > 0 && entries > limits.MaxEntries {
-			return &WorkspaceRevisionEntryLimitError{ObservedEntries: entries, MaxEntries: limits.MaxEntries}
+			return ArchiveValidationMetrics{}, &WorkspaceRevisionEntryLimitError{ObservedEntries: entries, MaxEntries: limits.MaxEntries}
 		}
 		if header.Name == "." || header.Name == "./" {
 			if header.Typeflag != tar.TypeDir {
-				return ErrUnsafeWorkspaceRevisionPath
+				return ArchiveValidationMetrics{}, ErrUnsafeWorkspaceRevisionPath
 			}
 			continue
 		}
 		archiveEntryPath := filepath.FromSlash(header.Name)
 		if strings.Contains(header.Name, "\\") || looksLikeWindowsDrivePath(header.Name) || filepath.IsAbs(archiveEntryPath) || !filepath.IsLocal(archiveEntryPath) || archiveEntryPath == "." {
-			return ErrUnsafeWorkspaceRevisionPath
+			return ArchiveValidationMetrics{}, ErrUnsafeWorkspaceRevisionPath
 		}
 		entryKey := filepath.Clean(archiveEntryPath)
 		if _, found := seenEntries[entryKey]; found {
-			return ErrUnsafeWorkspaceRevisionPath
+			return ArchiveValidationMetrics{}, ErrUnsafeWorkspaceRevisionPath
 		}
 		seenEntries[entryKey] = struct{}{}
 		switch header.Typeflag {
 		case tar.TypeDir:
 		case tar.TypeReg:
 			if limits.MaxUncompressedBytes > 0 && (header.Size > limits.MaxUncompressedBytes || uncompressedBytes > limits.MaxUncompressedBytes-header.Size) {
-				return &WorkspaceRevisionSizeLimitError{ObservedBytes: uncompressedBytes + header.Size, MaxBytes: limits.MaxUncompressedBytes}
+				return ArchiveValidationMetrics{}, &WorkspaceRevisionSizeLimitError{ObservedBytes: uncompressedBytes + header.Size, MaxBytes: limits.MaxUncompressedBytes}
 			}
 			uncompressedBytes += header.Size
 			if _, copyErr := copyWorkspaceRevision(ctx, io.Discard, reader); copyErr != nil {
-				return copyErr
+				return ArchiveValidationMetrics{}, copyErr
 			}
 		case tar.TypeSymlink:
 			if _, targetErr := parseWorkspaceRevisionSymlinkTarget(filepath.ToSlash(archiveEntryPath), header.Linkname); targetErr != nil {
-				return targetErr
+				return ArchiveValidationMetrics{}, targetErr
 			}
 		default:
-			return fmt.Errorf("%w: tar type %d", ErrUnsupportedWorkspaceRevisionEntry, header.Typeflag)
+			return ArchiveValidationMetrics{}, fmt.Errorf("%w: tar type %d", ErrUnsupportedWorkspaceRevisionEntry, header.Typeflag)
 		}
 	}
 }

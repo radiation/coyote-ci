@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
@@ -80,33 +82,72 @@ func runCacheRestore(ctx context.Context) error {
 }
 
 func restoreCacheComponent(ctx context.Context, apiURL, capability, executionJobID, podUID, destination string, component cachepkg.Component, key string) error {
+	started := time.Now()
 	body, marshalErr := json.Marshal(api.WorkspaceHelperCacheRequest{ExecutionJobID: executionJobID, PodUID: podUID, Preset: component.Name, CacheKey: key})
 	if marshalErr != nil {
+		log.Printf("INFO cache_transfer operation=restore_client outcome=request_error preset=%s cache_key=%s total_ms=%d", component.Name, key, time.Since(started).Milliseconds())
 		return marshalErr
 	}
 	request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/cache/restore", bytes.NewReader(body))
 	if requestErr != nil {
+		log.Printf("INFO cache_transfer operation=restore_client outcome=request_error preset=%s cache_key=%s total_ms=%d", component.Name, key, time.Since(started).Milliseconds())
 		return requestErr
 	}
 	request.Header.Set("Authorization", "Bearer "+capability)
 	request.Header.Set("Content-Type", "application/json")
+	requestStarted := time.Now()
 	response, doErr := http.DefaultClient.Do(request)
 	if doErr != nil {
+		log.Printf("INFO cache_transfer operation=restore_client outcome=error preset=%s cache_key=%s http_request_ms=%d total_ms=%d", component.Name, key, time.Since(requestStarted).Milliseconds(), time.Since(started).Milliseconds())
 		return doErr
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusNoContent {
+		log.Printf("INFO cache_transfer operation=restore_client outcome=miss preset=%s cache_key=%s http_request_ms=%d total_ms=%d", component.Name, key, time.Since(requestStarted).Milliseconds(), time.Since(started).Milliseconds())
 		return nil
 	}
 	if response.StatusCode != http.StatusOK {
-		return cacheHelperHTTPError("restore", response)
+		restoreErr := cacheHelperHTTPError("restore", response)
+		log.Printf("INFO cache_transfer operation=restore_client outcome=restore_error preset=%s cache_key=%s http_request_ms=%d total_ms=%d error=%v", component.Name, key, time.Since(requestStarted).Milliseconds(), time.Since(started).Milliseconds(), restoreErr)
+		return restoreErr
 	}
 	size := response.ContentLength
 	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(response.Header.Get("Content-Digest")), SizeBytes: &size}
+	timedBody := &timedReadCloser{ReadCloser: response.Body}
 	if !splitCacheComponentsEnabled() {
-		return restoreCacheArchive(ctx, response.Body, publication, destination, component.Name, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
+		extractStarted := time.Now()
+		restoreErr := restoreCacheArchive(ctx, timedBody, publication, destination, component.Name, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
+		logRestoreCacheTransfer(component.Name, key, size, time.Since(requestStarted), time.Since(extractStarted), timedBody.readDuration, time.Since(started), restoreErr)
+		return restoreErr
 	}
-	return workspacepkg.RestoreArchive(ctx, response.Body, publication, destination)
+	extractStarted := time.Now()
+	restoreErr := workspacepkg.RestoreArchive(ctx, timedBody, publication, destination)
+	logRestoreCacheTransfer(component.Name, key, size, time.Since(requestStarted), time.Since(extractStarted), timedBody.readDuration, time.Since(started), restoreErr)
+	return restoreErr
+}
+
+func logRestoreCacheTransfer(preset, key string, size int64, requestDuration, extractDuration, readDuration, total time.Duration, restoreErr error) {
+	outcome := "hit"
+	if restoreErr != nil {
+		outcome = "restore_error"
+	}
+	processingDuration := extractDuration - readDuration
+	if processingDuration < 0 {
+		processingDuration = 0
+	}
+	log.Printf("INFO cache_transfer operation=restore_client outcome=%s preset=%s cache_key=%s compressed_bytes=%d http_request_ms=%d response_body_read_ms=%d gzip_tar_extract_and_fs_ms=%d total_ms=%d error=%v", outcome, preset, key, size, requestDuration.Milliseconds(), readDuration.Milliseconds(), processingDuration.Milliseconds(), total.Milliseconds(), restoreErr)
+}
+
+type timedReadCloser struct {
+	io.ReadCloser
+	readDuration time.Duration
+}
+
+func (r *timedReadCloser) Read(data []byte) (int, error) {
+	started := time.Now()
+	read, err := r.ReadCloser.Read(data)
+	r.readDuration += time.Since(started)
+	return read, err
 }
 
 func restoreCacheArchive(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, root string, preset string, workingDir string) error {
@@ -198,13 +239,18 @@ func runCacheSave(ctx context.Context) error {
 }
 
 func saveCacheComponent(ctx context.Context, apiURL, capability, executionJobID, podUID, source, preset, key string) error {
+	started := time.Now()
+	archiveStarted := time.Now()
 	archive, publication, archiveErr := workspacepkg.ArchiveDirectory(ctx, source)
+	archiveCreationDuration := time.Since(archiveStarted)
 	if archiveErr != nil {
+		log.Printf("INFO cache_transfer operation=save_client outcome=archive_error preset=%s cache_key=%s gzip_tar_create_and_fs_ms=%d total_ms=%d", preset, key, archiveCreationDuration.Milliseconds(), time.Since(started).Milliseconds())
 		return archiveErr
 	}
 	defer func() { _ = archive.Close() }()
 	request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/cache/save", archive)
 	if requestErr != nil {
+		log.Printf("INFO cache_transfer operation=save_client outcome=request_error preset=%s cache_key=%s compressed_bytes=%d gzip_tar_create_and_fs_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, archiveCreationDuration.Milliseconds(), time.Since(started).Milliseconds())
 		return requestErr
 	}
 	request.ContentLength = *publication.SizeBytes
@@ -216,14 +262,18 @@ func saveCacheComponent(ctx context.Context, apiURL, capability, executionJobID,
 	request.Header.Set("Coyote-Pod-UID", podUID)
 	request.Header.Set("Coyote-Cache-Preset", preset)
 	request.Header.Set("Coyote-Cache-Key", key)
+	uploadStarted := time.Now()
 	response, doErr := http.DefaultClient.Do(request)
 	if doErr != nil {
+		log.Printf("INFO cache_transfer operation=save_client outcome=upload_error preset=%s cache_key=%s compressed_bytes=%d gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
 		return doErr
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusNoContent {
+		log.Printf("INFO cache_transfer operation=save_client outcome=upload_error preset=%s cache_key=%s compressed_bytes=%d gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
 		return cacheHelperHTTPError("save", response)
 	}
+	log.Printf("INFO cache_transfer operation=save_client outcome=complete preset=%s cache_key=%s compressed_bytes=%d gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
 	return nil
 }
 

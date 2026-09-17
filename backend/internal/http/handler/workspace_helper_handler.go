@@ -262,7 +262,9 @@ func (h *WorkspaceHelperHandler) RestoreCache(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Digest", payload.Publication.ContentDigest)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", *payload.Publication.SizeBytes))
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, payload.Archive)
+	transferStarted := time.Now()
+	bytesWritten, copyErr := io.Copy(w, payload.Archive)
+	log.Printf("INFO cache_transfer operation=restore_delivery outcome=hit preset=%s cache_key=%s compressed_bytes=%d helper_response_stream_ms=%d error=%v", payload.Preset, payload.CacheKey, bytesWritten, time.Since(transferStarted).Milliseconds(), copyErr)
 }
 
 func (h *WorkspaceHelperHandler) SaveCache(w http.ResponseWriter, r *http.Request) {
