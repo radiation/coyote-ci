@@ -360,14 +360,36 @@ func TestWorkspaceHelperHandlerSaveCacheLimitsUnknownLengthUpload(t *testing.T) 
 func TestWorkspaceHelperHandlerUploadArtifactRejectsOversizedUpload(t *testing.T) {
 	handler := NewWorkspaceHelperHandler(nil)
 	handler.SetArtifactService(&workspaceArtifactHelperStub{})
-	handler.SetArtifactMaxUploadBytes(2)
-	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/artifacts/upload", strings.NewReader("artifact"))
+	maxUploadBytes := 2 * 1024 * 1024
+	handler.SetArtifactMaxUploadBytes(int64(maxUploadBytes))
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/artifacts/upload", strings.NewReader(strings.Repeat("a", maxUploadBytes+1)))
 	request.Header.Set("Authorization", "Bearer capability")
 	response := httptest.NewRecorder()
 
 	handler.UploadArtifact(response, request)
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d, want %d", response.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestWorkspaceHelperHandlerUploadArtifactStreamsUploadLargerThanDefaultRequestLimit(t *testing.T) {
+	artifact := &workspaceArtifactHelperStub{readUploadBody: true}
+	handler := NewWorkspaceHelperHandler(nil)
+	handler.SetArtifactService(artifact)
+	maxUploadBytes := 2 * 1024 * 1024
+	defaultRequestLimitBytes := 1 << 20
+	payloadBytes := defaultRequestLimitBytes + 1
+	handler.SetArtifactMaxUploadBytes(int64(maxUploadBytes))
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/artifacts/upload", strings.NewReader(strings.Repeat("a", payloadBytes)))
+	request.Header.Set("Authorization", "Bearer capability")
+	response := httptest.NewRecorder()
+
+	handler.UploadArtifact(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d, want %d", response.Code, http.StatusNoContent)
+	}
+	if artifact.uploadBytes != int64(payloadBytes) {
+		t.Fatalf("uploaded bytes=%d, want %d", artifact.uploadBytes, payloadBytes)
 	}
 }
 
@@ -518,6 +540,7 @@ var _ workspaceCacheHelper = (*workspaceCacheHelperStub)(nil)
 
 type workspaceArtifactHelperStub struct {
 	readUploadBody bool
+	uploadBytes    int64
 	plan           service.WorkspaceHelperArtifactPlan
 	planErr        error
 	uploadErr      error
@@ -529,7 +552,8 @@ func (s *workspaceArtifactHelperStub) Plan(context.Context, string, string, stri
 
 func (s *workspaceArtifactHelperStub) Upload(_ context.Context, _ string, _ string, _ string, _ string, _ string, _ bool, source io.Reader) error {
 	if s.readUploadBody {
-		_, readErr := io.ReadAll(source)
+		read, readErr := io.Copy(io.Discard, source)
+		s.uploadBytes = read
 		return readErr
 	}
 	return s.uploadErr
