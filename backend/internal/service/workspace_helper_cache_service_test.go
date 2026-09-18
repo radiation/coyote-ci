@@ -1,11 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +34,7 @@ func TestWorkspaceHelperCacheServiceRestoreHitMarksAccessed(t *testing.T) {
 	}
 	accessedAt := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
 	harness.service.now = func() time.Time { return accessedAt }
+	logs := captureCacheTransferLogs(t)
 
 	payload, found, err := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
 	if err != nil || !found {
@@ -39,6 +42,9 @@ func TestWorkspaceHelperCacheServiceRestoreHitMarksAccessed(t *testing.T) {
 	}
 	if harness.store.restoreCalls != 1 || harness.store.openCalls != 0 {
 		t.Fatalf("legacy restore calls=%d open calls=%d, want 1 and 0", harness.store.restoreCalls, harness.store.openCalls)
+	}
+	if !strings.Contains(logs.String(), "transfer_mode=legacy_materialized") {
+		t.Fatalf("restore logs=%q, want legacy materialized mode", logs.String())
 	}
 	defer func() { _ = payload.Archive.Close() }()
 	destination := t.TempDir()
@@ -71,6 +77,7 @@ func TestWorkspaceHelperCacheServiceRestoreStreamsCompatibleArchive(t *testing.T
 	if _, upsertErr := harness.entries.Upsert(context.Background(), entry); upsertErr != nil {
 		t.Fatalf("seed cache metadata: %v", upsertErr)
 	}
+	logs := captureCacheTransferLogs(t)
 
 	payload, found, restoreErr := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
 	if restoreErr != nil || !found {
@@ -80,6 +87,12 @@ func TestWorkspaceHelperCacheServiceRestoreStreamsCompatibleArchive(t *testing.T
 	if harness.store.restoreCalls != 0 || harness.store.openCalls != 1 {
 		t.Fatalf("directory restore calls=%d open calls=%d, want 0 and 1", harness.store.restoreCalls, harness.store.openCalls)
 	}
+	if payload.Publication.ContentDigest != source.publication.ContentDigest {
+		t.Fatalf("publication digest=%q, want %q", payload.Publication.ContentDigest, source.publication.ContentDigest)
+	}
+	if !strings.Contains(logs.String(), "transfer_mode=direct") {
+		t.Fatalf("restore logs=%q, want direct mode", logs.String())
+	}
 	destination := t.TempDir()
 	if archiveRestoreErr := workspace.RestoreArchive(context.Background(), payload.Archive, payload.Publication, destination); archiveRestoreErr != nil {
 		t.Fatalf("restore direct archive: %v", archiveRestoreErr)
@@ -87,6 +100,80 @@ func TestWorkspaceHelperCacheServiceRestoreStreamsCompatibleArchive(t *testing.T
 	contents, readErr := os.ReadFile(filepath.Join(destination, "cached.txt"))
 	if readErr != nil || string(contents) != "cache hit" {
 		t.Fatalf("restored content=%q err=%v", contents, readErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceRestoreStreamsChecksumOnlyLegacyArchive(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	source := cacheArchive(t, "cached.txt", "cache hit")
+	defer func() { _ = source.archive.Close() }()
+	objectKey := cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, source.publication.ContentDigest)
+	saved, saveErr := harness.store.SaveArchive(context.Background(), objectKey, source.archive)
+	if saveErr != nil {
+		t.Fatalf("seed legacy cache object: %v", saveErr)
+	}
+	entry := cacheEntryInput(harness, objectKey)
+	entry.SizeBytes = saved.SizeBytes
+	entry.Checksum = saved.Checksum
+	entry.ContentDigest = ""
+	if _, upsertErr := harness.entries.Upsert(context.Background(), entry); upsertErr != nil {
+		t.Fatalf("seed legacy cache metadata: %v", upsertErr)
+	}
+	logs := captureCacheTransferLogs(t)
+
+	payload, found, restoreErr := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if restoreErr != nil || !found {
+		t.Fatalf("restore found=%t err=%v", found, restoreErr)
+	}
+	defer func() { _ = payload.Archive.Close() }()
+	if harness.store.restoreCalls != 0 || harness.store.openCalls != 1 {
+		t.Fatalf("directory restore calls=%d open calls=%d, want 0 and 1", harness.store.restoreCalls, harness.store.openCalls)
+	}
+	wantDigest := "sha256:" + saved.Checksum
+	if payload.Publication.ContentDigest != wantDigest {
+		t.Fatalf("publication digest=%q, want %q", payload.Publication.ContentDigest, wantDigest)
+	}
+	if !strings.Contains(logs.String(), "transfer_mode=direct") {
+		t.Fatalf("restore logs=%q, want direct mode", logs.String())
+	}
+}
+
+func TestWorkspaceHelperCacheServiceRestoreMaterializesUnsupportedLegacyArchives(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		checksum    string
+		compression string
+	}{
+		{name: "malformed checksum", checksum: "not-a-sha256", compression: "tar.gz"},
+		{name: "unsupported compression", checksum: strings.Repeat("a", 64), compression: "zip"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			harness := newWorkspaceHelperCacheServiceTestHarness(t)
+			source := cacheArchive(t, "cached.txt", "cache hit")
+			objectKey := cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, source.publication.ContentDigest)
+			if _, saveErr := harness.store.Save(context.Background(), objectKey, source.root); saveErr != nil {
+				t.Fatalf("seed cache object: %v", saveErr)
+			}
+			entry := cacheEntryInput(harness, objectKey)
+			entry.Checksum = testCase.checksum
+			entry.Compression = testCase.compression
+			if _, upsertErr := harness.entries.Upsert(context.Background(), entry); upsertErr != nil {
+				t.Fatalf("seed cache metadata: %v", upsertErr)
+			}
+			logs := captureCacheTransferLogs(t)
+
+			payload, found, restoreErr := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+			if restoreErr != nil || !found {
+				t.Fatalf("restore found=%t err=%v", found, restoreErr)
+			}
+			defer func() { _ = payload.Archive.Close() }()
+			if harness.store.restoreCalls != 1 || harness.store.openCalls != 0 {
+				t.Fatalf("directory restore calls=%d open calls=%d, want 1 and 0", harness.store.restoreCalls, harness.store.openCalls)
+			}
+			if !strings.Contains(logs.String(), "transfer_mode=legacy_materialized") {
+				t.Fatalf("restore logs=%q, want legacy materialized mode", logs.String())
+			}
+		})
 	}
 }
 
@@ -465,6 +552,15 @@ func newWorkspaceHelperCacheServiceTestHarness(t *testing.T) *workspaceHelperCac
 		t.Fatalf("new service: %v", err)
 	}
 	return &workspaceHelperCacheServiceTestHarness{service: service, capabilities: capabilities, entries: entries, store: store, build: build, job: job, step: step, cacheKey: "go:" + strings.Repeat("a", 64)}
+}
+
+func captureCacheTransferLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buffer := &bytes.Buffer{}
+	previous := log.Writer()
+	log.SetOutput(buffer)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	return buffer
 }
 
 func cacheEntryInput(harness *workspaceHelperCacheServiceTestHarness, objectKey string) repository.CacheEntryUpsertInput {

@@ -96,30 +96,35 @@ func (s *WorkspaceHelperCacheService) Restore(ctx context.Context, capabilityTok
 	}
 	metrics.outcome = "hit"
 	metrics.compressedBytes = entry.SizeBytes
-	if archiveStore, ok := s.store.(cachepkg.ArchiveStore); ok && directCacheArchiveCompatible(entry) {
-		openStarted := time.Now()
-		archive, result, openErr := archiveStore.Open(ctx, entry.ObjectKey)
-		metrics.remoteOpenDuration = time.Since(openStarted)
-		if openErr != nil {
-			metrics.outcome = "restore_error"
-			return WorkspaceHelperCachePayload{}, false, openErr
+	if archiveStore, ok := s.store.(cachepkg.ArchiveStore); ok {
+		effectiveDigest, direct := directCacheArchiveDigest(entry)
+		if direct {
+			metrics.transferMode = "direct"
+			openStarted := time.Now()
+			archive, result, openErr := archiveStore.Open(ctx, entry.ObjectKey)
+			metrics.remoteOpenDuration = time.Since(openStarted)
+			if openErr != nil {
+				metrics.outcome = "restore_error"
+				return WorkspaceHelperCachePayload{}, false, openErr
+			}
+			if !result.Hit {
+				metrics.outcome = "miss"
+				return WorkspaceHelperCachePayload{}, false, nil
+			}
+			if result.SizeBytes != entry.SizeBytes {
+				_ = archive.Close()
+				metrics.outcome = "restore_error"
+				return WorkspaceHelperCachePayload{}, false, workspace.ErrWorkspaceRevisionDigestMismatch
+			}
+			if markErr := s.entries.MarkAccessed(ctx, entry.ID, s.now()); markErr != nil && !errors.Is(markErr, repository.ErrCacheEntryNotFound) {
+				_ = archive.Close()
+				metrics.outcome = "metadata_error"
+				return WorkspaceHelperCachePayload{}, false, markErr
+			}
+			return WorkspaceHelperCachePayload{Archive: archive, Publication: domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: effectiveDigest, SizeBytes: &entry.SizeBytes}, Preset: preset, CacheKey: cacheKey}, true, nil
 		}
-		if !result.Hit {
-			metrics.outcome = "miss"
-			return WorkspaceHelperCachePayload{}, false, nil
-		}
-		if result.SizeBytes != entry.SizeBytes {
-			_ = archive.Close()
-			metrics.outcome = "restore_error"
-			return WorkspaceHelperCachePayload{}, false, workspace.ErrWorkspaceRevisionDigestMismatch
-		}
-		if markErr := s.entries.MarkAccessed(ctx, entry.ID, s.now()); markErr != nil && !errors.Is(markErr, repository.ErrCacheEntryNotFound) {
-			_ = archive.Close()
-			metrics.outcome = "metadata_error"
-			return WorkspaceHelperCachePayload{}, false, markErr
-		}
-		return WorkspaceHelperCachePayload{Archive: archive, Publication: domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: entry.ContentDigest, SizeBytes: &entry.SizeBytes}, Preset: preset, CacheKey: cacheKey}, true, nil
 	}
+	metrics.transferMode = "legacy_materialized"
 	directory, directoryErr := os.MkdirTemp("", "coyote-cache-restore-*")
 	if directoryErr != nil {
 		metrics.outcome = "restore_error"
@@ -313,6 +318,7 @@ type cacheTransferMetrics struct {
 	preset               string
 	cacheKey             string
 	outcome              string
+	transferMode         string
 	compressedBytes      int64
 	metadataDuration     time.Duration
 	remoteOpenDuration   time.Duration
@@ -322,7 +328,7 @@ type cacheTransferMetrics struct {
 }
 
 func logCacheTransferMetrics(metrics cacheTransferMetrics, total time.Duration) {
-	log.Printf("INFO cache_transfer operation=%s outcome=%s preset=%s cache_key=%s compressed_bytes=%d uncompressed_bytes=%d archive_entries=%d metadata_resolution_ms=%d remote_open_ms=%d claim_acquisition_ms=%d remote_upload_ms=%d gzip_tar_validation_ms=%d promotion_ms=%d finalization_ms=%d total_ms=%d", metrics.operation, metrics.outcome, metrics.preset, metrics.cacheKey, metrics.compressedBytes, metrics.archive.uncompressedBytes, metrics.archive.entries, metrics.metadataDuration.Milliseconds(), metrics.remoteOpenDuration.Milliseconds(), metrics.claimDuration.Milliseconds(), metrics.archive.uploadDuration.Milliseconds(), metrics.archive.validationDuration.Milliseconds(), metrics.archive.promotionDuration.Milliseconds(), metrics.finalizationDuration.Milliseconds(), total.Milliseconds())
+	log.Printf("INFO cache_transfer operation=%s outcome=%s transfer_mode=%s preset=%s cache_key=%s compressed_bytes=%d uncompressed_bytes=%d archive_entries=%d metadata_resolution_ms=%d remote_open_ms=%d claim_acquisition_ms=%d remote_upload_ms=%d gzip_tar_validation_ms=%d promotion_ms=%d finalization_ms=%d total_ms=%d", metrics.operation, metrics.outcome, metrics.transferMode, metrics.preset, metrics.cacheKey, metrics.compressedBytes, metrics.archive.uncompressedBytes, metrics.archive.entries, metrics.metadataDuration.Milliseconds(), metrics.remoteOpenDuration.Milliseconds(), metrics.claimDuration.Milliseconds(), metrics.archive.uploadDuration.Milliseconds(), metrics.archive.validationDuration.Milliseconds(), metrics.archive.promotionDuration.Milliseconds(), metrics.finalizationDuration.Milliseconds(), total.Milliseconds())
 }
 
 func valueOrZero(value *int64) int64 {
@@ -332,8 +338,22 @@ func valueOrZero(value *int64) int64 {
 	return *value
 }
 
-func directCacheArchiveCompatible(entry domain.CacheEntry) bool {
-	return entry.Compression == "tar.gz" && strings.TrimSpace(entry.ContentDigest) == "sha256:"+strings.TrimSpace(entry.Checksum)
+func directCacheArchiveDigest(entry domain.CacheEntry) (string, bool) {
+	if entry.Compression != "tar.gz" {
+		return "", false
+	}
+	checksum := strings.TrimSpace(entry.Checksum)
+	contentDigest := strings.TrimSpace(entry.ContentDigest)
+	if contentDigest == "sha256:"+checksum {
+		return contentDigest, true
+	}
+	if contentDigest != "" || len(checksum) != sha256.Size*2 {
+		return "", false
+	}
+	if _, err := hex.DecodeString(checksum); err != nil {
+		return "", false
+	}
+	return "sha256:" + checksum, true
 }
 
 func (s *WorkspaceHelperCacheService) cacheContentIsReady(ctx context.Context, jobID, preset, cacheKey, contentDigest string) bool {
