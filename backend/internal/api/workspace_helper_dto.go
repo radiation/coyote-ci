@@ -27,4 +27,10 @@ type WorkspaceHelperCacheRequest struct {
 	PodUID         string `json:"pod_uid"`
 	Preset         string `json:"preset"`
 	CacheKey       string `json:"cache_key"`
+	ClaimToken     string `json:"claim_token,omitempty"`
+}
+
+type WorkspaceHelperCachePublishClaimResponse struct {
+	Outcome    string `json:"outcome"`
+	ClaimToken string `json:"claim_token,omitempty"`
 }

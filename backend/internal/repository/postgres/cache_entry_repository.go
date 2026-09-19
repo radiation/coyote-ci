@@ -161,6 +161,20 @@ func (r *CacheEntryRepository) ReleasePublishClaim(ctx context.Context, claim do
 	return err
 }
 
+func (r *CacheEntryRepository) ValidatePublishClaim(ctx context.Context, claim domain.CachePublishClaim, claimant string, now time.Time) error {
+	var valid bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT TRUE
+		FROM cache_publish_claims
+		WHERE job_id = $1 AND preset = $2 AND cache_key = $3
+			AND claim_token = $4 AND claimed_by = $5 AND claim_expires_at > $6
+	`, strings.TrimSpace(claim.JobID), strings.TrimSpace(strings.ToLower(claim.Preset)), strings.TrimSpace(claim.CacheKey), strings.TrimSpace(claim.ClaimToken), strings.TrimSpace(claimant), now.UTC()).Scan(&valid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return repository.ErrCachePublishClaimStale
+	}
+	return err
+}
+
 func (r *CacheEntryRepository) CompletePublishClaim(ctx context.Context, claim domain.CachePublishClaim, input repository.CacheEntryUpsertInput, now time.Time) (domain.CacheEntry, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

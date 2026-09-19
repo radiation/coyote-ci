@@ -35,6 +35,8 @@ const (
 
 const maxCacheHelperErrorResponseBytes = 4 * 1024
 
+var archiveCacheDirectory = workspacepkg.ArchiveDirectory
+
 func runCacheRestore(ctx context.Context) error {
 	apiURL, tokenPath, executionJobID, podUID, root, preset, stateRoot, policy, err := cacheHelperConfig()
 	if err != nil {
@@ -240,17 +242,37 @@ func runCacheSave(ctx context.Context) error {
 
 func saveCacheComponent(ctx context.Context, apiURL, capability, executionJobID, podUID, source, preset, key string) error {
 	started := time.Now()
+	preclaimStarted := time.Now()
+	acquired, claimToken, preclaimErr := claimCachePublish(ctx, apiURL, capability, executionJobID, podUID, preset, key)
+	preclaimDuration := time.Since(preclaimStarted)
+	if preclaimErr != nil {
+		log.Printf("INFO cache_transfer operation=save_client outcome=preclaim_error preclaim_outcome=error preset=%s cache_key=%s preclaim_ms=%d archive_skipped=true claim_lifecycle=not_acquired total_ms=%d", preset, key, preclaimDuration.Milliseconds(), time.Since(started).Milliseconds())
+		return preclaimErr
+	}
+	if !acquired {
+		log.Printf("INFO cache_transfer operation=save_client outcome=deduplicated_publish preclaim_outcome=not_acquired preset=%s cache_key=%s preclaim_ms=%d archive_skipped=true claim_lifecycle=not_acquired total_ms=%d", preset, key, preclaimDuration.Milliseconds(), time.Since(started).Milliseconds())
+		return nil
+	}
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		if releaseErr := releaseCachePublishClaim(context.Background(), apiURL, capability, executionJobID, podUID, preset, key, claimToken); releaseErr != nil {
+			log.Printf("WARN cache_transfer operation=save_client outcome=claim_release_error preset=%s cache_key=%s claim_lifecycle=release_failed error=%v", preset, key, releaseErr)
+		}
+	}()
 	archiveStarted := time.Now()
-	archive, publication, archiveErr := workspacepkg.ArchiveDirectory(ctx, source)
+	archive, publication, archiveErr := archiveCacheDirectory(ctx, source)
 	archiveCreationDuration := time.Since(archiveStarted)
 	if archiveErr != nil {
-		log.Printf("INFO cache_transfer operation=save_client outcome=archive_error preset=%s cache_key=%s gzip_tar_create_and_fs_ms=%d total_ms=%d", preset, key, archiveCreationDuration.Milliseconds(), time.Since(started).Milliseconds())
+		log.Printf("INFO cache_transfer operation=save_client outcome=archive_error preclaim_outcome=acquired preset=%s cache_key=%s preclaim_ms=%d archive_skipped=false claim_lifecycle=expires_after_archive_error gzip_tar_create_and_fs_ms=%d total_ms=%d", preset, key, preclaimDuration.Milliseconds(), archiveCreationDuration.Milliseconds(), time.Since(started).Milliseconds())
 		return archiveErr
 	}
 	defer func() { _ = archive.Close() }()
 	request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/cache/save", archive)
 	if requestErr != nil {
-		log.Printf("INFO cache_transfer operation=save_client outcome=request_error preset=%s cache_key=%s compressed_bytes=%d gzip_tar_create_and_fs_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, archiveCreationDuration.Milliseconds(), time.Since(started).Milliseconds())
+		log.Printf("INFO cache_transfer operation=save_client outcome=request_error preclaim_outcome=acquired preset=%s cache_key=%s compressed_bytes=%d preclaim_ms=%d archive_skipped=false claim_lifecycle=expires_after_request_error gzip_tar_create_and_fs_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, preclaimDuration.Milliseconds(), archiveCreationDuration.Milliseconds(), time.Since(started).Milliseconds())
 		return requestErr
 	}
 	request.ContentLength = *publication.SizeBytes
@@ -262,18 +284,80 @@ func saveCacheComponent(ctx context.Context, apiURL, capability, executionJobID,
 	request.Header.Set("Coyote-Pod-UID", podUID)
 	request.Header.Set("Coyote-Cache-Preset", preset)
 	request.Header.Set("Coyote-Cache-Key", key)
+	request.Header.Set("Coyote-Cache-Claim-Token", claimToken)
 	uploadStarted := time.Now()
 	response, doErr := http.DefaultClient.Do(request)
 	if doErr != nil {
-		log.Printf("INFO cache_transfer operation=save_client outcome=upload_error preset=%s cache_key=%s compressed_bytes=%d gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
+		log.Printf("INFO cache_transfer operation=save_client outcome=upload_error preclaim_outcome=acquired preset=%s cache_key=%s compressed_bytes=%d preclaim_ms=%d archive_skipped=false claim_lifecycle=unknown_after_transport_error gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, preclaimDuration.Milliseconds(), archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
 		return doErr
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusNoContent {
-		log.Printf("INFO cache_transfer operation=save_client outcome=upload_error preset=%s cache_key=%s compressed_bytes=%d gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
+		log.Printf("INFO cache_transfer operation=save_client outcome=upload_error preclaim_outcome=acquired preset=%s cache_key=%s compressed_bytes=%d preclaim_ms=%d archive_skipped=false claim_lifecycle=rejected gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, preclaimDuration.Milliseconds(), archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
 		return cacheHelperHTTPError("save", response)
 	}
-	log.Printf("INFO cache_transfer operation=save_client outcome=complete preset=%s cache_key=%s compressed_bytes=%d gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
+	completed = true
+	log.Printf("INFO cache_transfer operation=save_client outcome=complete preclaim_outcome=acquired preset=%s cache_key=%s compressed_bytes=%d preclaim_ms=%d archive_skipped=false claim_lifecycle=completed gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, preclaimDuration.Milliseconds(), archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
+	return nil
+}
+
+func claimCachePublish(ctx context.Context, apiURL, capability, executionJobID, podUID, preset, key string) (bool, string, error) {
+	body, marshalErr := json.Marshal(api.WorkspaceHelperCacheRequest{ExecutionJobID: executionJobID, PodUID: podUID, Preset: preset, CacheKey: key})
+	if marshalErr != nil {
+		return false, "", marshalErr
+	}
+	request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/cache/publish-claim", bytes.NewReader(body))
+	if requestErr != nil {
+		return false, "", requestErr
+	}
+	request.Header.Set("Authorization", "Bearer "+capability)
+	request.Header.Set("Content-Type", "application/json")
+	response, doErr := http.DefaultClient.Do(request)
+	if doErr != nil {
+		return false, "", doErr
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return false, "", cacheHelperHTTPError("publish claim", response)
+	}
+	var payload struct {
+		Data api.WorkspaceHelperCachePublishClaimResponse `json:"data"`
+	}
+	if decodeErr := json.NewDecoder(response.Body).Decode(&payload); decodeErr != nil {
+		return false, "", decodeErr
+	}
+	switch payload.Data.Outcome {
+	case "acquired":
+		if strings.TrimSpace(payload.Data.ClaimToken) == "" {
+			return false, "", errors.New("cache publish claim response omitted claim token")
+		}
+		return true, payload.Data.ClaimToken, nil
+	case "not_acquired":
+		return false, "", nil
+	default:
+		return false, "", fmt.Errorf("cache publish claim returned unknown outcome %q", payload.Data.Outcome)
+	}
+}
+
+func releaseCachePublishClaim(ctx context.Context, apiURL, capability, executionJobID, podUID, preset, key, claimToken string) error {
+	body, marshalErr := json.Marshal(api.WorkspaceHelperCacheRequest{ExecutionJobID: executionJobID, PodUID: podUID, Preset: preset, CacheKey: key, ClaimToken: claimToken})
+	if marshalErr != nil {
+		return marshalErr
+	}
+	request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/cache/publish-claim/release", bytes.NewReader(body))
+	if requestErr != nil {
+		return requestErr
+	}
+	request.Header.Set("Authorization", "Bearer "+capability)
+	request.Header.Set("Content-Type", "application/json")
+	response, doErr := http.DefaultClient.Do(request)
+	if doErr != nil {
+		return doErr
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusNoContent {
+		return cacheHelperHTTPError("publish claim release", response)
+	}
 	return nil
 }
 

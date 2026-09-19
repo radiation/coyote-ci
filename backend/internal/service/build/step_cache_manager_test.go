@@ -65,6 +65,10 @@ func (r *failingUpsertRepo) TryAcquirePublishClaim(ctx context.Context, jobID, p
 	return r.inner.TryAcquirePublishClaim(ctx, jobID, preset, cacheKey, claimant, now, lease)
 }
 
+func (r *failingUpsertRepo) ValidatePublishClaim(ctx context.Context, claim domain.CachePublishClaim, claimant string, now time.Time) error {
+	return r.inner.ValidatePublishClaim(ctx, claim, claimant, now)
+}
+
 func (r *failingUpsertRepo) CompletePublishClaim(ctx context.Context, claim domain.CachePublishClaim, input repository.CacheEntryUpsertInput, now time.Time) (domain.CacheEntry, error) {
 	return r.inner.CompletePublishClaim(ctx, claim, input, now)
 }

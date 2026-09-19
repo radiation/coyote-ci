@@ -17,6 +17,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - `backend/internal/http/handler/server_info_handler.go`: unauthenticated server metadata endpoint used by the CLI for remote capability/version inspection.
 - `backend/internal/domain`: core business types and lifecycle helpers such as builds, steps, jobs, projects, queue items, workers, artifacts, source specs, users, memberships, and version tags.
 - `backend/internal/service`: orchestration and business rules. This is usually the first stop for behavioral changes.
+- `backend/internal/service/workspace_helper_cache_service.go`, `backend/internal/http/handler/workspace_helper_handler.go`, `backend/cmd/worker/cache_helper.go`: Kubernetes workspace-helper cache restore/save flow. Cache saves acquire a durable publish claim before local archive creation, then present the opaque claim token when uploading and finalizing the digest-addressed archive.
 - `backend/internal/repository`: persistence logic, Postgres adapters, in-memory adapters, and transaction-safe state updates.
 - `backend/internal/apiclient`: focused typed HTTP client used by the CLI; keep it independent from CLI presentation.
 - `backend/internal/cli`: command parsing, context/config resolution, credential-store integration, and human/JSON terminal output. Build commands live in `build.go`; read-only discovery commands live in `project.go` and `job.go`.

@@ -31,6 +31,7 @@ type CacheEntryRepository interface {
 	Upsert(ctx context.Context, input CacheEntryUpsertInput) (domain.CacheEntry, error)
 	MarkAccessed(ctx context.Context, id string, accessedAt time.Time) error
 	TryAcquirePublishClaim(ctx context.Context, jobID, preset, cacheKey, claimant string, now time.Time, lease time.Duration) (domain.CachePublishClaim, bool, error)
+	ValidatePublishClaim(ctx context.Context, claim domain.CachePublishClaim, claimant string, now time.Time) error
 	CompletePublishClaim(ctx context.Context, claim domain.CachePublishClaim, input CacheEntryUpsertInput, now time.Time) (domain.CacheEntry, error)
 	ReleasePublishClaim(ctx context.Context, claim domain.CachePublishClaim) error
 }

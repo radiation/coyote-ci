@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -119,6 +121,33 @@ func TestCacheEntryRepository_CompletePublishClaim(t *testing.T) {
 	entry, completeErr := repo.CompletePublishClaim(context.Background(), claim, repository.CacheEntryUpsertInput{JobID: "job-1", Preset: "go-module", CacheKey: "key", StorageProvider: domain.StorageProviderFilesystem, ObjectKey: "obj", SizeBytes: 42, Checksum: "sum", ContentDigest: "content-sum", Compression: "tar.gz", Status: domain.CacheEntryStatusReady, CreatedByBuildID: "build-1", CreatedByStepID: "step-1"}, now)
 	if completeErr != nil || entry.ID != "entry-1" {
 		t.Fatalf("entry=%+v err=%v", entry, completeErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("SQL expectations: %v", expectationsErr)
+	}
+}
+
+func TestCacheEntryRepository_ValidatePublishClaim(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	repo := NewCacheEntryRepository(db)
+	claim := domain.CachePublishClaim{JobID: "job-1", Preset: "go-module", CacheKey: "key", ClaimToken: "claim-token"}
+	now := time.Now().UTC()
+	mock.ExpectQuery("SELECT TRUE").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, "execution-1", now).
+		WillReturnRows(sqlmock.NewRows([]string{"valid"}).AddRow(true))
+	if validateErr := repo.ValidatePublishClaim(context.Background(), claim, "execution-1", now); validateErr != nil {
+		t.Fatalf("validate claim: %v", validateErr)
+	}
+	mock.ExpectQuery("SELECT TRUE").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, "execution-2", now).
+		WillReturnError(sql.ErrNoRows)
+	if validateErr := repo.ValidatePublishClaim(context.Background(), claim, "execution-2", now); !errors.Is(validateErr, repository.ErrCachePublishClaimStale) {
+		t.Fatalf("validate wrong claimant error=%v, want stale", validateErr)
 	}
 	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
 		t.Fatalf("SQL expectations: %v", expectationsErr)

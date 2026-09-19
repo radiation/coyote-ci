@@ -20,6 +20,7 @@ import (
 )
 
 var ErrWorkspaceHelperCacheInvalidInput = errors.New("invalid workspace helper cache input")
+var ErrWorkspaceHelperCachePublishClaimInvalid = errors.New("invalid or expired workspace helper cache publish claim")
 
 const (
 	defaultWorkspaceHelperCacheMaxUncompressedBytes int64 = 4 * 1024 * 1024 * 1024
@@ -32,6 +33,12 @@ type WorkspaceHelperCachePayload struct {
 	Publication domain.WorkspaceRevisionPublication
 	Preset      string
 	CacheKey    string
+}
+
+type WorkspaceHelperCachePublishClaim struct {
+	Acquired   bool
+	ClaimToken string
+	Reclaimed  bool
 }
 
 type workspaceHelperCacheBuildRepository interface {
@@ -180,6 +187,85 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 		log.Printf("INFO cache publish skipped writer_busy job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
 		return nil
 	}
+	return s.saveWithClaim(ctx, build, step, preset, cacheKey, archive, publication, claim, &metrics)
+}
+
+func (s *WorkspaceHelperCacheService) ClaimPublish(ctx context.Context, capabilityToken string, executionJobID string, podUID string, preset string, cacheKey string) (WorkspaceHelperCachePublishClaim, error) {
+	build, _, err := s.authorizeAndValidate(ctx, capabilityToken, executionJobID, podUID, preset, cacheKey, domain.WorkspaceHelperRoleCacheSave)
+	if err != nil {
+		return WorkspaceHelperCachePublishClaim{}, err
+	}
+	started := time.Now()
+	jobID := cacheJobID(build)
+	claim, acquired, claimErr := s.entries.TryAcquirePublishClaim(ctx, jobID, preset, cacheKey, executionJobID, s.now(), defaultWorkspaceHelperCachePublishLease)
+	outcome := "not_acquired"
+	if claimErr != nil {
+		outcome = "claim_error"
+	} else if acquired {
+		outcome = "acquired"
+	}
+	claimLifecycle := "busy"
+	if claimErr != nil {
+		claimLifecycle = "error"
+	} else if acquired {
+		claimLifecycle = "issued"
+	}
+	log.Printf("INFO cache_transfer operation=preclaim outcome=%s preset=%s cache_key=%s preclaim_ms=%d archive_skipped=%t claim_lifecycle=%s claim_reclaimed=%t", outcome, preset, cacheKey, time.Since(started).Milliseconds(), !acquired, claimLifecycle, acquired && claim.Reclaimed)
+	if claimErr != nil {
+		return WorkspaceHelperCachePublishClaim{}, claimErr
+	}
+	if !acquired {
+		return WorkspaceHelperCachePublishClaim{}, nil
+	}
+	return WorkspaceHelperCachePublishClaim{Acquired: true, ClaimToken: claim.ClaimToken, Reclaimed: claim.Reclaimed}, nil
+}
+
+func (s *WorkspaceHelperCacheService) SaveClaimed(ctx context.Context, capabilityToken string, executionJobID string, podUID string, preset string, cacheKey string, claimToken string, archive io.Reader, publication domain.WorkspaceRevisionPublication) error {
+	build, step, err := s.authorizeAndValidate(ctx, capabilityToken, executionJobID, podUID, preset, cacheKey, domain.WorkspaceHelperRoleCacheSave)
+	if err != nil {
+		return err
+	}
+	if archive == nil || publication.Validate() != nil || strings.TrimSpace(claimToken) == "" {
+		return ErrWorkspaceHelperCacheInvalidInput
+	}
+	claim := domain.CachePublishClaim{JobID: cacheJobID(build), Preset: strings.TrimSpace(strings.ToLower(preset)), CacheKey: strings.TrimSpace(cacheKey), ClaimToken: strings.TrimSpace(claimToken)}
+	if validateErr := s.entries.ValidatePublishClaim(ctx, claim, executionJobID, s.now()); validateErr != nil {
+		if errors.Is(validateErr, repository.ErrCachePublishClaimStale) {
+			return ErrWorkspaceHelperCachePublishClaimInvalid
+		}
+		return validateErr
+	}
+	metrics := cacheTransferMetrics{operation: "save", preset: preset, cacheKey: cacheKey, compressedBytes: valueOrZero(publication.SizeBytes), claimLifecycle: "validated"}
+	started := time.Now()
+	defer func() { logCacheTransferMetrics(metrics, time.Since(started)) }()
+	return s.saveWithClaim(ctx, build, step, preset, cacheKey, archive, publication, claim, &metrics)
+}
+
+func (s *WorkspaceHelperCacheService) ReleasePublishClaim(ctx context.Context, capabilityToken string, executionJobID string, podUID string, preset string, cacheKey string, claimToken string) error {
+	build, _, err := s.authorizeAndValidate(ctx, capabilityToken, executionJobID, podUID, preset, cacheKey, domain.WorkspaceHelperRoleCacheSave)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(claimToken) == "" {
+		return ErrWorkspaceHelperCacheInvalidInput
+	}
+	claim := domain.CachePublishClaim{
+		JobID:      cacheJobID(build),
+		Preset:     strings.TrimSpace(strings.ToLower(preset)),
+		CacheKey:   strings.TrimSpace(cacheKey),
+		ClaimToken: strings.TrimSpace(claimToken),
+	}
+	if validateErr := s.entries.ValidatePublishClaim(ctx, claim, executionJobID, s.now()); validateErr != nil {
+		if errors.Is(validateErr, repository.ErrCachePublishClaimStale) {
+			return nil
+		}
+		return validateErr
+	}
+	return s.entries.ReleasePublishClaim(ctx, claim)
+}
+
+func (s *WorkspaceHelperCacheService) saveWithClaim(ctx context.Context, build domain.Build, step domain.BuildStep, preset string, cacheKey string, archive io.Reader, publication domain.WorkspaceRevisionPublication, claim domain.CachePublishClaim, metrics *cacheTransferMetrics) error {
+	jobID := cacheJobID(build)
 	if claim.Reclaimed {
 		log.Printf("INFO cache publish claim reclaimed job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
 	} else {
@@ -190,11 +276,12 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 			log.Printf("WARN cache publish claim release failed job_id=%s preset=%s key=%s err=%v", jobID, preset, cacheKey, releaseErr)
 		}
 	}()
-	lookupStarted = time.Now()
-	ready = s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication)
+	lookupStarted := time.Now()
+	ready := s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication)
 	metrics.metadataDuration += time.Since(lookupStarted)
 	if ready {
 		metrics.outcome = "skipped_publish"
+		metrics.claimLifecycle = "released_unchanged"
 		log.Printf("INFO cache publish skipped unchanged_after_claim job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
 		return nil
 	}
@@ -211,6 +298,7 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 	metrics.archive = archiveMetrics
 	if saveErr != nil {
 		metrics.outcome = "publish_error"
+		metrics.claimLifecycle = "released_after_failure"
 		log.Printf("WARN cache publish failed job_id=%s preset=%s key=%s err=%v", jobID, preset, cacheKey, saveErr)
 		return saveErr
 	}
@@ -219,6 +307,7 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 	metrics.finalizationDuration = time.Since(finalizationStarted)
 	if errors.Is(upsertErr, repository.ErrCachePublishClaimStale) {
 		metrics.outcome = "deduplicated_publish"
+		metrics.claimLifecycle = "lost_before_completion"
 		log.Printf("INFO cache publish skipped stale_claim job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
 		return nil
 	}
@@ -234,6 +323,7 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 		}
 	}
 	metrics.outcome = "publish"
+	metrics.claimLifecycle = "completed"
 	metrics.compressedBytes = saved.SizeBytes
 	log.Printf("INFO cache publish succeeded job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
 	return nil
@@ -325,10 +415,11 @@ type cacheTransferMetrics struct {
 	claimDuration        time.Duration
 	finalizationDuration time.Duration
 	archive              cacheArchiveMetrics
+	claimLifecycle       string
 }
 
 func logCacheTransferMetrics(metrics cacheTransferMetrics, total time.Duration) {
-	log.Printf("INFO cache_transfer operation=%s outcome=%s transfer_mode=%s preset=%s cache_key=%s compressed_bytes=%d uncompressed_bytes=%d archive_entries=%d metadata_resolution_ms=%d remote_open_ms=%d claim_acquisition_ms=%d remote_upload_ms=%d gzip_tar_validation_ms=%d promotion_ms=%d finalization_ms=%d total_ms=%d", metrics.operation, metrics.outcome, metrics.transferMode, metrics.preset, metrics.cacheKey, metrics.compressedBytes, metrics.archive.uncompressedBytes, metrics.archive.entries, metrics.metadataDuration.Milliseconds(), metrics.remoteOpenDuration.Milliseconds(), metrics.claimDuration.Milliseconds(), metrics.archive.uploadDuration.Milliseconds(), metrics.archive.validationDuration.Milliseconds(), metrics.archive.promotionDuration.Milliseconds(), metrics.finalizationDuration.Milliseconds(), total.Milliseconds())
+	log.Printf("INFO cache_transfer operation=%s outcome=%s transfer_mode=%s preset=%s cache_key=%s compressed_bytes=%d uncompressed_bytes=%d archive_entries=%d metadata_resolution_ms=%d remote_open_ms=%d claim_acquisition_ms=%d remote_upload_ms=%d gzip_tar_validation_ms=%d promotion_ms=%d finalization_ms=%d claim_lifecycle=%s total_ms=%d", metrics.operation, metrics.outcome, metrics.transferMode, metrics.preset, metrics.cacheKey, metrics.compressedBytes, metrics.archive.uncompressedBytes, metrics.archive.entries, metrics.metadataDuration.Milliseconds(), metrics.remoteOpenDuration.Milliseconds(), metrics.claimDuration.Milliseconds(), metrics.archive.uploadDuration.Milliseconds(), metrics.archive.validationDuration.Milliseconds(), metrics.archive.promotionDuration.Milliseconds(), metrics.finalizationDuration.Milliseconds(), metrics.claimLifecycle, total.Milliseconds())
 }
 
 func valueOrZero(value *int64) int64 {

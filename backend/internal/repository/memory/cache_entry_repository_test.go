@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -127,6 +128,12 @@ func TestCacheEntryRepository_PublishClaimsAreExclusiveAndRecoverAfterExpiry(t *
 	if firstErr != nil || !acquired {
 		t.Fatalf("first claim acquired=%t err=%v", acquired, firstErr)
 	}
+	if validateErr := repo.ValidatePublishClaim(context.Background(), first, "execution-1", now.Add(30*time.Second)); validateErr != nil {
+		t.Fatalf("validate active claim: %v", validateErr)
+	}
+	if validateErr := repo.ValidatePublishClaim(context.Background(), first, "execution-2", now.Add(30*time.Second)); !errors.Is(validateErr, repository.ErrCachePublishClaimStale) {
+		t.Fatalf("validate wrong claimant error=%v, want stale", validateErr)
+	}
 	_, acquired, busyErr := repo.TryAcquirePublishClaim(context.Background(), "job-1", "go-module", "key", "execution-2", now.Add(30*time.Second), time.Minute)
 	if busyErr != nil || acquired {
 		t.Fatalf("second claim acquired=%t err=%v", acquired, busyErr)
@@ -137,5 +144,8 @@ func TestCacheEntryRepository_PublishClaimsAreExclusiveAndRecoverAfterExpiry(t *
 	second, acquired, reclaimErr := repo.TryAcquirePublishClaim(context.Background(), "job-1", "go-module", "key", "execution-2", now.Add(2*time.Minute), time.Minute)
 	if reclaimErr != nil || !acquired || !second.Reclaimed {
 		t.Fatalf("reclaimed claim=%+v acquired=%t err=%v", second, acquired, reclaimErr)
+	}
+	if validateErr := repo.ValidatePublishClaim(context.Background(), first, "execution-1", now.Add(2*time.Minute)); !errors.Is(validateErr, repository.ErrCachePublishClaimStale) {
+		t.Fatalf("validate reclaimed token error=%v, want stale", validateErr)
 	}
 }
