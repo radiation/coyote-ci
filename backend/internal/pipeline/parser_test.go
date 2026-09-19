@@ -603,6 +603,7 @@ steps:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
 	rp := Resolve(pf)
 
 	if rp.Steps[0].Cache == nil {
@@ -613,6 +614,47 @@ steps:
 	}
 	if rp.Steps[0].Cache.Policy != "pull-push" {
 		t.Fatalf("expected default policy pull-push, got %#v", rp.Steps[0].Cache.Policy)
+	}
+}
+
+func TestResolve_CacheComponentPolicyOverridesAreFullyResolved(t *testing.T) {
+	yaml := `
+version: 1
+steps:
+  - name: Backend Dependencies
+    run: go mod download
+    cache:
+      preset: go
+      policy: pull
+      components:
+        go-module: pull-push
+  - name: Backend Test
+    run: go test ./...
+    cache:
+      preset: go
+      policy: pull
+      components:
+        go-build: pull-push
+`
+	pipeline, err := LoadAndResolve([]byte(yaml))
+	if err != nil {
+		t.Fatalf("load and resolve pipeline: %v", err)
+	}
+
+	dependencies := pipeline.Steps[0].Cache
+	if dependencies == nil {
+		t.Fatal("expected dependencies cache")
+	}
+	if dependencies.ComponentPolicies["go-module"] != domain.CachePolicyPullPush || dependencies.ComponentPolicies["go-build"] != domain.CachePolicyPull {
+		t.Fatalf("dependencies component policies=%#v", dependencies.ComponentPolicies)
+	}
+
+	testStep := pipeline.Steps[1].Cache
+	if testStep == nil {
+		t.Fatal("expected test cache")
+	}
+	if testStep.ComponentPolicies["go-module"] != domain.CachePolicyPull || testStep.ComponentPolicies["go-build"] != domain.CachePolicyPullPush {
+		t.Fatalf("test component policies=%#v", testStep.ComponentPolicies)
 	}
 }
 

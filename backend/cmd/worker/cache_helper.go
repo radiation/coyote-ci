@@ -24,13 +24,14 @@ import (
 )
 
 const (
-	cacheHelperRoot       = "COYOTE_CACHE_ROOT"
-	cacheHelperPreset     = "COYOTE_CACHE_PRESET"
-	cacheHelperPolicy     = "COYOTE_CACHE_POLICY"
-	cacheHelperWorkingDir = "COYOTE_CACHE_WORKING_DIR"
-	cacheHelperStateRoot  = "COYOTE_CACHE_STATE_ROOT"
-	cacheHelperComponents = "COYOTE_CACHE_COMPONENTS"
-	cacheHelperBuildImage = "COYOTE_CACHE_BUILD_IMAGE"
+	cacheHelperRoot              = "COYOTE_CACHE_ROOT"
+	cacheHelperPreset            = "COYOTE_CACHE_PRESET"
+	cacheHelperPolicy            = "COYOTE_CACHE_POLICY"
+	cacheHelperComponentPolicies = "COYOTE_CACHE_COMPONENT_POLICIES"
+	cacheHelperWorkingDir        = "COYOTE_CACHE_WORKING_DIR"
+	cacheHelperStateRoot         = "COYOTE_CACHE_STATE_ROOT"
+	cacheHelperComponents        = "COYOTE_CACHE_COMPONENTS"
+	cacheHelperBuildImage        = "COYOTE_CACHE_BUILD_IMAGE"
 )
 
 const maxCacheHelperErrorResponseBytes = 4 * 1024
@@ -38,45 +39,55 @@ const maxCacheHelperErrorResponseBytes = 4 * 1024
 var archiveCacheDirectory = workspacepkg.ArchiveDirectory
 
 func runCacheRestore(ctx context.Context) error {
-	apiURL, tokenPath, executionJobID, podUID, root, preset, stateRoot, policy, err := cacheHelperConfig()
+	config, err := cacheHelperConfig()
 	if err != nil {
 		return err
 	}
-	if ensureErr := ensureCacheMountPaths(root, preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir))); ensureErr != nil {
+	if ensureErr := ensureCacheMountPaths(config.root, config.preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir))); ensureErr != nil {
 		return ensureErr
 	}
-	if policy == domain.CachePolicyOff {
-		return nil
-	}
-	components, componentErr := cacheComponentsForHelper(preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
+	components, componentErr := cacheComponentsForHelper(config.preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
 	if componentErr != nil {
 		return reportCacheSideEffectError("restore", componentErr)
+	}
+	canRestore := false
+	canSave := false
+	for _, component := range components {
+		policy := config.componentPolicy(component.Name)
+		canRestore = canRestore || cachePolicyAllowsRestore(policy)
+		canSave = canSave || cachePolicyAllowsSave(policy)
+	}
+	if !canRestore && !canSave {
+		return nil
 	}
 	keys, keyErr := cacheKeysForHelper(components)
 	if keyErr != nil {
 		return reportCacheSideEffectError("restore", keyErr)
 	}
-	if saveErr := savePreparedCacheKeys(stateRoot, keys); saveErr != nil {
+	if saveErr := savePreparedCacheKeys(config.stateRoot, keys); saveErr != nil {
 		return saveErr
 	}
-	if policy == domain.CachePolicyPush {
+	if !canRestore {
 		return nil
 	}
-	projectedToken, readErr := os.ReadFile(tokenPath)
+	projectedToken, readErr := os.ReadFile(config.tokenPath)
 	if readErr != nil {
 		return reportCacheSideEffectError("restore", fmt.Errorf("read cache helper token: %w", readErr))
 	}
-	capability, exchangeErr := exchangeWorkspaceCapability(ctx, apiURL, strings.TrimSpace(string(projectedToken)), executionJobID, podUID, domain.WorkspaceHelperRoleCacheRestore)
+	capability, exchangeErr := exchangeWorkspaceCapability(ctx, config.apiURL, strings.TrimSpace(string(projectedToken)), config.executionJobID, config.podUID, domain.WorkspaceHelperRoleCacheRestore)
 	if exchangeErr != nil {
 		return reportCacheSideEffectError("restore", exchangeErr)
 	}
 	split := splitCacheComponentsEnabled()
 	for index, component := range components {
-		destination := root
-		if split {
-			destination = filepath.Join(root, "paths", fmt.Sprintf("%03d", index))
+		if !cachePolicyAllowsRestore(config.componentPolicy(component.Name)) {
+			continue
 		}
-		if restoreErr := restoreCacheComponent(ctx, apiURL, capability, executionJobID, podUID, destination, component, keys[component.Name]); restoreErr != nil {
+		destination := config.root
+		if split {
+			destination = filepath.Join(config.root, "paths", fmt.Sprintf("%03d", index))
+		}
+		if restoreErr := restoreCacheComponent(ctx, config.apiURL, capability, config.executionJobID, config.podUID, destination, component, keys[component.Name]); restoreErr != nil {
 			return reportCacheSideEffectError("restore", restoreErr)
 		}
 	}
@@ -207,33 +218,43 @@ func runCacheSaveAfterBuild(ctx context.Context) error {
 }
 
 func runCacheSave(ctx context.Context) error {
-	apiURL, tokenPath, executionJobID, podUID, root, preset, stateRoot, policy, err := cacheHelperConfig()
-	if err != nil || policy == domain.CachePolicyOff || policy == domain.CachePolicyPull {
+	config, err := cacheHelperConfig()
+	if err != nil {
 		return err
 	}
-	keys, keyErr := loadPreparedCacheKeys(stateRoot)
-	if keyErr != nil {
-		return reportCacheSideEffectError("save", keyErr)
-	}
-	projectedToken, readErr := os.ReadFile(tokenPath)
-	if readErr != nil {
-		return reportCacheSideEffectError("save", fmt.Errorf("read cache helper token: %w", readErr))
-	}
-	capability, exchangeErr := exchangeWorkspaceCapability(ctx, apiURL, strings.TrimSpace(string(projectedToken)), executionJobID, podUID, domain.WorkspaceHelperRoleCacheSave)
-	if exchangeErr != nil {
-		return reportCacheSideEffectError("save", exchangeErr)
-	}
-	components, componentErr := cacheComponentsForHelper(preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
+	components, componentErr := cacheComponentsForHelper(config.preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
 	if componentErr != nil {
 		return reportCacheSideEffectError("save", componentErr)
 	}
+	canSave := false
+	for _, component := range components {
+		canSave = canSave || cachePolicyAllowsSave(config.componentPolicy(component.Name))
+	}
+	if !canSave {
+		return nil
+	}
+	keys, keyErr := loadPreparedCacheKeys(config.stateRoot)
+	if keyErr != nil {
+		return reportCacheSideEffectError("save", keyErr)
+	}
+	projectedToken, readErr := os.ReadFile(config.tokenPath)
+	if readErr != nil {
+		return reportCacheSideEffectError("save", fmt.Errorf("read cache helper token: %w", readErr))
+	}
+	capability, exchangeErr := exchangeWorkspaceCapability(ctx, config.apiURL, strings.TrimSpace(string(projectedToken)), config.executionJobID, config.podUID, domain.WorkspaceHelperRoleCacheSave)
+	if exchangeErr != nil {
+		return reportCacheSideEffectError("save", exchangeErr)
+	}
 	split := splitCacheComponentsEnabled()
 	for index, component := range components {
-		source := root
-		if split {
-			source = filepath.Join(root, "paths", fmt.Sprintf("%03d", index))
+		if !cachePolicyAllowsSave(config.componentPolicy(component.Name)) {
+			continue
 		}
-		if saveErr := saveCacheComponent(ctx, apiURL, capability, executionJobID, podUID, source, component.Name, keys[component.Name]); saveErr != nil {
+		source := config.root
+		if split {
+			source = filepath.Join(config.root, "paths", fmt.Sprintf("%03d", index))
+		}
+		if saveErr := saveCacheComponent(ctx, config.apiURL, capability, config.executionJobID, config.podUID, source, component.Name, keys[component.Name]); saveErr != nil {
 			return reportCacheSideEffectError("save", saveErr)
 		}
 	}
@@ -394,19 +415,75 @@ func reportCacheSideEffectError(operation string, err error) error {
 	return nil
 }
 
-func cacheHelperConfig() (string, string, string, string, string, string, string, domain.CachePolicy, error) {
-	apiURL := strings.TrimRight(strings.TrimSpace(os.Getenv(workspaceHelperAPIURL)), "/")
-	tokenPath := strings.TrimSpace(os.Getenv(workspaceHelperTokenPath))
-	executionJobID := strings.TrimSpace(os.Getenv(workspaceHelperExecutionJobID))
-	podUID := strings.TrimSpace(os.Getenv(workspaceHelperPodUID))
-	root := strings.TrimSpace(os.Getenv(cacheHelperRoot))
-	preset := strings.TrimSpace(os.Getenv(cacheHelperPreset))
-	stateRoot := strings.TrimSpace(os.Getenv(cacheHelperStateRoot))
-	policy := domain.NormalizeCachePolicy(domain.CachePolicy(os.Getenv(cacheHelperPolicy)))
-	if apiURL == "" || tokenPath == "" || executionJobID == "" || podUID == "" || root == "" || preset == "" || stateRoot == "" {
-		return "", "", "", "", "", "", "", policy, errors.New("cache helper requires internal API URL, token path, execution job ID, pod UID, root, preset, and state root")
+type cacheHelperConfiguration struct {
+	apiURL            string
+	tokenPath         string
+	executionJobID    string
+	podUID            string
+	root              string
+	preset            string
+	stateRoot         string
+	policy            domain.CachePolicy
+	componentPolicies map[string]domain.CachePolicy
+}
+
+func (c cacheHelperConfiguration) componentPolicy(component string) domain.CachePolicy {
+	if policy, ok := c.componentPolicies[component]; ok {
+		return policy
 	}
-	return apiURL, tokenPath, executionJobID, podUID, root, preset, stateRoot, policy, nil
+	return c.policy
+}
+
+func cacheHelperConfig() (cacheHelperConfiguration, error) {
+	config := cacheHelperConfiguration{
+		apiURL:         strings.TrimRight(strings.TrimSpace(os.Getenv(workspaceHelperAPIURL)), "/"),
+		tokenPath:      strings.TrimSpace(os.Getenv(workspaceHelperTokenPath)),
+		executionJobID: strings.TrimSpace(os.Getenv(workspaceHelperExecutionJobID)),
+		podUID:         strings.TrimSpace(os.Getenv(workspaceHelperPodUID)),
+		root:           strings.TrimSpace(os.Getenv(cacheHelperRoot)),
+		preset:         strings.TrimSpace(os.Getenv(cacheHelperPreset)),
+		stateRoot:      strings.TrimSpace(os.Getenv(cacheHelperStateRoot)),
+		policy:         domain.NormalizeCachePolicy(domain.CachePolicy(os.Getenv(cacheHelperPolicy))),
+	}
+	if config.apiURL == "" || config.tokenPath == "" || config.executionJobID == "" || config.podUID == "" || config.root == "" || config.preset == "" || config.stateRoot == "" {
+		return cacheHelperConfiguration{}, errors.New("cache helper requires internal API URL, token path, execution job ID, pod UID, root, preset, and state root")
+	}
+	componentPolicies, policyErr := cacheComponentPolicies()
+	if policyErr != nil {
+		return cacheHelperConfiguration{}, policyErr
+	}
+	config.componentPolicies = componentPolicies
+	return config, nil
+}
+
+func cacheComponentPolicies() (map[string]domain.CachePolicy, error) {
+	raw := strings.TrimSpace(os.Getenv(cacheHelperComponentPolicies))
+	if raw == "" {
+		return nil, nil
+	}
+	values := map[string]string{}
+	if unmarshalErr := json.Unmarshal([]byte(raw), &values); unmarshalErr != nil {
+		return nil, fmt.Errorf("parse cache component policies: %w", unmarshalErr)
+	}
+	if len(values) == 0 {
+		return nil, errors.New("cache component policies cannot be empty")
+	}
+	policies := make(map[string]domain.CachePolicy, len(values))
+	for component, value := range values {
+		if strings.TrimSpace(component) == "" || !cachepkg.IsSupportedPolicy(value) || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("invalid cache component policy for %q", component)
+		}
+		policies[component] = domain.NormalizeCachePolicy(domain.CachePolicy(value))
+	}
+	return policies, nil
+}
+
+func cachePolicyAllowsRestore(policy domain.CachePolicy) bool {
+	return policy != domain.CachePolicyOff && policy != domain.CachePolicyPush
+}
+
+func cachePolicyAllowsSave(policy domain.CachePolicy) bool {
+	return policy != domain.CachePolicyOff && policy != domain.CachePolicyPull
 }
 
 func savePreparedCacheKey(stateRoot string, key string) error {

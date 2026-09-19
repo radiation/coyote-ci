@@ -362,6 +362,7 @@ func TestRunCacheSaveExchangesCapabilityAndUploadsArchive(t *testing.T) {
 		archiveCalls++
 		return workspacepkg.ArchiveDirectory(ctx, source)
 	}
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/internal/workspace-helper/capabilities":
@@ -400,6 +401,81 @@ func TestRunCacheSaveExchangesCapabilityAndUploadsArchive(t *testing.T) {
 	}
 	if archiveCalls != 1 {
 		t.Fatalf("archive calls=%d, want 1", archiveCalls)
+	}
+}
+
+func TestRunCacheHelperSkipsComponentsExcludedByPolicy(t *testing.T) {
+	var restored []string
+	var claimed []string
+	var uploaded []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/internal/workspace-helper/capabilities":
+			_, _ = w.Write([]byte(`{"data":{"capability":"cache-capability"}}`))
+		case "/api/internal/workspace-helper/cache/restore":
+			var request struct {
+				Preset string `json:"preset"`
+			}
+			if decodeErr := json.NewDecoder(r.Body).Decode(&request); decodeErr != nil {
+				t.Fatalf("decode restore request: %v", decodeErr)
+			}
+			restored = append(restored, request.Preset)
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/internal/workspace-helper/cache/publish-claim":
+			var request struct {
+				Preset string `json:"preset"`
+			}
+			if decodeErr := json.NewDecoder(r.Body).Decode(&request); decodeErr != nil {
+				t.Fatalf("decode claim request: %v", decodeErr)
+			}
+			claimed = append(claimed, request.Preset)
+			writeAcquiredCacheClaim(w)
+		case "/api/internal/workspace-helper/cache/save":
+			uploaded = append(uploaded, r.Header.Get("Coyote-Cache-Preset"))
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	root := configureCacheHelperForTest(t, server.URL, domain.CachePolicyPull)
+	t.Setenv(cacheHelperComponents, "split")
+	t.Setenv(cacheHelperBuildImage, "golang:1.27.1")
+	t.Setenv(cacheHelperComponentPolicies, `{"go-module":"pull-push","go-build":"push"}`)
+	originalArchive := archiveCacheDirectory
+	t.Cleanup(func() { archiveCacheDirectory = originalArchive })
+	archiveCalls := 0
+	archiveCacheDirectory = func(ctx context.Context, source string) (io.ReadCloser, domain.WorkspaceRevisionPublication, error) {
+		archiveCalls++
+		return workspacepkg.ArchiveDirectory(ctx, source)
+	}
+
+	if restoreErr := runCacheRestore(context.Background()); restoreErr != nil {
+		t.Fatalf("restore cache: %v", restoreErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(root, "paths", "000", "module"), []byte("cached"), 0o644); writeErr != nil {
+		t.Fatalf("write module cache: %v", writeErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(root, "paths", "001", "build"), []byte("cached"), 0o644); writeErr != nil {
+		t.Fatalf("write build cache: %v", writeErr)
+	}
+	if saveErr := runCacheSave(context.Background()); saveErr != nil {
+		t.Fatalf("save cache: %v", saveErr)
+	}
+	if len(restored) != 1 || restored[0] != "go-module" {
+		t.Fatalf("restore requests=%#v, want go-module only", restored)
+	}
+	if strings.Join(claimed, ",") != "go-module,go-build" || strings.Join(uploaded, ",") != "go-module,go-build" || archiveCalls != 2 {
+		t.Fatalf("claims=%#v uploads=%#v archive calls=%d", claimed, uploaded, archiveCalls)
+	}
+
+	t.Setenv(cacheHelperComponentPolicies, `{"go-module":"pull","go-build":"pull-push"}`)
+	if saveErr := runCacheSave(context.Background()); saveErr != nil {
+		t.Fatalf("save with build-only publication: %v", saveErr)
+	}
+	if strings.Join(claimed, ",") != "go-module,go-build,go-build" || strings.Join(uploaded, ",") != "go-module,go-build,go-build" || archiveCalls != 3 {
+		t.Fatalf("claims=%#v uploads=%#v archive calls=%d, want go-build only in second save", claimed, uploaded, archiveCalls)
 	}
 }
 

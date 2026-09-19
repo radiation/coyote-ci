@@ -265,7 +265,7 @@ func TestControllerCreatesCacheHelpersForDurableClaimedStep(t *testing.T) {
 	step := domain.BuildStep{
 		ID: "step-1", BuildID: "build-1", StepIndex: 3, Name: "Backend Vet", Status: domain.BuildStepStatusPending,
 		Image: "golang:1.27.1", Command: "sh", Args: []string{"-c", "go vet ./..."}, WorkingDir: "backend",
-		Cache: &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPullPush},
+		Cache: &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPull, ComponentPolicies: map[string]domain.CachePolicy{"go-module": domain.CachePolicyPullPush, "go-build": domain.CachePolicyPull}},
 	}
 	job := domain.ExecutionJob{
 		ID: "job-1", BuildID: "build-1", StepID: step.ID, NodeID: "node-003", Name: step.Name, StepIndex: step.StepIndex,
@@ -289,6 +289,11 @@ func TestControllerCreatesCacheHelpersForDurableClaimedStep(t *testing.T) {
 	build := pod.Containers[0]
 	if len(build.VolumeMounts) != 3 || build.VolumeMounts[1].MountPath != "/go/pkg/mod" || build.VolumeMounts[2].MountPath != "/root/.cache/go-build" {
 		t.Fatalf("go cache mounts missing: %#v", build.VolumeMounts)
+	}
+	for _, container := range []corev1.Container{pod.InitContainers[1], pod.Containers[2]} {
+		if value := environmentValue(container.Env, "COYOTE_CACHE_COMPONENT_POLICIES"); value != `{"go-build":"pull","go-module":"pull-push"}` {
+			t.Fatalf("%s component policies=%q", container.Name, value)
+		}
 	}
 }
 

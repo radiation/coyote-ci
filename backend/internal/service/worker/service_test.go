@@ -541,7 +541,7 @@ func TestExecutionWorkerService_ClaimRunnableStep_UsesPersistedJobSpec(t *testin
 		listBuildsResp: []domain.Build{{ID: "build-1", Status: domain.BuildStatusQueued}},
 		stepsByBuildID: map[string][]domain.BuildStep{
 			"build-1": {
-				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusPending, Command: "sh", Args: []string{"-c", "echo from-step"}, WorkingDir: "backend", Env: map[string]string{"A": "step"}, Cache: &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPullPush}},
+				{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusPending, Command: "sh", Args: []string{"-c", "echo from-step"}, WorkingDir: "backend", Env: map[string]string{"A": "step"}, Cache: &domain.StepCacheConfig{Preset: "go", Policy: domain.CachePolicyPull, ComponentPolicies: map[string]domain.CachePolicy{"go-module": domain.CachePolicyPull, "go-build": domain.CachePolicyPullPush}}},
 			},
 		},
 		jobsByStepID: map[string]domain.ExecutionJob{
@@ -581,8 +581,11 @@ func TestExecutionWorkerService_ClaimRunnableStep_UsesPersistedJobSpec(t *testin
 	if runnable.Env["A"] != "job" {
 		t.Fatalf("expected env from job spec, got %#v", runnable.Env)
 	}
-	if runnable.Cache == nil || runnable.Cache.Preset != "go" || runnable.Cache.Policy != domain.CachePolicyPullPush {
+	if runnable.Cache == nil || runnable.Cache.Preset != "go" || runnable.Cache.Policy != domain.CachePolicyPull {
 		t.Fatalf("expected cache from persisted build step, got %#v", runnable.Cache)
+	}
+	if runnable.Cache.ComponentPolicies["go-module"] != domain.CachePolicyPull || runnable.Cache.ComponentPolicies["go-build"] != domain.CachePolicyPullPush {
+		t.Fatalf("expected resolved component policies from persisted build step, got %#v", runnable.Cache.ComponentPolicies)
 	}
 }
 
