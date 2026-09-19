@@ -130,12 +130,12 @@ func restoreCacheComponent(ctx context.Context, apiURL, capability, executionJob
 	if !splitCacheComponentsEnabled() {
 		extractStarted := time.Now()
 		restoreErr := restoreCacheArchive(ctx, timedBody, publication, destination, component.Name, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
-		logRestoreCacheTransfer(component.Name, key, size, time.Since(requestStarted), time.Since(extractStarted), timedBody.readDuration, time.Since(started), restoreErr)
+		logRestoreCacheTransfer(component.Name, key, size, extractStarted.Sub(requestStarted), time.Since(extractStarted), timedBody.readDuration, time.Since(started), restoreErr)
 		return restoreErr
 	}
 	extractStarted := time.Now()
 	restoreErr := workspacepkg.RestoreArchive(ctx, timedBody, publication, destination)
-	logRestoreCacheTransfer(component.Name, key, size, time.Since(requestStarted), time.Since(extractStarted), timedBody.readDuration, time.Since(started), restoreErr)
+	logRestoreCacheTransfer(component.Name, key, size, extractStarted.Sub(requestStarted), time.Since(extractStarted), timedBody.readDuration, time.Since(started), restoreErr)
 	return restoreErr
 }
 

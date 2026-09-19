@@ -34,6 +34,7 @@ type workspacePublisher interface {
 type workspaceCacheHelper interface {
 	Restore(context.Context, string, string, string, string, string) (service.WorkspaceHelperCachePayload, bool, error)
 	ClaimPublish(context.Context, string, string, string, string, string) (service.WorkspaceHelperCachePublishClaim, error)
+	Save(context.Context, string, string, string, string, string, io.Reader, domain.WorkspaceRevisionPublication) error
 	SaveClaimed(context.Context, string, string, string, string, string, string, io.Reader, domain.WorkspaceRevisionPublication) error
 	ReleasePublishClaim(context.Context, string, string, string, string, string, string) error
 }
@@ -266,7 +267,11 @@ func (h *WorkspaceHelperHandler) RestoreCache(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusOK)
 	transferStarted := time.Now()
 	bytesWritten, copyErr := io.Copy(w, payload.Archive)
-	log.Printf("INFO cache_transfer operation=restore_delivery outcome=hit preset=%s cache_key=%s compressed_bytes=%d helper_response_stream_ms=%d error=%v", payload.Preset, payload.CacheKey, bytesWritten, time.Since(transferStarted).Milliseconds(), copyErr)
+	outcome := "hit"
+	if copyErr != nil {
+		outcome = "delivery_error"
+	}
+	log.Printf("INFO cache_transfer operation=restore_delivery outcome=%s preset=%s cache_key=%s compressed_bytes=%d helper_response_stream_ms=%d error=%v", outcome, payload.Preset, payload.CacheKey, bytesWritten, time.Since(transferStarted).Milliseconds(), copyErr)
 }
 
 func (h *WorkspaceHelperHandler) ClaimCachePublish(w http.ResponseWriter, r *http.Request) {
@@ -341,13 +346,23 @@ func (h *WorkspaceHelperHandler) SaveCache(w http.ResponseWriter, r *http.Reques
 	}
 	size := r.ContentLength
 	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(r.Header.Get("Content-Digest")), SizeBytes: &size}
-	saveErr := h.cache.SaveClaimed(r.Context(), capability, strings.TrimSpace(r.Header.Get("Coyote-Execution-Job-ID")), strings.TrimSpace(r.Header.Get("Coyote-Pod-UID")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Preset")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Key")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Claim-Token")), body, publication)
+	executionJobID := strings.TrimSpace(r.Header.Get("Coyote-Execution-Job-ID"))
+	podUID := strings.TrimSpace(r.Header.Get("Coyote-Pod-UID"))
+	preset := strings.TrimSpace(r.Header.Get("Coyote-Cache-Preset"))
+	cacheKey := strings.TrimSpace(r.Header.Get("Coyote-Cache-Key"))
+	claimToken := strings.TrimSpace(r.Header.Get("Coyote-Cache-Claim-Token"))
+	var saveErr error
+	if claimToken == "" {
+		saveErr = h.cache.Save(r.Context(), capability, executionJobID, podUID, preset, cacheKey, body, publication)
+	} else {
+		saveErr = h.cache.SaveClaimed(r.Context(), capability, executionJobID, podUID, preset, cacheKey, claimToken, body, publication)
+	}
 	if saveErr != nil {
 		if limitedBody != nil && limitedBody.exceeded {
 			writeErrorJSON(w, http.StatusRequestEntityTooLarge, "archive_too_large", "cache archive exceeds the configured size limit")
 			return
 		}
-		logWorkspaceCacheArchiveRejection(saveErr, strings.TrimSpace(r.Header.Get("Coyote-Execution-Job-ID")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Preset")), strings.TrimSpace(r.Header.Get("Coyote-Cache-Key")))
+		logWorkspaceCacheArchiveRejection(saveErr, executionJobID, preset, cacheKey)
 		handleWorkspaceCacheError(w, saveErr)
 		return
 	}

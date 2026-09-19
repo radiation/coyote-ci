@@ -108,9 +108,9 @@ func TestCacheEntryRepository_CompletePublishClaim(t *testing.T) {
 	claim := domain.CachePublishClaim{JobID: "job-1", Preset: "go-module", CacheKey: "key", ClaimToken: "claim-token"}
 	now := time.Now().UTC()
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT claim_expires_at FROM cache_publish_claims").
-		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, now).
-		WillReturnRows(sqlmock.NewRows([]string{"claim_expires_at"}).AddRow(now.Add(time.Minute)))
+	mock.ExpectQuery("SELECT claim_token FROM cache_publish_claims").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey).
+		WillReturnRows(sqlmock.NewRows([]string{"claim_token"}).AddRow(claim.ClaimToken))
 	mock.ExpectQuery("INSERT INTO cache_entries").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "job_id", "preset", "cache_key", "storage_provider", "object_key", "size_bytes", "checksum", "content_digest", "compression", "status", "created_by_build_id", "created_by_step_id", "created_at", "updated_at", "last_accessed_at"}).
 			AddRow("entry-1", "job-1", "go-module", "key", "filesystem", "obj", int64(42), "sum", "content-sum", "tar.gz", "ready", "build-1", "step-1", now, now, nil))
@@ -118,7 +118,7 @@ func TestCacheEntryRepository_CompletePublishClaim(t *testing.T) {
 		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	entry, completeErr := repo.CompletePublishClaim(context.Background(), claim, repository.CacheEntryUpsertInput{JobID: "job-1", Preset: "go-module", CacheKey: "key", StorageProvider: domain.StorageProviderFilesystem, ObjectKey: "obj", SizeBytes: 42, Checksum: "sum", ContentDigest: "content-sum", Compression: "tar.gz", Status: domain.CacheEntryStatusReady, CreatedByBuildID: "build-1", CreatedByStepID: "step-1"}, now)
+	entry, completeErr := repo.CompletePublishClaim(context.Background(), claim, repository.CacheEntryUpsertInput{JobID: "job-1", Preset: "go-module", CacheKey: "key", StorageProvider: domain.StorageProviderFilesystem, ObjectKey: "obj", SizeBytes: 42, Checksum: "sum", ContentDigest: "content-sum", Compression: "tar.gz", Status: domain.CacheEntryStatusReady, CreatedByBuildID: "build-1", CreatedByStepID: "step-1"}, now.Add(time.Minute))
 	if completeErr != nil || entry.ID != "entry-1" {
 		t.Fatalf("entry=%+v err=%v", entry, completeErr)
 	}

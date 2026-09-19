@@ -128,6 +128,7 @@ func TestCacheEntryRepository_PublishClaimsAreExclusiveAndRecoverAfterExpiry(t *
 	if firstErr != nil || !acquired {
 		t.Fatalf("first claim acquired=%t err=%v", acquired, firstErr)
 	}
+
 	if validateErr := repo.ValidatePublishClaim(context.Background(), first, "execution-1", now.Add(30*time.Second)); validateErr != nil {
 		t.Fatalf("validate active claim: %v", validateErr)
 	}
@@ -147,5 +148,34 @@ func TestCacheEntryRepository_PublishClaimsAreExclusiveAndRecoverAfterExpiry(t *
 	}
 	if validateErr := repo.ValidatePublishClaim(context.Background(), first, "execution-1", now.Add(2*time.Minute)); !errors.Is(validateErr, repository.ErrCachePublishClaimStale) {
 		t.Fatalf("validate reclaimed token error=%v, want stale", validateErr)
+	}
+}
+
+func TestCacheEntryRepository_CompletePublishClaimAllowsUnreclaimedExpiredOwner(t *testing.T) {
+	repo := NewCacheEntryRepository()
+	now := time.Date(2026, time.September, 15, 12, 0, 0, 0, time.UTC)
+	claim, acquired, claimErr := repo.TryAcquirePublishClaim(context.Background(), "job-1", "go-module", "key", "execution-1", now, time.Minute)
+	if claimErr != nil || !acquired {
+		t.Fatalf("claim=%+v acquired=%t err=%v", claim, acquired, claimErr)
+	}
+	input := repository.CacheEntryUpsertInput{JobID: "job-1", Preset: "go-module", CacheKey: "key", StorageProvider: domain.StorageProviderFilesystem, ObjectKey: "object", SizeBytes: 1, Checksum: "checksum", ContentDigest: "sha256:checksum", Compression: "tar.gz", Status: domain.CacheEntryStatusReady}
+	if _, completeErr := repo.CompletePublishClaim(context.Background(), claim, input, now.Add(2*time.Minute)); completeErr != nil {
+		t.Fatalf("complete unreclaimed expired claim: %v", completeErr)
+	}
+}
+
+func TestCacheEntryRepository_CompletePublishClaimRejectsReplacement(t *testing.T) {
+	repo := NewCacheEntryRepository()
+	now := time.Date(2026, time.September, 15, 12, 0, 0, 0, time.UTC)
+	first, acquired, firstErr := repo.TryAcquirePublishClaim(context.Background(), "job-1", "go-module", "key", "execution-1", now, time.Minute)
+	if firstErr != nil || !acquired {
+		t.Fatalf("first claim=%+v acquired=%t err=%v", first, acquired, firstErr)
+	}
+	if _, acquired, replacementErr := repo.TryAcquirePublishClaim(context.Background(), "job-1", "go-module", "key", "execution-2", now.Add(2*time.Minute), time.Minute); replacementErr != nil || !acquired {
+		t.Fatalf("replacement acquired=%t err=%v", acquired, replacementErr)
+	}
+	input := repository.CacheEntryUpsertInput{JobID: "job-1", Preset: "go-module", CacheKey: "key", StorageProvider: domain.StorageProviderFilesystem, ObjectKey: "object", SizeBytes: 1, Checksum: "checksum", ContentDigest: "sha256:checksum", Compression: "tar.gz", Status: domain.CacheEntryStatusReady}
+	if _, completeErr := repo.CompletePublishClaim(context.Background(), first, input, now.Add(2*time.Minute)); !errors.Is(completeErr, repository.ErrCachePublishClaimReplaced) {
+		t.Fatalf("complete stale claim error=%v, want replaced", completeErr)
 	}
 }

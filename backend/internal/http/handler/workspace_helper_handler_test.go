@@ -312,6 +312,28 @@ func TestWorkspaceHelperHandlerSaveCacheOutcomes(t *testing.T) {
 	}
 }
 
+func TestWorkspaceHelperHandlerSaveCacheSupportsLegacyHelperWithoutClaimToken(t *testing.T) {
+	cache := &workspaceCacheHelperStub{readSaveBody: true}
+	handler := NewWorkspaceHelperHandler(nil)
+	handler.SetCacheService(cache)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/cache/save", strings.NewReader("cache archive"))
+	request.Header.Set("Authorization", "Bearer capability")
+	request.Header.Set("Content-Digest", "sha256:"+strings.Repeat("a", 64))
+	request.Header.Set("Coyote-Execution-Job-ID", "job-1")
+	request.Header.Set("Coyote-Pod-UID", "pod-1")
+	request.Header.Set("Coyote-Cache-Preset", "go")
+	request.Header.Set("Coyote-Cache-Key", "go:key")
+	response := httptest.NewRecorder()
+
+	handler.SaveCache(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d, want %d", response.Code, http.StatusNoContent)
+	}
+	if cache.legacySaveCalls != 1 || cache.claimedSaveCalls != 0 {
+		t.Fatalf("legacy saves=%d claimed saves=%d", cache.legacySaveCalls, cache.claimedSaveCalls)
+	}
+}
+
 func TestWorkspaceHelperHandlerClaimCachePublishOutcomes(t *testing.T) {
 	for _, testCase := range []struct {
 		name  string
@@ -589,14 +611,16 @@ func (s *workspacePublisherStub) Publish(context.Context, string, string, string
 var _ workspacePublisher = (*workspacePublisherStub)(nil)
 
 type workspaceCacheHelperStub struct {
-	payload      service.WorkspaceHelperCachePayload
-	found        bool
-	restoreErr   error
-	claim        service.WorkspaceHelperCachePublishClaim
-	claimErr     error
-	releaseErr   error
-	saveErr      error
-	readSaveBody bool
+	payload          service.WorkspaceHelperCachePayload
+	found            bool
+	restoreErr       error
+	claim            service.WorkspaceHelperCachePublishClaim
+	claimErr         error
+	releaseErr       error
+	saveErr          error
+	readSaveBody     bool
+	legacySaveCalls  int
+	claimedSaveCalls int
 }
 
 func (s *workspaceCacheHelperStub) Restore(context.Context, string, string, string, string, string) (service.WorkspaceHelperCachePayload, bool, error) {
@@ -611,7 +635,18 @@ func (s *workspaceCacheHelperStub) ReleasePublishClaim(context.Context, string, 
 	return s.releaseErr
 }
 
+func (s *workspaceCacheHelperStub) Save(_ context.Context, _ string, _ string, _ string, _ string, _ string, archive io.Reader, _ domain.WorkspaceRevisionPublication) error {
+	s.legacySaveCalls++
+	if s.readSaveBody {
+		if _, readErr := io.ReadAll(archive); readErr != nil {
+			return readErr
+		}
+	}
+	return s.saveErr
+}
+
 func (s *workspaceCacheHelperStub) SaveClaimed(_ context.Context, _ string, _ string, _ string, _ string, _ string, _ string, archive io.Reader, _ domain.WorkspaceRevisionPublication) error {
+	s.claimedSaveCalls++
 	if s.readSaveBody {
 		if _, readErr := io.ReadAll(archive); readErr != nil {
 			return readErr

@@ -139,9 +139,13 @@ func (s *WorkspaceHelperCacheService) Restore(ctx context.Context, capabilityTok
 	}
 	defer func() { _ = os.RemoveAll(directory) }()
 	result, restoreErr := s.store.Restore(ctx, entry.ObjectKey, directory)
-	if restoreErr != nil || !result.Hit {
+	if restoreErr != nil {
 		metrics.outcome = "restore_error"
-		return WorkspaceHelperCachePayload{}, result.Hit, restoreErr
+		return WorkspaceHelperCachePayload{}, false, restoreErr
+	}
+	if !result.Hit {
+		metrics.outcome = "miss"
+		return WorkspaceHelperCachePayload{}, false, nil
 	}
 	if markErr := s.entries.MarkAccessed(ctx, entry.ID, s.now()); markErr != nil && !errors.Is(markErr, repository.ErrCacheEntryNotFound) {
 		metrics.outcome = "metadata_error"
@@ -229,7 +233,7 @@ func (s *WorkspaceHelperCacheService) SaveClaimed(ctx context.Context, capabilit
 		return ErrWorkspaceHelperCacheInvalidInput
 	}
 	claim := domain.CachePublishClaim{JobID: cacheJobID(build), Preset: strings.TrimSpace(strings.ToLower(preset)), CacheKey: strings.TrimSpace(cacheKey), ClaimToken: strings.TrimSpace(claimToken)}
-	if validateErr := s.entries.ValidatePublishClaim(ctx, claim, executionJobID, s.now()); validateErr != nil {
+	if validateErr := s.entries.ValidatePublishClaimOwnership(ctx, claim, executionJobID); validateErr != nil {
 		if errors.Is(validateErr, repository.ErrCachePublishClaimStale) {
 			return ErrWorkspaceHelperCachePublishClaimInvalid
 		}
@@ -305,14 +309,17 @@ func (s *WorkspaceHelperCacheService) saveWithClaim(ctx context.Context, build d
 	finalizationStarted := time.Now()
 	entry, upsertErr := s.entries.CompletePublishClaim(ctx, claim, repository.CacheEntryUpsertInput{JobID: jobID, Preset: preset, CacheKey: cacheKey, StorageProvider: s.store.Provider(), ObjectKey: objectKey, SizeBytes: saved.SizeBytes, Checksum: saved.Checksum, ContentDigest: publication.ContentDigest, Compression: saved.Compression, Status: domain.CacheEntryStatusReady, CreatedByBuildID: build.ID, CreatedByStepID: step.ID}, s.now())
 	metrics.finalizationDuration = time.Since(finalizationStarted)
-	if errors.Is(upsertErr, repository.ErrCachePublishClaimStale) {
+	if errors.Is(upsertErr, repository.ErrCachePublishClaimReplaced) {
 		metrics.outcome = "deduplicated_publish"
-		metrics.claimLifecycle = "lost_before_completion"
-		log.Printf("INFO cache publish skipped stale_claim job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
+		metrics.claimLifecycle = "replaced_before_completion"
+		log.Printf("INFO cache publish skipped replaced_claim job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
 		return nil
 	}
 	if upsertErr != nil {
 		metrics.outcome = "publish_error"
+		if errors.Is(upsertErr, repository.ErrCachePublishClaimStale) {
+			metrics.claimLifecycle = "missing_before_completion"
+		}
 		return upsertErr
 	}
 	if hadPrevious && strings.TrimSpace(previous.ObjectKey) != "" && previous.StorageProvider == entry.StorageProvider && previous.ObjectKey != entry.ObjectKey {

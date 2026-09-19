@@ -61,6 +61,24 @@ func TestWorkspaceHelperCacheServiceRestoreHitMarksAccessed(t *testing.T) {
 	}
 }
 
+func TestWorkspaceHelperCacheServiceLegacyStorageMissRecordsMiss(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	objectKey := cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, "sha256:"+strings.Repeat("a", 64))
+	if _, upsertErr := harness.entries.Upsert(context.Background(), cacheEntryInput(harness, objectKey)); upsertErr != nil {
+		t.Fatalf("seed cache metadata: %v", upsertErr)
+	}
+	harness.store.restoreMiss = true
+	logs := captureCacheTransferLogs(t)
+
+	_, found, restoreErr := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if restoreErr != nil || found {
+		t.Fatalf("restore found=%t err=%v", found, restoreErr)
+	}
+	if !strings.Contains(logs.String(), "outcome=miss") || strings.Contains(logs.String(), "outcome=restore_error") {
+		t.Fatalf("restore logs=%q, want miss without restore_error", logs.String())
+	}
+}
+
 func TestWorkspaceHelperCacheServiceRestoreStreamsCompatibleArchive(t *testing.T) {
 	harness := newWorkspaceHelperCacheServiceTestHarness(t)
 	source := cacheArchive(t, "cached.txt", "cache hit")
@@ -351,7 +369,48 @@ func TestWorkspaceHelperCacheServiceClaimedSaveCompletesExistingClaim(t *testing
 	}
 }
 
-func TestWorkspaceHelperCacheServiceClaimedSaveRejectsInvalidAndExpiredClaimsBeforeUpload(t *testing.T) {
+func TestWorkspaceHelperCacheServiceClaimedSaveCompletesUnreclaimedExpiredClaim(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	now := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
+	harness.service.now = func() time.Time { return now }
+	claim, claimErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if claimErr != nil || !claim.Acquired {
+		t.Fatalf("claim=%+v err=%v", claim, claimErr)
+	}
+	harness.service.now = func() time.Time { return now.Add(defaultWorkspaceHelperCachePublishLease + time.Second) }
+	archive := cacheArchive(t, "module", "completed after archive delay")
+	defer func() { _ = archive.archive.Close() }()
+
+	if saveErr := harness.service.SaveClaimed(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, claim.ClaimToken, archive.archive, archive.publication); saveErr != nil {
+		t.Fatalf("save unreclaimed expired claim: %v", saveErr)
+	}
+	entry, found, findErr := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey)
+	if findErr != nil || !found || entry.ContentDigest != archive.publication.ContentDigest {
+		t.Fatalf("entry=%+v found=%t err=%v", entry, found, findErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceDeduplicatesOnlyAfterClaimReplacement(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	now := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
+	harness.service.now = func() time.Time { return now }
+	harness.store.archiveSaveHook = func() {
+		now = now.Add(defaultWorkspaceHelperCachePublishLease)
+		if _, acquired, claimErr := harness.entries.TryAcquirePublishClaim(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey, "replacement-publisher", now, defaultWorkspaceHelperCachePublishLease); claimErr != nil || !acquired {
+			t.Fatalf("replace active claim acquired=%t err=%v", acquired, claimErr)
+		}
+	}
+	archive := cacheArchive(t, "module", "publisher A")
+	defer func() { _ = archive.archive.Close() }()
+
+	if saveErr := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication); saveErr != nil {
+		t.Fatalf("save after replacement: %v", saveErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceClaimedSaveRejectsInvalidAndReplacedClaimsBeforeUpload(t *testing.T) {
 	for _, testCase := range []struct {
 		name  string
 		claim func(*workspaceHelperCacheServiceTestHarness) (string, string)
@@ -367,7 +426,7 @@ func TestWorkspaceHelperCacheServiceClaimedSaveRejectsInvalidAndExpiredClaimsBef
 			harness.capabilities.expectedJobID = "other-execution-job"
 			return "other-execution-job", claim.ClaimToken
 		}},
-		{name: "expired token", claim: func(harness *workspaceHelperCacheServiceTestHarness) (string, string) {
+		{name: "replaced token", claim: func(harness *workspaceHelperCacheServiceTestHarness) (string, string) {
 			now := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
 			harness.service.now = func() time.Time { return now }
 			claim, claimErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
@@ -375,6 +434,10 @@ func TestWorkspaceHelperCacheServiceClaimedSaveRejectsInvalidAndExpiredClaimsBef
 				t.Fatalf("claim=%+v err=%v", claim, claimErr)
 			}
 			harness.service.now = func() time.Time { return now.Add(defaultWorkspaceHelperCachePublishLease) }
+			replacement, replacementErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+			if replacementErr != nil || !replacement.Acquired || !replacement.Reclaimed {
+				t.Fatalf("replacement=%+v err=%v", replacement, replacementErr)
+			}
 			return harness.job.ID, claim.ClaimToken
 		}},
 	} {
@@ -922,6 +985,8 @@ type workspaceHelperCacheStoreFake struct {
 	archivePromoteCalls int
 	archiveDeleteCalls  int
 	archiveBytes        int64
+	archiveSaveHook     func()
+	restoreMiss         bool
 	restoreCalls        int
 	openCalls           int
 }
@@ -929,6 +994,9 @@ type workspaceHelperCacheStoreFake struct {
 func (f *workspaceHelperCacheStoreFake) Provider() domain.StorageProvider { return f.inner.Provider() }
 func (f *workspaceHelperCacheStoreFake) Restore(ctx context.Context, key string, destination string) (cachepkg.RestoreResult, error) {
 	f.restoreCalls++
+	if f.restoreMiss {
+		return cachepkg.RestoreResult{}, nil
+	}
 	return f.inner.Restore(ctx, key, destination)
 }
 func (f *workspaceHelperCacheStoreFake) Save(ctx context.Context, key string, source string) (cachepkg.SaveResult, error) {
@@ -946,6 +1014,9 @@ func (f *workspaceHelperCacheStoreFake) SaveArchive(ctx context.Context, key str
 	f.archiveSaveCalls++
 	if f.saveErr != nil {
 		return cachepkg.SaveResult{}, f.saveErr
+	}
+	if f.archiveSaveHook != nil {
+		f.archiveSaveHook()
 	}
 	return f.inner.SaveArchive(ctx, key, &countingCacheArchiveReader{reader: archive, count: &f.archiveBytes})
 }
