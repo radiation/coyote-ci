@@ -19,7 +19,7 @@ func TestWorkspaceRevisionValidation(t *testing.T) {
 	if err := revision.ValidateForCreate(); err != nil {
 		t.Fatalf("validate publishing revision: %v", err)
 	}
-	if err := (WorkspaceRevisionPublication{ContentDigest: "sha256:abc", StorageKey: "revisions/revision-1"}).Validate(); err != nil {
+	if err := (WorkspaceRevisionPublication{ContentDigest: "sha256:abc", StorageKey: "revisions/revision-1", StorageProvider: StorageProviderFilesystem}).Validate(); err != nil {
 		t.Fatalf("validate publication: %v", err)
 	}
 

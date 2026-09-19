@@ -128,7 +128,7 @@ func (s *WorkspaceHelperCacheService) Restore(ctx context.Context, capabilityTok
 				metrics.outcome = "metadata_error"
 				return WorkspaceHelperCachePayload{}, false, markErr
 			}
-			return WorkspaceHelperCachePayload{Archive: archive, Publication: domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: effectiveDigest, SizeBytes: &entry.SizeBytes}, Preset: preset, CacheKey: cacheKey}, true, nil
+			return WorkspaceHelperCachePayload{Archive: archive, Publication: domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: effectiveDigest, StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &entry.SizeBytes}, Preset: preset, CacheKey: cacheKey}, true, nil
 		}
 	}
 	metrics.transferMode = "legacy_materialized"

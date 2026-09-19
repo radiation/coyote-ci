@@ -37,6 +37,7 @@ var workspaceRevisionRename = os.Rename
 // WorkspaceRevisionStore holds immutable workspace bytes independently from
 // the repository that makes their publication authoritative.
 type WorkspaceRevisionStore interface {
+	Provider() domain.StorageProvider
 	Publish(ctx context.Context, revisionID string, sourceRoot string) (domain.WorkspaceRevisionPublication, error)
 	Restore(ctx context.Context, publication domain.WorkspaceRevisionPublication, destinationRoot string) error
 	Delete(ctx context.Context, publication domain.WorkspaceRevisionPublication) error
@@ -261,6 +262,10 @@ func NewFilesystemWorkspaceRevisionStore(root string) *FilesystemWorkspaceRevisi
 	return &FilesystemWorkspaceRevisionStore{root: strings.TrimSpace(root)}
 }
 
+func (*FilesystemWorkspaceRevisionStore) Provider() domain.StorageProvider {
+	return domain.StorageProviderFilesystem
+}
+
 func (s *FilesystemWorkspaceRevisionStore) Publish(ctx context.Context, revisionID string, sourceRoot string) (domain.WorkspaceRevisionPublication, error) {
 	storageKey, finalPath, err := s.pathForRevisionID(revisionID)
 	if err != nil {
@@ -388,7 +393,7 @@ func (s *FilesystemWorkspaceRevisionStore) pathForRevisionID(revisionID string) 
 }
 
 func (s *FilesystemWorkspaceRevisionStore) pathForPublication(publication domain.WorkspaceRevisionPublication) (string, error) {
-	if err := publication.Validate(); err != nil {
+	if err := publication.Validate(); err != nil || publication.StorageProvider != domain.StorageProviderFilesystem {
 		return "", ErrInvalidWorkspaceRevisionObject
 	}
 	_, archivePath, err := s.pathForStorageKey(publication.StorageKey)
@@ -800,7 +805,7 @@ func safeWorkspaceRevisionArchivePath(value string) (string, error) {
 }
 
 func publicationForWorkspaceRevision(storageKey string, digest string, size int64) domain.WorkspaceRevisionPublication {
-	return domain.WorkspaceRevisionPublication{ContentDigest: digest, StorageKey: storageKey, SizeBytes: &size}
+	return domain.WorkspaceRevisionPublication{ContentDigest: digest, StorageKey: storageKey, StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}
 }
 
 func workspaceRevisionDigestAndSize(ctx context.Context, archivePath string) (string, int64, error) {

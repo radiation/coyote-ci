@@ -125,7 +125,7 @@ func restoreCacheComponent(ctx context.Context, apiURL, capability, executionJob
 		return restoreErr
 	}
 	size := response.ContentLength
-	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(response.Header.Get("Content-Digest")), SizeBytes: &size}
+	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(response.Header.Get("Content-Digest")), StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}
 	timedBody := &timedReadCloser{ReadCloser: response.Body}
 	if !splitCacheComponentsEnabled() {
 		extractStarted := time.Now()

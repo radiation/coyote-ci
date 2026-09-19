@@ -95,7 +95,7 @@ func TestWorkspaceHelperHandlerHandlesUnavailableAndOperationalFailures(t *testi
 
 func TestWorkspaceHelperHandlerPreparePreservesAuthoritativePublication(t *testing.T) {
 	size := int64(len("corrupt bytes"))
-	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:" + strings.Repeat("a", 64), StorageKey: "workspace-revisions/revision.tar.gz", SizeBytes: &size}
+	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:" + strings.Repeat("a", 64), StorageKey: "workspace-revisions/revision.tar.gz", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}
 	prepare := &workspacePrepareOpenerStub{payload: service.WorkspacePreparePayload{Archive: io.NopCloser(bytes.NewBufferString("corrupt bytes")), Publication: publication}}
 	handler := NewWorkspaceHelperHandler(nil)
 	handler.SetPrepareService(prepare)
@@ -111,7 +111,7 @@ func TestWorkspaceHelperHandlerPreparePreservesAuthoritativePublication(t *testi
 
 func TestWorkspaceHelperHandlerPrepareRejectsAuthoritativeSizeMismatch(t *testing.T) {
 	size := int64(99)
-	prepare := &workspacePrepareOpenerStub{payload: service.WorkspacePreparePayload{Archive: io.NopCloser(bytes.NewBufferString("short")), Publication: domain.WorkspaceRevisionPublication{ContentDigest: "sha256:" + strings.Repeat("a", 64), StorageKey: "workspace-revisions/revision.tar.gz", SizeBytes: &size}}}
+	prepare := &workspacePrepareOpenerStub{payload: service.WorkspacePreparePayload{Archive: io.NopCloser(bytes.NewBufferString("short")), Publication: domain.WorkspaceRevisionPublication{ContentDigest: "sha256:" + strings.Repeat("a", 64), StorageKey: "workspace-revisions/revision.tar.gz", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}}}
 	handler := NewWorkspaceHelperHandler(nil)
 	handler.SetPrepareService(prepare)
 	request := httptest.NewRequest(http.MethodPost, "/api/internal/workspace-helper/prepare", strings.NewReader(`{"execution_job_id":"job-1","pod_uid":"pod-1"}`))
@@ -236,7 +236,7 @@ func TestWorkspaceHelperHandlerPublishMapsOutcomes(t *testing.T) {
 
 func TestWorkspaceHelperHandlerRestoreCacheOutcomes(t *testing.T) {
 	size := int64(len("cache archive"))
-	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: "sha256:" + strings.Repeat("a", 64), SizeBytes: &size}
+	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: "sha256:" + strings.Repeat("a", 64), StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}
 	for _, testCase := range []struct {
 		name  string
 		cache workspaceCacheHelper

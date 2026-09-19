@@ -95,6 +95,7 @@ func (r *WorkspaceRevisionRepository) MarkPublishedIfClaimed(ctx context.Context
 	revision.Status = domain.WorkspaceRevisionStatusPublished
 	revision.ContentDigest = workspaceStringPointer(publication.ContentDigest)
 	revision.StorageKey = workspaceStringPointer(publication.StorageKey)
+	revision.StorageProvider = workspaceStorageProviderPointer(publication.StorageProvider)
 	revision.SizeBytes = cloneInt64Pointer(publication.SizeBytes)
 	published := publishedAt.UTC()
 	revision.PublishedAt = &published
@@ -174,17 +175,37 @@ func sameRevisionCreate(left domain.WorkspaceRevision, right domain.WorkspaceRev
 }
 
 func samePublication(revision domain.WorkspaceRevision, publication domain.WorkspaceRevisionPublication) bool {
-	return sameStringPointer(revision.ContentDigest, workspaceStringPointer(publication.ContentDigest)) && sameStringPointer(revision.StorageKey, workspaceStringPointer(publication.StorageKey)) && sameInt64Pointer(revision.SizeBytes, publication.SizeBytes)
+	return sameStringPointer(revision.ContentDigest, workspaceStringPointer(publication.ContentDigest)) && sameStringPointer(revision.StorageKey, workspaceStringPointer(publication.StorageKey)) && sameStorageProviderPointer(revision.StorageProvider, workspaceStorageProviderPointer(publication.StorageProvider)) && sameInt64Pointer(revision.SizeBytes, publication.SizeBytes)
 }
 
 func cloneWorkspaceRevision(revision domain.WorkspaceRevision) domain.WorkspaceRevision {
 	revision.ParentRevisionID = cloneWorkspaceStringPointer(revision.ParentRevisionID)
 	revision.ContentDigest = cloneWorkspaceStringPointer(revision.ContentDigest)
 	revision.StorageKey = cloneWorkspaceStringPointer(revision.StorageKey)
+	revision.StorageProvider = cloneWorkspaceStorageProviderPointer(revision.StorageProvider)
 	revision.SizeBytes = cloneInt64Pointer(revision.SizeBytes)
 	revision.PublishedAt = cloneTimePointer(revision.PublishedAt)
 	revision.DeletedAt = cloneTimePointer(revision.DeletedAt)
 	return revision
+}
+
+func workspaceStorageProviderPointer(value domain.StorageProvider) *domain.StorageProvider {
+	return &value
+}
+
+func cloneWorkspaceStorageProviderPointer(value *domain.StorageProvider) *domain.StorageProvider {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func sameStorageProviderPointer(left *domain.StorageProvider, right *domain.StorageProvider) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 func cloneTimePointer(value *time.Time) *time.Time {

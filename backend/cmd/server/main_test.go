@@ -15,7 +15,6 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
-	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 type stubProjectRepository struct {
@@ -85,12 +84,12 @@ func TestWorkspaceHelperCompositionFailuresAndRevisionStoreSelection(t *testing.
 	if handlerErr == nil {
 		t.Fatal("expected invalid capability secret error")
 	}
-	if store := workspaceRevisionStoreFromConfig(config.Config{}); store != nil {
+	if store, storeErr := workspaceRevisionStoreFromConfig(config.Config{}); storeErr != nil || store != nil {
 		t.Fatalf("store=%T, want nil", store)
 	}
-	if store := workspaceRevisionStoreFromConfig(config.Config{WorkspaceRevisionStorageRoot: t.TempDir()}); store == nil {
+	if store, storeErr := workspaceRevisionStoreFromConfig(config.Config{WorkspaceRevisionStorageRoot: t.TempDir()}); storeErr != nil || store == nil {
 		t.Fatal("expected filesystem workspace revision store")
-	} else if _, ok := store.(*workspacepkg.FilesystemWorkspaceRevisionStore); !ok {
+	} else if store.Provider() != domain.StorageProviderFilesystem {
 		t.Fatalf("store=%T", store)
 	}
 }

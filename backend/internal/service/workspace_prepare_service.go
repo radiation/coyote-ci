@@ -113,10 +113,10 @@ func (s *WorkspacePrepareService) openPredecessor(ctx context.Context, job domai
 	if err != nil {
 		return WorkspacePreparePayload{}, err
 	}
-	if revision.Status != domain.WorkspaceRevisionStatusPublished || revision.ContentDigest == nil || revision.StorageKey == nil || revision.SizeBytes == nil {
+	if revision.Status != domain.WorkspaceRevisionStatusPublished || revision.ContentDigest == nil || revision.StorageKey == nil || revision.StorageProvider == nil || revision.SizeBytes == nil {
 		return WorkspacePreparePayload{}, ErrWorkspacePrepareRevisionIncomplete
 	}
-	publication := domain.WorkspaceRevisionPublication{ContentDigest: *revision.ContentDigest, StorageKey: *revision.StorageKey, SizeBytes: revision.SizeBytes}
+	publication := domain.WorkspaceRevisionPublication{ContentDigest: *revision.ContentDigest, StorageKey: *revision.StorageKey, StorageProvider: *revision.StorageProvider, SizeBytes: revision.SizeBytes}
 	if publicationErr := publication.Validate(); publicationErr != nil {
 		return WorkspacePreparePayload{}, ErrWorkspacePrepareRevisionIncomplete
 	}

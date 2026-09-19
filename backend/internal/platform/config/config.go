@@ -48,6 +48,10 @@ type Config struct {
 	CacheArchiveMaxUncompressedSizeMB      int
 	CacheArchiveMaxEntries                 int
 	WorkspaceRevisionStorageRoot           string
+	WorkspaceRevisionStorageProvider       string
+	WorkspaceRevisionGCSBucket             string
+	WorkspaceRevisionGCSPrefix             string
+	WorkspaceRevisionStorageStrict         bool
 	KubernetesCacheHelperEnabled           bool
 	KubernetesArtifactHelperEnabled        bool
 	WorkerCacheStorageProvider             string
@@ -140,6 +144,10 @@ func Load() Config {
 		CacheArchiveMaxUncompressedSizeMB:      getEnvIntFallback("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UNCOMPRESSED_SIZE_MB", "COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 4096),
 		CacheArchiveMaxEntries:                 getEnvIntFallback("COYOTE_WORKSPACE_HELPER_CACHE_MAX_ARCHIVE_ENTRIES", "COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 100000),
 		WorkspaceRevisionStorageRoot:           getEnv("COYOTE_WORKSPACE_REVISION_STORAGE_ROOT", ""),
+		WorkspaceRevisionStorageProvider:       getEnv("WORKSPACE_REVISION_STORAGE_PROVIDER", ""),
+		WorkspaceRevisionGCSBucket:             getEnv("WORKSPACE_REVISION_GCS_BUCKET", ""),
+		WorkspaceRevisionGCSPrefix:             getEnv("WORKSPACE_REVISION_GCS_PREFIX", ""),
+		WorkspaceRevisionStorageStrict:         getEnvBool("WORKSPACE_REVISION_STORAGE_STRICT", false),
 		KubernetesCacheHelperEnabled:           getEnvBool("COYOTE_KUBERNETES_CACHE_HELPER_ENABLED", false),
 		KubernetesArtifactHelperEnabled:        getEnvBool("COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED", false),
 		WorkerCacheStorageProvider:             getEnv("WORKER_CACHE_STORAGE_PROVIDER", ""),

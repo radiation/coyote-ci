@@ -82,6 +82,9 @@ Avoid multi-replica first-start races:
 - Do not have multiple backend/worker replicas all attempt first-time schema setup concurrently.
 - Use a single migration step in CI/CD or release automation, then roll out app replicas.
 - If rollout and migration are coupled, gate app startup on migration success.
+- For the future GKE control plane, run the immutable `migrate-runtime` image
+  with the same `DATABASE_URL_FILE` Secret Manager CSI mount and a Cloud SQL Auth
+  Proxy sidecar; require the migration Job to complete before server rollout.
 
 ## Operations notes
 

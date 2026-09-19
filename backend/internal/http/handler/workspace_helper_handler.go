@@ -345,7 +345,7 @@ func (h *WorkspaceHelperHandler) SaveCache(w http.ResponseWriter, r *http.Reques
 		body = limitedBody
 	}
 	size := r.ContentLength
-	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(r.Header.Get("Content-Digest")), SizeBytes: &size}
+	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(r.Header.Get("Content-Digest")), StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}
 	executionJobID := strings.TrimSpace(r.Header.Get("Coyote-Execution-Job-ID"))
 	podUID := strings.TrimSpace(r.Header.Get("Coyote-Pod-UID"))
 	preset := strings.TrimSpace(r.Header.Get("Coyote-Cache-Preset"))

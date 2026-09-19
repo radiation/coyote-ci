@@ -29,11 +29,11 @@ func TestWorkspaceRevisionRepositoryMarkPublishedIfClaimed(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT id, producing_execution_job_id.*FOR UPDATE").WithArgs("revision-1").WillReturnRows(workspaceRevisionMockRows(publishing))
 	mock.ExpectQuery("SELECT status = 'running' AND claim_token = \\$2.*FROM build_jobs").WithArgs("job-1", "claim-active").WillReturnRows(sqlmock.NewRows([]string{"owned"}).AddRow(true))
-	mock.ExpectQuery("UPDATE workspace_revisions.*status = 'published'").WithArgs("revision-1", "sha256:one", "revisions/revision-1", nil, publishedAt).WillReturnRows(workspaceRevisionMockRows(published))
+	mock.ExpectQuery("UPDATE workspace_revisions.*status = 'published'").WithArgs("revision-1", "sha256:one", "revisions/revision-1", domain.StorageProviderFilesystem, nil, publishedAt).WillReturnRows(workspaceRevisionMockRows(published))
 	mock.ExpectCommit()
 
 	repo := NewWorkspaceRevisionRepository(db)
-	revision, publishErr := repo.MarkPublishedIfClaimed(context.Background(), "revision-1", "claim-active", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1"}, publishedAt)
+	revision, publishErr := repo.MarkPublishedIfClaimed(context.Background(), "revision-1", "claim-active", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1", StorageProvider: domain.StorageProviderFilesystem}, publishedAt)
 	if publishErr != nil || revision.Status != domain.WorkspaceRevisionStatusPublished {
 		t.Fatalf("publish revision=%#v err=%v", revision, publishErr)
 	}
@@ -57,7 +57,7 @@ func TestWorkspaceRevisionRepositoryMarkPublishedIfClaimedRejectsStaleClaim(t *t
 	mock.ExpectRollback()
 
 	repo := NewWorkspaceRevisionRepository(db)
-	_, publishErr := repo.MarkPublishedIfClaimed(context.Background(), "revision-1", "claim-stale", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1"}, now)
+	_, publishErr := repo.MarkPublishedIfClaimed(context.Background(), "revision-1", "claim-stale", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1", StorageProvider: domain.StorageProviderFilesystem}, now)
 	if !errors.Is(publishErr, repository.ErrWorkspaceRevisionStaleClaim) {
 		t.Fatalf("expected stale claim, got %v", publishErr)
 	}
@@ -115,7 +115,7 @@ func TestWorkspaceRevisionRepositoryPublicationIsIdempotentAndDeletionIsTerminal
 	mock.ExpectQuery("UPDATE workspace_revisions.*status = 'deleted'").WithArgs("revision-1", deletedAt).WillReturnRows(workspaceRevisionMockRows(deleted))
 
 	repo := NewWorkspaceRevisionRepository(db)
-	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1"}
+	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1", StorageProvider: domain.StorageProviderFilesystem}
 	if _, publishErr := repo.MarkPublishedIfClaimed(context.Background(), "revision-1", "claim-expired", publication, now); publishErr != nil {
 		t.Fatalf("idempotent publication: %v", publishErr)
 	}
@@ -171,7 +171,7 @@ func TestWorkspaceRevisionRepositoryRejectsConflictingPublishedMetadata(t *testi
 	mock.ExpectRollback()
 
 	repo := NewWorkspaceRevisionRepository(db)
-	_, publishErr := repo.MarkPublishedIfClaimed(context.Background(), "revision-1", "claim-active", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:two", StorageKey: "revisions/revision-1"}, now)
+	_, publishErr := repo.MarkPublishedIfClaimed(context.Background(), "revision-1", "claim-active", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:two", StorageKey: "revisions/revision-1", StorageProvider: domain.StorageProviderFilesystem}, now)
 	if !errors.Is(publishErr, repository.ErrWorkspaceRevisionConflict) {
 		t.Fatalf("expected immutable metadata conflict, got %v", publishErr)
 	}
@@ -185,7 +185,7 @@ func TestWorkspaceRevisionRepositoryRejectsInvalidRequests(t *testing.T) {
 	if _, err := repo.CreatePublishing(context.Background(), domain.WorkspaceRevision{}); !errors.Is(err, domain.ErrInvalidWorkspaceRevision) {
 		t.Fatalf("expected invalid create request, got %v", err)
 	}
-	if _, err := repo.MarkPublishedIfClaimed(context.Background(), "", "claim", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1"}, time.Now().UTC()); !errors.Is(err, domain.ErrInvalidWorkspaceRevision) {
+	if _, err := repo.MarkPublishedIfClaimed(context.Background(), "", "claim", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1", StorageProvider: domain.StorageProviderFilesystem}, time.Now().UTC()); !errors.Is(err, domain.ErrInvalidWorkspaceRevision) {
 		t.Fatalf("expected invalid publication request, got %v", err)
 	}
 	if _, err := repo.MarkDeleted(context.Background(), "", time.Now().UTC()); !errors.Is(err, domain.ErrInvalidWorkspaceRevision) {
@@ -208,7 +208,7 @@ func TestWorkspaceRevisionRepositoryRejectsExpiredLease(t *testing.T) {
 	mock.ExpectRollback()
 
 	repo := NewWorkspaceRevisionRepository(db)
-	_, publishErr := repo.MarkPublishedIfClaimed(context.Background(), "revision-1", "claim-expired", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1"}, now)
+	_, publishErr := repo.MarkPublishedIfClaimed(context.Background(), "revision-1", "claim-expired", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1", StorageProvider: domain.StorageProviderFilesystem}, now)
 	if !errors.Is(publishErr, repository.ErrWorkspaceRevisionStaleClaim) {
 		t.Fatalf("expected expired lease to reject publication, got %v", publishErr)
 	}
@@ -285,7 +285,7 @@ func TestWorkspaceRevisionRepositoryMapsNotFoundResults(t *testing.T) {
 	if _, err := repo.GetPublishedByBuildNode(context.Background(), "build-1", "compile"); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
 		t.Fatalf("expected missing published lookup, got %v", err)
 	}
-	if _, err := repo.MarkPublishedIfClaimed(context.Background(), "missing-revision", "claim", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1"}, time.Now().UTC()); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
+	if _, err := repo.MarkPublishedIfClaimed(context.Background(), "missing-revision", "claim", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1", StorageProvider: domain.StorageProviderFilesystem}, time.Now().UTC()); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
 		t.Fatalf("expected missing revision publication, got %v", err)
 	}
 	if expectationErr := mock.ExpectationsWereMet(); expectationErr != nil {
@@ -338,11 +338,12 @@ func TestWorkspaceRevisionComparisonHelpers(t *testing.T) {
 	if sameWorkspaceRevisionCreate(left, right) {
 		t.Fatal("expected distinct parent revision")
 	}
-	published := domain.WorkspaceRevision{ContentDigest: stringValue("sha256:one"), StorageKey: stringValue("revisions/1"), SizeBytes: &size}
-	if !sameWorkspaceRevisionPublication(published, domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1", SizeBytes: &size}) {
+	provider := domain.StorageProviderFilesystem
+	published := domain.WorkspaceRevision{ContentDigest: stringValue("sha256:one"), StorageKey: stringValue("revisions/1"), StorageProvider: &provider, SizeBytes: &size}
+	if !sameWorkspaceRevisionPublication(published, domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}) {
 		t.Fatal("expected equivalent publication")
 	}
-	if sameWorkspaceRevisionPublication(published, domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1"}) {
+	if sameWorkspaceRevisionPublication(published, domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1", StorageProvider: domain.StorageProviderFilesystem}) {
 		t.Fatal("expected distinct optional size")
 	}
 }
@@ -352,9 +353,13 @@ func stringValue(value string) *string {
 }
 
 func workspaceRevisionMockRows(row []driver.Value) *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"id", "producing_execution_job_id", "build_id", "node_id", "attempt_number", "parent_revision_id", "status", "content_digest", "storage_key", "size_bytes", "created_at", "published_at", "deleted_at"}).AddRow(row...)
+	return sqlmock.NewRows([]string{"id", "producing_execution_job_id", "build_id", "node_id", "attempt_number", "parent_revision_id", "status", "content_digest", "storage_key", "storage_provider", "size_bytes", "created_at", "published_at", "deleted_at"}).AddRow(row...)
 }
 
 func workspaceRevisionMockRow(id string, jobID string, buildID string, nodeID string, attempt int, status string, digest driver.Value, storageKey driver.Value, size driver.Value, createdAt time.Time, publishedAt driver.Value, deletedAt driver.Value) []driver.Value {
-	return []driver.Value{id, jobID, buildID, nodeID, attempt, nil, status, digest, storageKey, size, createdAt, publishedAt, deletedAt}
+	var storageProvider driver.Value
+	if storageKey != nil {
+		storageProvider = string(domain.StorageProviderFilesystem)
+	}
+	return []driver.Value{id, jobID, buildID, nodeID, attempt, nil, status, digest, storageKey, storageProvider, size, createdAt, publishedAt, deletedAt}
 }

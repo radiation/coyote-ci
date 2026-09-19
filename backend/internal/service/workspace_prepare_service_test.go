@@ -13,8 +13,9 @@ import (
 
 func TestWorkspacePrepareServiceOpenPredecessorStreamsPublishedRevision(t *testing.T) {
 	size := int64(7)
+	storageProvider := domain.StorageProviderFilesystem
 	harness := newWorkspacePrepareServiceForTest(t, domain.ExecutionJob{ID: "job-2", BuildID: "build-1", ResolvedSpecJSON: `{"workspace_input":{"mode":"predecessor","producer_node_id":"compile"}}`})
-	harness.revisions.revision = domain.WorkspaceRevision{Status: domain.WorkspaceRevisionStatusPublished, ContentDigest: workspacePrepareStringPointer("sha256:abc"), StorageKey: workspacePrepareStringPointer("workspace-revisions/revision-1.tar.gz"), SizeBytes: &size}
+	harness.revisions.revision = domain.WorkspaceRevision{Status: domain.WorkspaceRevisionStatusPublished, ContentDigest: workspacePrepareStringPointer("sha256:abc"), StorageKey: workspacePrepareStringPointer("workspace-revisions/revision-1.tar.gz"), StorageProvider: &storageProvider, SizeBytes: &size}
 	harness.archives.contents = []byte("archive")
 
 	prepared, err := harness.service.Open(context.Background(), "capability", "job-2", "pod-1")
@@ -72,8 +73,9 @@ func TestWorkspacePrepareServiceOpenSourceUsesSourceArchivePreparer(t *testing.T
 
 func TestWorkspacePrepareServiceOpenFanInUsesCommonAncestorRevision(t *testing.T) {
 	size := int64(7)
+	storageProvider := domain.StorageProviderFilesystem
 	harness := newWorkspacePrepareServiceForTest(t, domain.ExecutionJob{ID: "join-job", BuildID: "build-1", DependsOnNodeIDs: []string{"branch-a", "branch-b"}, ResolvedSpecJSON: `{"workspace_input":{"mode":"fan_in","common_ancestor_node_id":"root"}}`})
-	harness.revisions.revision = domain.WorkspaceRevision{Status: domain.WorkspaceRevisionStatusPublished, ContentDigest: workspacePrepareStringPointer("sha256:root"), StorageKey: workspacePrepareStringPointer("workspace-revisions/root.tar.gz"), SizeBytes: &size}
+	harness.revisions.revision = domain.WorkspaceRevision{Status: domain.WorkspaceRevisionStatusPublished, ContentDigest: workspacePrepareStringPointer("sha256:root"), StorageKey: workspacePrepareStringPointer("workspace-revisions/root.tar.gz"), StorageProvider: &storageProvider, SizeBytes: &size}
 	harness.archives.contents = []byte("archive")
 
 	prepared, err := harness.service.Open(context.Background(), "capability", "join-job", "pod-1")
@@ -246,6 +248,6 @@ func (f *workspacePrepareSourceFake) OpenSourceArchive(context.Context, domain.B
 		return WorkspacePreparePayload{}, f.err
 	}
 	size := int64(len(f.contents))
-	return WorkspacePreparePayload{Archive: io.NopCloser(bytes.NewReader(f.contents)), Publication: domain.WorkspaceRevisionPublication{ContentDigest: "sha256:source", StorageKey: "workspace-revisions/source.tar.gz", SizeBytes: &size}}, nil
+	return WorkspacePreparePayload{Archive: io.NopCloser(bytes.NewReader(f.contents)), Publication: domain.WorkspaceRevisionPublication{ContentDigest: "sha256:source", StorageKey: "workspace-revisions/source.tar.gz", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}}, nil
 }
 func workspacePrepareStringPointer(value string) *string { return &value }

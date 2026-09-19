@@ -445,11 +445,20 @@ func newWorkspaceHelperHandler(cfg config.Config, executionJobs repository.Execu
 	})
 }
 
-func workspaceRevisionStoreFromConfig(cfg config.Config) workspacepkg.WorkspaceRevisionStore {
-	if strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) == "" {
-		return nil
+func workspaceRevisionStoreFromConfig(cfg config.Config) (workspacepkg.WorkspaceRevisionStore, error) {
+	provider := strings.ToLower(strings.TrimSpace(cfg.WorkspaceRevisionStorageProvider))
+	if provider == "" || provider == string(domain.StorageProviderFilesystem) {
+		if strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) == "" {
+			return nil, nil
+		}
 	}
-	return workspacepkg.NewFilesystemWorkspaceRevisionStore(cfg.WorkspaceRevisionStorageRoot)
+	return workspacepkg.ResolveWorkspaceRevisionStore(workspacepkg.WorkspaceRevisionStoreConfig{
+		Provider:    cfg.WorkspaceRevisionStorageProvider,
+		StorageRoot: cfg.WorkspaceRevisionStorageRoot,
+		GCSBucket:   cfg.WorkspaceRevisionGCSBucket,
+		GCSPrefix:   cfg.WorkspaceRevisionGCSPrefix,
+		Strict:      cfg.WorkspaceRevisionStorageStrict,
+	})
 }
 
 func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler *handler.WorkspaceHelperHandler, executionJobs repository.ExecutionJobRepository, builds repository.BuildRepository, revisions repository.WorkspaceRevisionRepository, checkoutResolver *buildsvc.RepositoryAwareCheckoutResolver, dependencies ...any) error {
@@ -472,7 +481,10 @@ func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler 
 		}
 		return nil
 	}
-	workspaceRevisionStore := workspaceRevisionStoreFromConfig(cfg)
+	workspaceRevisionStore, storeErr := workspaceRevisionStoreFromConfig(cfg)
+	if storeErr != nil {
+		return storeErr
+	}
 	archiveReader, archiveReaderOK := workspaceRevisionStore.(workspacepkg.WorkspaceRevisionArchiveReader)
 	if workspaceRevisionStore == nil || !archiveReaderOK {
 		return errors.New("workspace helper prepare requires workspace revision storage")

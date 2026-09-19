@@ -191,7 +191,7 @@ func (m *HostWorkspaceMaterializer) restorePredecessorWorkspace(ctx context.Cont
 	if err != nil {
 		return MaterializedWorkspace{}, fmt.Errorf("resolving published predecessor workspace: %w", err)
 	}
-	if revision.ContentDigest == nil || revision.StorageKey == nil {
+	if revision.ContentDigest == nil || revision.StorageKey == nil || revision.StorageProvider == nil {
 		return MaterializedWorkspace{}, fmt.Errorf("restoring predecessor workspace: published revision is incomplete")
 	}
 
@@ -206,9 +206,10 @@ func (m *HostWorkspaceMaterializer) restorePredecessorWorkspace(ctx context.Cont
 	}
 
 	publication := domain.WorkspaceRevisionPublication{
-		ContentDigest: *revision.ContentDigest,
-		StorageKey:    *revision.StorageKey,
-		SizeBytes:     revision.SizeBytes,
+		ContentDigest:   *revision.ContentDigest,
+		StorageKey:      *revision.StorageKey,
+		StorageProvider: *revision.StorageProvider,
+		SizeBytes:       revision.SizeBytes,
 	}
 	if err := m.revisionStore.Restore(ctx, publication, workspacePath); err != nil {
 		return MaterializedWorkspace{}, fmt.Errorf("restoring published predecessor workspace: %w", err)
