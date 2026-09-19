@@ -153,3 +153,51 @@ func TestCacheEntryRepository_ValidatePublishClaim(t *testing.T) {
 		t.Fatalf("SQL expectations: %v", expectationsErr)
 	}
 }
+
+func TestCacheEntryRepository_ValidatePublishClaimOwnership(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	repo := NewCacheEntryRepository(db)
+	claim := domain.CachePublishClaim{JobID: "job-1", Preset: "go-module", CacheKey: "key", ClaimToken: "claim-token"}
+	mock.ExpectQuery("SELECT TRUE").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, "execution-1").
+		WillReturnRows(sqlmock.NewRows([]string{"valid"}).AddRow(true))
+	if ownershipErr := repo.ValidatePublishClaimOwnership(context.Background(), claim, "execution-1"); ownershipErr != nil {
+		t.Fatalf("validate ownership: %v", ownershipErr)
+	}
+	mock.ExpectQuery("SELECT TRUE").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, "execution-2").
+		WillReturnError(sql.ErrNoRows)
+	if ownershipErr := repo.ValidatePublishClaimOwnership(context.Background(), claim, "execution-2"); !errors.Is(ownershipErr, repository.ErrCachePublishClaimStale) {
+		t.Fatalf("wrong claimant ownership error=%v", ownershipErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("sql expectations: %v", expectationsErr)
+	}
+}
+
+func TestCacheEntryRepository_CompletePublishClaimRejectsReplacement(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	repo := NewCacheEntryRepository(db)
+	claim := domain.CachePublishClaim{JobID: "job-1", Preset: "go-module", CacheKey: "key", ClaimToken: "claim-token"}
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT claim_token FROM cache_publish_claims").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey).
+		WillReturnRows(sqlmock.NewRows([]string{"claim_token"}).AddRow("replacement-token"))
+	mock.ExpectRollback()
+	if _, completeErr := repo.CompletePublishClaim(context.Background(), claim, repository.CacheEntryUpsertInput{}, time.Now().UTC()); !errors.Is(completeErr, repository.ErrCachePublishClaimReplaced) {
+		t.Fatalf("complete claim error=%v, want replaced", completeErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("sql expectations: %v", expectationsErr)
+	}
+}

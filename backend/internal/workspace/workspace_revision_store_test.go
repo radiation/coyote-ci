@@ -118,6 +118,30 @@ func TestArchiveDirectoryCreatesRestorableTransportArchive(t *testing.T) {
 	}
 }
 
+func TestValidateArchiveWithMetricsReportsValidatedArchive(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "source.txt"), []byte("workspace"), 0o644); writeErr != nil {
+		t.Fatalf("write source: %v", writeErr)
+	}
+	archive, publication, archiveErr := ArchiveDirectory(context.Background(), sourceRoot)
+	if archiveErr != nil {
+		t.Fatalf("archive directory: %v", archiveErr)
+	}
+	archiveBytes, readErr := io.ReadAll(archive)
+	closeErr := archive.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read archive=%v close=%v", readErr, closeErr)
+	}
+
+	metrics, validateErr := ValidateArchiveWithMetrics(context.Background(), bytes.NewReader(archiveBytes), publication, WorkspaceRevisionRestoreLimits{})
+	if validateErr != nil {
+		t.Fatalf("validate archive: %v", validateErr)
+	}
+	if metrics.CompressedBytes != int64(len(archiveBytes)) || metrics.UncompressedBytes != int64(len("workspace")) || metrics.Entries != 2 {
+		t.Fatalf("metrics=%+v", metrics)
+	}
+}
+
 func TestRestoreArchiveWithLimitsRejectsCompressedExpansionAndExcessEntries(t *testing.T) {
 	sourceRoot := t.TempDir()
 	if writeErr := os.WriteFile(filepath.Join(sourceRoot, "compressible.txt"), []byte(strings.Repeat("x", 64*1024)), 0o644); writeErr != nil {

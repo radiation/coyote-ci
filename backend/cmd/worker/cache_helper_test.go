@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -661,6 +662,58 @@ func TestRunCacheHelperPolicyAndConfiguration(t *testing.T) {
 	t.Setenv(cacheHelperPolicy, string(domain.CachePolicyPull))
 	if saveErr := runCacheSave(context.Background()); saveErr != nil {
 		t.Fatalf("pull-policy save: %v", saveErr)
+	}
+}
+
+func TestCacheComponentPolicies(t *testing.T) {
+	testCases := []struct {
+		name    string
+		value   string
+		want    map[string]domain.CachePolicy
+		wantErr string
+	}{
+		{name: "absent"},
+		{name: "malformed", value: "{", wantErr: "parse cache component policies"},
+		{name: "empty", value: "{}", wantErr: "cannot be empty"},
+		{name: "blank component", value: `{"":"pull"}`, wantErr: "invalid cache component policy"},
+		{name: "invalid policy", value: `{"go-module":"invalid"}`, wantErr: "invalid cache component policy"},
+		{name: "normalized", value: `{"go-module":" PULL ","go-build":"push"}`, want: map[string]domain.CachePolicy{"go-module": domain.CachePolicyPull, "go-build": domain.CachePolicyPush}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv(cacheHelperComponentPolicies, testCase.value)
+			policies, policyErr := cacheComponentPolicies()
+			if testCase.wantErr != "" {
+				if policyErr == nil || !strings.Contains(policyErr.Error(), testCase.wantErr) {
+					t.Fatalf("component policy error=%v, want %q", policyErr, testCase.wantErr)
+				}
+				return
+			}
+			if policyErr != nil || !reflect.DeepEqual(policies, testCase.want) {
+				t.Fatalf("component policies=%#v err=%v, want %#v", policies, policyErr, testCase.want)
+			}
+		})
+	}
+}
+
+func TestCachePolicyOperationEligibility(t *testing.T) {
+	testCases := []struct {
+		policy      domain.CachePolicy
+		wantRestore bool
+		wantSave    bool
+	}{
+		{policy: domain.CachePolicyOff},
+		{policy: domain.CachePolicyPull, wantRestore: true},
+		{policy: domain.CachePolicyPush, wantSave: true},
+		{policy: domain.CachePolicyPullPush, wantRestore: true, wantSave: true},
+	}
+	for _, testCase := range testCases {
+		if got := cachePolicyAllowsRestore(testCase.policy); got != testCase.wantRestore {
+			t.Fatalf("restore eligibility for %q=%t, want %t", testCase.policy, got, testCase.wantRestore)
+		}
+		if got := cachePolicyAllowsSave(testCase.policy); got != testCase.wantSave {
+			t.Fatalf("save eligibility for %q=%t, want %t", testCase.policy, got, testCase.wantSave)
+		}
 	}
 }
 
