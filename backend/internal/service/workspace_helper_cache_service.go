@@ -161,7 +161,7 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 	metrics := cacheTransferMetrics{operation: "save", preset: preset, cacheKey: cacheKey, compressedBytes: valueOrZero(publication.SizeBytes)}
 	defer func() { logCacheTransferMetrics(metrics, time.Since(started)) }()
 	lookupStarted := time.Now()
-	ready := s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication.ContentDigest)
+	ready := s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication)
 	metrics.metadataDuration += time.Since(lookupStarted)
 	if ready {
 		metrics.outcome = "skipped_publish"
@@ -191,7 +191,7 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 		}
 	}()
 	lookupStarted = time.Now()
-	ready = s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication.ContentDigest)
+	ready = s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication)
 	metrics.metadataDuration += time.Since(lookupStarted)
 	if ready {
 		metrics.outcome = "skipped_publish"
@@ -356,9 +356,19 @@ func directCacheArchiveDigest(entry domain.CacheEntry) (string, bool) {
 	return "sha256:" + checksum, true
 }
 
-func (s *WorkspaceHelperCacheService) cacheContentIsReady(ctx context.Context, jobID, preset, cacheKey, contentDigest string) bool {
+func (s *WorkspaceHelperCacheService) cacheContentIsReady(ctx context.Context, jobID, preset, cacheKey string, publication domain.WorkspaceRevisionPublication) bool {
 	entry, found, err := s.entries.FindReadyByKey(ctx, jobID, preset, cacheKey)
-	return err == nil && found && strings.TrimSpace(entry.ContentDigest) == strings.TrimSpace(contentDigest)
+	if err != nil || !found || publication.SizeBytes == nil {
+		return false
+	}
+	contentDigest := strings.TrimSpace(publication.ContentDigest)
+	return entry.Status == domain.CacheEntryStatusReady &&
+		entry.ContentDigest == contentDigest &&
+		entry.Compression == "tar.gz" &&
+		entry.Checksum == strings.TrimPrefix(contentDigest, "sha256:") &&
+		entry.SizeBytes == *publication.SizeBytes &&
+		entry.ObjectKey == cacheObjectKey(jobID, preset, cacheKey, contentDigest) &&
+		entry.StorageProvider == s.store.Provider()
 }
 
 func (s *WorkspaceHelperCacheService) authorizeAndValidate(ctx context.Context, token string, executionJobID string, podUID string, preset string, cacheKey string, role domain.WorkspaceHelperRole) (domain.Build, domain.BuildStep, error) {
