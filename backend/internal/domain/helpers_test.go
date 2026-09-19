@@ -31,13 +31,17 @@ func TestStepCacheConfigCloneAndPolicyNormalization(t *testing.T) {
 	if (*StepCacheConfig)(nil).Clone() != nil {
 		t.Fatal("expected nil cache config clone to stay nil")
 	}
-	original := &StepCacheConfig{Preset: " node ", Policy: CachePolicyPull}
+	original := &StepCacheConfig{Preset: " node ", Policy: CachePolicyPull, ComponentPolicies: map[string]CachePolicy{"node": CachePolicyPull}}
 	clone := original.Clone()
 	if clone == original {
 		t.Fatal("expected clone to allocate a new config")
 	}
 	if clone.Preset != "node" || clone.Policy != CachePolicyPull {
 		t.Fatalf("expected trimmed clone, got %+v", clone)
+	}
+	clone.ComponentPolicies["node"] = CachePolicyPush
+	if original.ComponentPolicies["node"] != CachePolicyPull {
+		t.Fatalf("clone mutated original component policy: %#v", original.ComponentPolicies)
 	}
 
 	policyCases := map[CachePolicy]CachePolicy{

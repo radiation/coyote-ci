@@ -14,8 +14,9 @@ const (
 // StepCacheConfig is the resolved cache configuration consumed by execution.
 // It does not expose storage backend concerns.
 type StepCacheConfig struct {
-	Preset string      `json:"preset,omitempty"`
-	Policy CachePolicy `json:"policy,omitempty"`
+	Preset            string                 `json:"preset,omitempty"`
+	Policy            CachePolicy            `json:"policy,omitempty"`
+	ComponentPolicies map[string]CachePolicy `json:"component_policies,omitempty"`
 }
 
 func (c *StepCacheConfig) Clone() *StepCacheConfig {
@@ -25,6 +26,12 @@ func (c *StepCacheConfig) Clone() *StepCacheConfig {
 	out := &StepCacheConfig{
 		Preset: strings.TrimSpace(c.Preset),
 		Policy: c.Policy,
+	}
+	if len(c.ComponentPolicies) > 0 {
+		out.ComponentPolicies = make(map[string]CachePolicy, len(c.ComponentPolicies))
+		for component, policy := range c.ComponentPolicies {
+			out.ComponentPolicies[component] = NormalizeCachePolicy(policy)
+		}
 	}
 	return out
 }

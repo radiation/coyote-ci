@@ -398,6 +398,24 @@ func validateCacheDef(fieldPrefix string, def *CacheDef) ValidationErrors {
 		errs = append(errs, ValidationError{Field: fieldPrefix + ".preset", Message: "preset is required when cache is set"})
 	} else if !cachepkg.IsSupportedPreset(preset) {
 		errs = append(errs, ValidationError{Field: fieldPrefix + ".preset", Message: fmt.Sprintf("unknown cache preset %q", preset)})
+	} else {
+		components, componentErr := cachepkg.ResolvePresetComponents(preset, ".")
+		if componentErr != nil {
+			errs = append(errs, ValidationError{Field: fieldPrefix + ".preset", Message: componentErr.Error()})
+		} else {
+			allowedComponents := make(map[string]struct{}, len(components))
+			for _, component := range components {
+				allowedComponents[component.Name] = struct{}{}
+			}
+			for component, componentPolicy := range def.Components {
+				if _, ok := allowedComponents[component]; !ok {
+					errs = append(errs, ValidationError{Field: fieldPrefix + ".components." + component, Message: fmt.Sprintf("unknown cache component %q for preset %q", component, preset)})
+				}
+				if !cachepkg.IsSupportedPolicy(componentPolicy) {
+					errs = append(errs, ValidationError{Field: fieldPrefix + ".components." + component, Message: "policy must be one of: pull-push, pull, push, off"})
+				}
+			}
+		}
 	}
 
 	policy := strings.TrimSpace(def.Policy)

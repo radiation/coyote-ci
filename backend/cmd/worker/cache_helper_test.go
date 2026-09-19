@@ -9,8 +9,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -66,6 +68,8 @@ func TestRunCacheSaveAfterBuildSavesAfterSuccessfulBuild(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/internal/workspace-helper/capabilities":
 			_, _ = w.Write([]byte(`{"data":{"capability":"save-capability"}}`))
+		case "/api/internal/workspace-helper/cache/publish-claim":
+			writeAcquiredCacheClaim(w)
 		case "/api/internal/workspace-helper/cache/save":
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -98,6 +102,8 @@ func TestRunCacheSaveAfterBuildWaitsForBuildTermination(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/internal/workspace-helper/capabilities":
 			_, _ = w.Write([]byte(`{"data":{"capability":"save-capability"}}`))
+		case "/api/internal/workspace-helper/cache/publish-claim":
+			writeAcquiredCacheClaim(w)
 		case "/api/internal/workspace-helper/cache/save":
 			saveRequests++
 			w.WriteHeader(http.StatusNoContent)
@@ -306,6 +312,8 @@ func TestCacheHelperRoundTripRestoresSavedCache(t *testing.T) {
 			w.Header().Set("Content-Digest", savedDigest)
 			w.Header().Set("Content-Length", strconv.Itoa(len(savedArchive)))
 			_, _ = w.Write(savedArchive)
+		case "/api/internal/workspace-helper/cache/publish-claim":
+			writeAcquiredCacheClaim(w)
 		case "/api/internal/workspace-helper/cache/save":
 			archive, readErr := io.ReadAll(r.Body)
 			if readErr != nil {
@@ -348,11 +356,24 @@ func TestCacheHelperRoundTripRestoresSavedCache(t *testing.T) {
 }
 
 func TestRunCacheSaveExchangesCapabilityAndUploadsArchive(t *testing.T) {
+	originalArchive := archiveCacheDirectory
+	t.Cleanup(func() { archiveCacheDirectory = originalArchive })
+	archiveCalls := 0
+	archiveCacheDirectory = func(ctx context.Context, source string) (io.ReadCloser, domain.WorkspaceRevisionPublication, error) {
+		archiveCalls++
+		return workspacepkg.ArchiveDirectory(ctx, source)
+	}
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/internal/workspace-helper/capabilities":
 			_, _ = w.Write([]byte(`{"data":{"capability":"save-capability"}}`))
+		case "/api/internal/workspace-helper/cache/publish-claim":
+			writeAcquiredCacheClaim(w)
 		case "/api/internal/workspace-helper/cache/save":
+			if r.Header.Get("Coyote-Cache-Claim-Token") != "claim-token" {
+				t.Fatalf("save claim token=%q", r.Header.Get("Coyote-Cache-Claim-Token"))
+			}
 			if r.Header.Get("Authorization") != "Bearer save-capability" || r.Header.Get("Coyote-Cache-Preset") != "go" {
 				t.Fatalf("save headers=%v", r.Header)
 			}
@@ -373,8 +394,89 @@ func TestRunCacheSaveExchangesCapabilityAndUploadsArchive(t *testing.T) {
 	if writeErr := os.WriteFile(filepath.Join(root, "paths", "000", "module"), []byte("cached"), 0o644); writeErr != nil {
 		t.Fatalf("write cache: %v", writeErr)
 	}
+	if preparedErr := savePreparedCacheKey(os.Getenv(cacheHelperStateRoot), "go:prepared"); preparedErr != nil {
+		t.Fatalf("prepare cache key: %v", preparedErr)
+	}
 	if saveErr := runCacheSave(context.Background()); saveErr != nil {
 		t.Fatalf("save cache: %v", saveErr)
+	}
+	if archiveCalls != 1 {
+		t.Fatalf("archive calls=%d, want 1", archiveCalls)
+	}
+}
+
+func TestRunCacheHelperSkipsComponentsExcludedByPolicy(t *testing.T) {
+	var restored []string
+	var claimed []string
+	var uploaded []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/internal/workspace-helper/capabilities":
+			_, _ = w.Write([]byte(`{"data":{"capability":"cache-capability"}}`))
+		case "/api/internal/workspace-helper/cache/restore":
+			var request struct {
+				Preset string `json:"preset"`
+			}
+			if decodeErr := json.NewDecoder(r.Body).Decode(&request); decodeErr != nil {
+				t.Fatalf("decode restore request: %v", decodeErr)
+			}
+			restored = append(restored, request.Preset)
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/internal/workspace-helper/cache/publish-claim":
+			var request struct {
+				Preset string `json:"preset"`
+			}
+			if decodeErr := json.NewDecoder(r.Body).Decode(&request); decodeErr != nil {
+				t.Fatalf("decode claim request: %v", decodeErr)
+			}
+			claimed = append(claimed, request.Preset)
+			writeAcquiredCacheClaim(w)
+		case "/api/internal/workspace-helper/cache/save":
+			uploaded = append(uploaded, r.Header.Get("Coyote-Cache-Preset"))
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	root := configureCacheHelperForTest(t, server.URL, domain.CachePolicyPull)
+	t.Setenv(cacheHelperComponents, "split")
+	t.Setenv(cacheHelperBuildImage, "golang:1.27.1")
+	t.Setenv(cacheHelperComponentPolicies, `{"go-module":"pull-push","go-build":"push"}`)
+	originalArchive := archiveCacheDirectory
+	t.Cleanup(func() { archiveCacheDirectory = originalArchive })
+	archiveCalls := 0
+	archiveCacheDirectory = func(ctx context.Context, source string) (io.ReadCloser, domain.WorkspaceRevisionPublication, error) {
+		archiveCalls++
+		return workspacepkg.ArchiveDirectory(ctx, source)
+	}
+
+	if restoreErr := runCacheRestore(context.Background()); restoreErr != nil {
+		t.Fatalf("restore cache: %v", restoreErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(root, "paths", "000", "module"), []byte("cached"), 0o644); writeErr != nil {
+		t.Fatalf("write module cache: %v", writeErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(root, "paths", "001", "build"), []byte("cached"), 0o644); writeErr != nil {
+		t.Fatalf("write build cache: %v", writeErr)
+	}
+	if saveErr := runCacheSave(context.Background()); saveErr != nil {
+		t.Fatalf("save cache: %v", saveErr)
+	}
+	if len(restored) != 1 || restored[0] != "go-module" {
+		t.Fatalf("restore requests=%#v, want go-module only", restored)
+	}
+	if strings.Join(claimed, ",") != "go-module,go-build" || strings.Join(uploaded, ",") != "go-module,go-build" || archiveCalls != 2 {
+		t.Fatalf("claims=%#v uploads=%#v archive calls=%d", claimed, uploaded, archiveCalls)
+	}
+
+	t.Setenv(cacheHelperComponentPolicies, `{"go-module":"pull","go-build":"pull-push"}`)
+	if saveErr := runCacheSave(context.Background()); saveErr != nil {
+		t.Fatalf("save with build-only publication: %v", saveErr)
+	}
+	if strings.Join(claimed, ",") != "go-module,go-build,go-build" || strings.Join(uploaded, ",") != "go-module,go-build,go-build" || archiveCalls != 3 {
+		t.Fatalf("claims=%#v uploads=%#v archive calls=%d, want go-build only in second save", claimed, uploaded, archiveCalls)
 	}
 }
 
@@ -393,6 +495,8 @@ func TestRunCacheSaveUsesKeyPreparedBeforeBuild(t *testing.T) {
 			}
 			preparedKey = request.CacheKey
 			w.WriteHeader(http.StatusNoContent)
+		case "/api/internal/workspace-helper/cache/publish-claim":
+			writeAcquiredCacheClaim(w)
 		case "/api/internal/workspace-helper/cache/save":
 			if savedKey := r.Header.Get("Coyote-Cache-Key"); savedKey != preparedKey {
 				t.Fatalf("saved key=%q, prepared key=%q", savedKey, preparedKey)
@@ -418,6 +522,129 @@ func TestRunCacheSaveUsesKeyPreparedBeforeBuild(t *testing.T) {
 	}
 }
 
+func TestSaveCacheComponentConcurrentLoserSkipsArchiveAndUpload(t *testing.T) {
+	var mutex sync.Mutex
+	claims := 0
+	uploads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/internal/workspace-helper/cache/publish-claim":
+			mutex.Lock()
+			claims++
+			claimNumber := claims
+			mutex.Unlock()
+			if claimNumber == 1 {
+				writeAcquiredCacheClaim(w)
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{"outcome":"not_acquired"}}`))
+		case "/api/internal/workspace-helper/cache/save":
+			mutex.Lock()
+			uploads++
+			mutex.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	originalArchive := archiveCacheDirectory
+	t.Cleanup(func() { archiveCacheDirectory = originalArchive })
+	archiveCalls := 0
+	archiveCacheDirectory = func(ctx context.Context, source string) (io.ReadCloser, domain.WorkspaceRevisionPublication, error) {
+		mutex.Lock()
+		archiveCalls++
+		mutex.Unlock()
+		return workspacepkg.ArchiveDirectory(ctx, source)
+	}
+	source := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(source, "cache"), []byte("content"), 0o644); writeErr != nil {
+		t.Fatalf("write cache source: %v", writeErr)
+	}
+
+	var waitGroup sync.WaitGroup
+	saveErrors := make(chan error, 2)
+	for range 2 {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			saveErrors <- saveCacheComponent(context.Background(), server.URL, "capability", "execution-job", "pod-uid", source, "go", "go:key")
+		}()
+	}
+	waitGroup.Wait()
+	close(saveErrors)
+	for saveErr := range saveErrors {
+		if saveErr != nil {
+			t.Fatalf("save publisher: %v", saveErr)
+		}
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if claims != 2 || archiveCalls != 1 || uploads != 1 {
+		t.Fatalf("claims=%d archive calls=%d uploads=%d, want 2, 1, and 1", claims, archiveCalls, uploads)
+	}
+}
+
+func TestSaveCacheComponentArchiveFailureReleasesClaim(t *testing.T) {
+	var releases int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/internal/workspace-helper/cache/publish-claim":
+			writeAcquiredCacheClaim(w)
+		case "/api/internal/workspace-helper/cache/publish-claim/release":
+			releases++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	originalArchive := archiveCacheDirectory
+	t.Cleanup(func() { archiveCacheDirectory = originalArchive })
+	archiveFailure := errors.New("archive failed")
+	archiveCacheDirectory = func(context.Context, string) (io.ReadCloser, domain.WorkspaceRevisionPublication, error) {
+		return nil, domain.WorkspaceRevisionPublication{}, archiveFailure
+	}
+
+	saveErr := saveCacheComponent(context.Background(), server.URL, "capability", "execution-job", "pod-uid", t.TempDir(), "go", "go:key")
+	if !errors.Is(saveErr, archiveFailure) {
+		t.Fatalf("save error=%v, want archive failure", saveErr)
+	}
+	if releases != 1 {
+		t.Fatalf("claim releases=%d, want 1", releases)
+	}
+}
+
+func TestSaveCacheComponentTransportFailureAttemptsReleaseWithoutMaskingError(t *testing.T) {
+	var releases int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/internal/workspace-helper/cache/publish-claim":
+			writeAcquiredCacheClaim(w)
+		case "/api/internal/workspace-helper/cache/save":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/api/internal/workspace-helper/cache/publish-claim/release":
+			releases++
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	source := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(source, "cache"), []byte("content"), 0o644); writeErr != nil {
+		t.Fatalf("write cache source: %v", writeErr)
+	}
+
+	saveErr := saveCacheComponent(context.Background(), server.URL, "capability", "execution-job", "pod-uid", source, "go", "go:key")
+	if saveErr == nil || !strings.Contains(saveErr.Error(), "cache save returned HTTP 500") {
+		t.Fatalf("save error=%v, want original save HTTP error", saveErr)
+	}
+	if releases != 1 {
+		t.Fatalf("claim releases=%d, want 1", releases)
+	}
+}
+
 func TestRunCacheHelperPolicyAndConfiguration(t *testing.T) {
 	if restoreErr := runCacheRestore(context.Background()); restoreErr == nil {
 		t.Fatal("expected restore configuration error")
@@ -436,6 +663,62 @@ func TestRunCacheHelperPolicyAndConfiguration(t *testing.T) {
 	if saveErr := runCacheSave(context.Background()); saveErr != nil {
 		t.Fatalf("pull-policy save: %v", saveErr)
 	}
+}
+
+func TestCacheComponentPolicies(t *testing.T) {
+	testCases := []struct {
+		name    string
+		value   string
+		want    map[string]domain.CachePolicy
+		wantErr string
+	}{
+		{name: "absent"},
+		{name: "malformed", value: "{", wantErr: "parse cache component policies"},
+		{name: "empty", value: "{}", wantErr: "cannot be empty"},
+		{name: "blank component", value: `{"":"pull"}`, wantErr: "invalid cache component policy"},
+		{name: "invalid policy", value: `{"go-module":"invalid"}`, wantErr: "invalid cache component policy"},
+		{name: "normalized", value: `{"go-module":" PULL ","go-build":"push"}`, want: map[string]domain.CachePolicy{"go-module": domain.CachePolicyPull, "go-build": domain.CachePolicyPush}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv(cacheHelperComponentPolicies, testCase.value)
+			policies, policyErr := cacheComponentPolicies()
+			if testCase.wantErr != "" {
+				if policyErr == nil || !strings.Contains(policyErr.Error(), testCase.wantErr) {
+					t.Fatalf("component policy error=%v, want %q", policyErr, testCase.wantErr)
+				}
+				return
+			}
+			if policyErr != nil || !reflect.DeepEqual(policies, testCase.want) {
+				t.Fatalf("component policies=%#v err=%v, want %#v", policies, policyErr, testCase.want)
+			}
+		})
+	}
+}
+
+func TestCachePolicyOperationEligibility(t *testing.T) {
+	testCases := []struct {
+		policy      domain.CachePolicy
+		wantRestore bool
+		wantSave    bool
+	}{
+		{policy: domain.CachePolicyOff},
+		{policy: domain.CachePolicyPull, wantRestore: true},
+		{policy: domain.CachePolicyPush, wantSave: true},
+		{policy: domain.CachePolicyPullPush, wantRestore: true, wantSave: true},
+	}
+	for _, testCase := range testCases {
+		if got := cachePolicyAllowsRestore(testCase.policy); got != testCase.wantRestore {
+			t.Fatalf("restore eligibility for %q=%t, want %t", testCase.policy, got, testCase.wantRestore)
+		}
+		if got := cachePolicyAllowsSave(testCase.policy); got != testCase.wantSave {
+			t.Fatalf("save eligibility for %q=%t, want %t", testCase.policy, got, testCase.wantSave)
+		}
+	}
+}
+
+func writeAcquiredCacheClaim(w http.ResponseWriter) {
+	_, _ = w.Write([]byte(`{"data":{"outcome":"acquired","claim_token":"claim-token"}}`))
 }
 
 func TestRunCacheRestoreTreatsMissAndTransportFailuresAsSideEffects(t *testing.T) {

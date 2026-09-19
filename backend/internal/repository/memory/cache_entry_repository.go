@@ -54,13 +54,41 @@ func (r *CacheEntryRepository) ReleasePublishClaim(_ context.Context, claim doma
 	return nil
 }
 
+func (r *CacheEntryRepository) ValidatePublishClaim(_ context.Context, claim domain.CachePublishClaim, claimant string, now time.Time) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	existing, found := r.claims[composeCacheKey(claim.JobID, claim.Preset, claim.CacheKey)]
+	if !found ||
+		existing.ClaimToken != strings.TrimSpace(claim.ClaimToken) ||
+		existing.ClaimedBy != strings.TrimSpace(claimant) ||
+		!existing.ExpiresAt.After(now.UTC()) {
+		return repository.ErrCachePublishClaimStale
+	}
+	return nil
+}
+
+func (r *CacheEntryRepository) ValidatePublishClaimOwnership(_ context.Context, claim domain.CachePublishClaim, claimant string) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	existing, found := r.claims[composeCacheKey(claim.JobID, claim.Preset, claim.CacheKey)]
+	if !found ||
+		existing.ClaimToken != strings.TrimSpace(claim.ClaimToken) ||
+		existing.ClaimedBy != strings.TrimSpace(claimant) {
+		return repository.ErrCachePublishClaimStale
+	}
+	return nil
+}
+
 func (r *CacheEntryRepository) CompletePublishClaim(_ context.Context, claim domain.CachePublishClaim, input repository.CacheEntryUpsertInput, now time.Time) (domain.CacheEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := composeCacheKey(claim.JobID, claim.Preset, claim.CacheKey)
 	existing, found := r.claims[key]
-	if !found || existing.ClaimToken != claim.ClaimToken || !existing.ExpiresAt.After(now.UTC()) {
+	if !found {
 		return domain.CacheEntry{}, repository.ErrCachePublishClaimStale
+	}
+	if existing.ClaimToken != claim.ClaimToken {
+		return domain.CacheEntry{}, repository.ErrCachePublishClaimReplaced
 	}
 	entry := r.upsertLocked(input, now.UTC())
 	delete(r.claims, key)

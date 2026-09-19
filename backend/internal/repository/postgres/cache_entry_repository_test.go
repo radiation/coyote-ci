@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -106,9 +108,9 @@ func TestCacheEntryRepository_CompletePublishClaim(t *testing.T) {
 	claim := domain.CachePublishClaim{JobID: "job-1", Preset: "go-module", CacheKey: "key", ClaimToken: "claim-token"}
 	now := time.Now().UTC()
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT claim_expires_at FROM cache_publish_claims").
-		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, now).
-		WillReturnRows(sqlmock.NewRows([]string{"claim_expires_at"}).AddRow(now.Add(time.Minute)))
+	mock.ExpectQuery("SELECT claim_token FROM cache_publish_claims").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey).
+		WillReturnRows(sqlmock.NewRows([]string{"claim_token"}).AddRow(claim.ClaimToken))
 	mock.ExpectQuery("INSERT INTO cache_entries").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "job_id", "preset", "cache_key", "storage_provider", "object_key", "size_bytes", "checksum", "content_digest", "compression", "status", "created_by_build_id", "created_by_step_id", "created_at", "updated_at", "last_accessed_at"}).
 			AddRow("entry-1", "job-1", "go-module", "key", "filesystem", "obj", int64(42), "sum", "content-sum", "tar.gz", "ready", "build-1", "step-1", now, now, nil))
@@ -116,11 +118,86 @@ func TestCacheEntryRepository_CompletePublishClaim(t *testing.T) {
 		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	entry, completeErr := repo.CompletePublishClaim(context.Background(), claim, repository.CacheEntryUpsertInput{JobID: "job-1", Preset: "go-module", CacheKey: "key", StorageProvider: domain.StorageProviderFilesystem, ObjectKey: "obj", SizeBytes: 42, Checksum: "sum", ContentDigest: "content-sum", Compression: "tar.gz", Status: domain.CacheEntryStatusReady, CreatedByBuildID: "build-1", CreatedByStepID: "step-1"}, now)
+	entry, completeErr := repo.CompletePublishClaim(context.Background(), claim, repository.CacheEntryUpsertInput{JobID: "job-1", Preset: "go-module", CacheKey: "key", StorageProvider: domain.StorageProviderFilesystem, ObjectKey: "obj", SizeBytes: 42, Checksum: "sum", ContentDigest: "content-sum", Compression: "tar.gz", Status: domain.CacheEntryStatusReady, CreatedByBuildID: "build-1", CreatedByStepID: "step-1"}, now.Add(time.Minute))
 	if completeErr != nil || entry.ID != "entry-1" {
 		t.Fatalf("entry=%+v err=%v", entry, completeErr)
 	}
 	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
 		t.Fatalf("SQL expectations: %v", expectationsErr)
+	}
+}
+
+func TestCacheEntryRepository_ValidatePublishClaim(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	repo := NewCacheEntryRepository(db)
+	claim := domain.CachePublishClaim{JobID: "job-1", Preset: "go-module", CacheKey: "key", ClaimToken: "claim-token"}
+	now := time.Now().UTC()
+	mock.ExpectQuery("SELECT TRUE").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, "execution-1", now).
+		WillReturnRows(sqlmock.NewRows([]string{"valid"}).AddRow(true))
+	if validateErr := repo.ValidatePublishClaim(context.Background(), claim, "execution-1", now); validateErr != nil {
+		t.Fatalf("validate claim: %v", validateErr)
+	}
+	mock.ExpectQuery("SELECT TRUE").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, "execution-2", now).
+		WillReturnError(sql.ErrNoRows)
+	if validateErr := repo.ValidatePublishClaim(context.Background(), claim, "execution-2", now); !errors.Is(validateErr, repository.ErrCachePublishClaimStale) {
+		t.Fatalf("validate wrong claimant error=%v, want stale", validateErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("SQL expectations: %v", expectationsErr)
+	}
+}
+
+func TestCacheEntryRepository_ValidatePublishClaimOwnership(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	repo := NewCacheEntryRepository(db)
+	claim := domain.CachePublishClaim{JobID: "job-1", Preset: "go-module", CacheKey: "key", ClaimToken: "claim-token"}
+	mock.ExpectQuery("SELECT TRUE").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, "execution-1").
+		WillReturnRows(sqlmock.NewRows([]string{"valid"}).AddRow(true))
+	if ownershipErr := repo.ValidatePublishClaimOwnership(context.Background(), claim, "execution-1"); ownershipErr != nil {
+		t.Fatalf("validate ownership: %v", ownershipErr)
+	}
+	mock.ExpectQuery("SELECT TRUE").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey, claim.ClaimToken, "execution-2").
+		WillReturnError(sql.ErrNoRows)
+	if ownershipErr := repo.ValidatePublishClaimOwnership(context.Background(), claim, "execution-2"); !errors.Is(ownershipErr, repository.ErrCachePublishClaimStale) {
+		t.Fatalf("wrong claimant ownership error=%v", ownershipErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("sql expectations: %v", expectationsErr)
+	}
+}
+
+func TestCacheEntryRepository_CompletePublishClaimRejectsReplacement(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	repo := NewCacheEntryRepository(db)
+	claim := domain.CachePublishClaim{JobID: "job-1", Preset: "go-module", CacheKey: "key", ClaimToken: "claim-token"}
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT claim_token FROM cache_publish_claims").
+		WithArgs(claim.JobID, claim.Preset, claim.CacheKey).
+		WillReturnRows(sqlmock.NewRows([]string{"claim_token"}).AddRow("replacement-token"))
+	mock.ExpectRollback()
+	if _, completeErr := repo.CompletePublishClaim(context.Background(), claim, repository.CacheEntryUpsertInput{}, time.Now().UTC()); !errors.Is(completeErr, repository.ErrCachePublishClaimReplaced) {
+		t.Fatalf("complete claim error=%v, want replaced", completeErr)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatalf("sql expectations: %v", expectationsErr)
 	}
 }

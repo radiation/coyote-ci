@@ -587,8 +587,55 @@ func TestValidate_CachePresetDefaultPolicyValid(t *testing.T) {
 			},
 		}},
 	}
+
 	if err := Validate(pf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_CacheComponentPolicies(t *testing.T) {
+	testCases := []struct {
+		name      string
+		cache     *CacheDef
+		wantError string
+	}{
+		{
+			name: "valid go components",
+			cache: &CacheDef{Preset: "go", Components: map[string]string{
+				"go-module": "pull-push",
+				"go-build":  "pull",
+			}},
+		},
+		{
+			name:      "unknown component",
+			cache:     &CacheDef{Preset: "go", Components: map[string]string{"node": "pull"}},
+			wantError: "unknown cache component",
+		},
+		{
+			name:      "component from another preset",
+			cache:     &CacheDef{Preset: "node", Components: map[string]string{"go-module": "pull"}},
+			wantError: "unknown cache component",
+		},
+		{
+			name:      "invalid component policy",
+			cache:     &CacheDef{Preset: "go", Components: map[string]string{"go-module": "invalid"}},
+			wantError: "policy must be one of",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			pipeline := &PipelineFile{Version: 1, Steps: []StepDef{{Name: "test", Run: "go test ./...", Cache: testCase.cache}}}
+			err := Validate(pipeline)
+			if testCase.wantError == "" {
+				if err != nil {
+					t.Fatalf("validate cache components: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), testCase.wantError) {
+				t.Fatalf("validation error=%v, want %q", err, testCase.wantError)
+			}
+		})
 	}
 }
 

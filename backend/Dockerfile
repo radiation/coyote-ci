@@ -1,18 +1,5 @@
 ARG GO_VERSION=1.27.1
 
-FROM golang:${GO_VERSION} AS base
-
-WORKDIR /app
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-FROM base AS source-builder
-
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
-RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd/worker
-
 FROM debian:bookworm-slim AS runtime-base
 
 WORKDIR /app
@@ -31,6 +18,19 @@ COPY dist/coyote-worker /app/worker
 EXPOSE 8080
 
 ENTRYPOINT ["/app/server"]
+
+FROM golang:${GO_VERSION} AS base
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+FROM base AS source-builder
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd/worker
 
 FROM base AS dev
 

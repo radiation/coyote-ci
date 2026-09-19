@@ -10,7 +10,7 @@ steps:
     timeout_seconds: 300
     cache:
       preset: go
-      policy: pull-push
+      policy: off
 
   - name: Backend Dependencies
     depends_on: []
@@ -19,7 +19,9 @@ steps:
     timeout_seconds: 600
     cache:
       preset: go
-      policy: pull-push
+      policy: pull
+      components:
+        go-module: pull-push
 
   - name: Frontend Install
     depends_on: []
@@ -39,7 +41,7 @@ steps:
     timeout_seconds: 300
     cache:
       preset: go
-      policy: pull-push
+      policy: pull
 
   - name: Backend Test
     depends_on:
@@ -49,7 +51,9 @@ steps:
     timeout_seconds: 600
     cache:
       preset: go
-      policy: pull-push
+      policy: pull
+      components:
+        go-build: pull-push
 
   - name: Frontend Test
     depends_on:
@@ -71,7 +75,7 @@ steps:
     timeout_seconds: 300
     cache:
       preset: go
-      policy: pull-push
+      policy: pull
     artifacts:
       - name: coyote-server
         path: dist/coyote-server
@@ -85,7 +89,7 @@ steps:
     timeout_seconds: 300
     cache:
       preset: go
-      policy: pull-push
+      policy: pull
     artifacts:
       - name: coyote-worker
         path: dist/coyote-worker

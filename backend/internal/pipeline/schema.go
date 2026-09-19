@@ -61,8 +61,9 @@ type StepGroupDef struct {
 }
 
 type CacheDef struct {
-	Preset string `yaml:"preset,omitempty"`
-	Policy string `yaml:"policy,omitempty"`
+	Preset     string            `yaml:"preset,omitempty"`
+	Policy     string            `yaml:"policy,omitempty"`
+	Components map[string]string `yaml:"components,omitempty"`
 }
 
 // ArtifactDef holds optional build-level artifact path declarations.

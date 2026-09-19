@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
@@ -22,57 +24,70 @@ import (
 )
 
 const (
-	cacheHelperRoot       = "COYOTE_CACHE_ROOT"
-	cacheHelperPreset     = "COYOTE_CACHE_PRESET"
-	cacheHelperPolicy     = "COYOTE_CACHE_POLICY"
-	cacheHelperWorkingDir = "COYOTE_CACHE_WORKING_DIR"
-	cacheHelperStateRoot  = "COYOTE_CACHE_STATE_ROOT"
-	cacheHelperComponents = "COYOTE_CACHE_COMPONENTS"
-	cacheHelperBuildImage = "COYOTE_CACHE_BUILD_IMAGE"
+	cacheHelperRoot              = "COYOTE_CACHE_ROOT"
+	cacheHelperPreset            = "COYOTE_CACHE_PRESET"
+	cacheHelperPolicy            = "COYOTE_CACHE_POLICY"
+	cacheHelperComponentPolicies = "COYOTE_CACHE_COMPONENT_POLICIES"
+	cacheHelperWorkingDir        = "COYOTE_CACHE_WORKING_DIR"
+	cacheHelperStateRoot         = "COYOTE_CACHE_STATE_ROOT"
+	cacheHelperComponents        = "COYOTE_CACHE_COMPONENTS"
+	cacheHelperBuildImage        = "COYOTE_CACHE_BUILD_IMAGE"
 )
 
 const maxCacheHelperErrorResponseBytes = 4 * 1024
 
+var archiveCacheDirectory = workspacepkg.ArchiveDirectory
+
 func runCacheRestore(ctx context.Context) error {
-	apiURL, tokenPath, executionJobID, podUID, root, preset, stateRoot, policy, err := cacheHelperConfig()
+	config, err := cacheHelperConfig()
 	if err != nil {
 		return err
 	}
-	if ensureErr := ensureCacheMountPaths(root, preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir))); ensureErr != nil {
+	if ensureErr := ensureCacheMountPaths(config.root, config.preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir))); ensureErr != nil {
 		return ensureErr
 	}
-	if policy == domain.CachePolicyOff {
-		return nil
-	}
-	components, componentErr := cacheComponentsForHelper(preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
+	components, componentErr := cacheComponentsForHelper(config.preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
 	if componentErr != nil {
 		return reportCacheSideEffectError("restore", componentErr)
+	}
+	canRestore := false
+	canSave := false
+	for _, component := range components {
+		policy := config.componentPolicy(component.Name)
+		canRestore = canRestore || cachePolicyAllowsRestore(policy)
+		canSave = canSave || cachePolicyAllowsSave(policy)
+	}
+	if !canRestore && !canSave {
+		return nil
 	}
 	keys, keyErr := cacheKeysForHelper(components)
 	if keyErr != nil {
 		return reportCacheSideEffectError("restore", keyErr)
 	}
-	if saveErr := savePreparedCacheKeys(stateRoot, keys); saveErr != nil {
+	if saveErr := savePreparedCacheKeys(config.stateRoot, keys); saveErr != nil {
 		return saveErr
 	}
-	if policy == domain.CachePolicyPush {
+	if !canRestore {
 		return nil
 	}
-	projectedToken, readErr := os.ReadFile(tokenPath)
+	projectedToken, readErr := os.ReadFile(config.tokenPath)
 	if readErr != nil {
 		return reportCacheSideEffectError("restore", fmt.Errorf("read cache helper token: %w", readErr))
 	}
-	capability, exchangeErr := exchangeWorkspaceCapability(ctx, apiURL, strings.TrimSpace(string(projectedToken)), executionJobID, podUID, domain.WorkspaceHelperRoleCacheRestore)
+	capability, exchangeErr := exchangeWorkspaceCapability(ctx, config.apiURL, strings.TrimSpace(string(projectedToken)), config.executionJobID, config.podUID, domain.WorkspaceHelperRoleCacheRestore)
 	if exchangeErr != nil {
 		return reportCacheSideEffectError("restore", exchangeErr)
 	}
 	split := splitCacheComponentsEnabled()
 	for index, component := range components {
-		destination := root
-		if split {
-			destination = filepath.Join(root, "paths", fmt.Sprintf("%03d", index))
+		if !cachePolicyAllowsRestore(config.componentPolicy(component.Name)) {
+			continue
 		}
-		if restoreErr := restoreCacheComponent(ctx, apiURL, capability, executionJobID, podUID, destination, component, keys[component.Name]); restoreErr != nil {
+		destination := config.root
+		if split {
+			destination = filepath.Join(config.root, "paths", fmt.Sprintf("%03d", index))
+		}
+		if restoreErr := restoreCacheComponent(ctx, config.apiURL, capability, config.executionJobID, config.podUID, destination, component, keys[component.Name]); restoreErr != nil {
 			return reportCacheSideEffectError("restore", restoreErr)
 		}
 	}
@@ -80,33 +95,72 @@ func runCacheRestore(ctx context.Context) error {
 }
 
 func restoreCacheComponent(ctx context.Context, apiURL, capability, executionJobID, podUID, destination string, component cachepkg.Component, key string) error {
+	started := time.Now()
 	body, marshalErr := json.Marshal(api.WorkspaceHelperCacheRequest{ExecutionJobID: executionJobID, PodUID: podUID, Preset: component.Name, CacheKey: key})
 	if marshalErr != nil {
+		log.Printf("INFO cache_transfer operation=restore_client outcome=request_error preset=%s cache_key=%s total_ms=%d", component.Name, key, time.Since(started).Milliseconds())
 		return marshalErr
 	}
 	request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/cache/restore", bytes.NewReader(body))
 	if requestErr != nil {
+		log.Printf("INFO cache_transfer operation=restore_client outcome=request_error preset=%s cache_key=%s total_ms=%d", component.Name, key, time.Since(started).Milliseconds())
 		return requestErr
 	}
 	request.Header.Set("Authorization", "Bearer "+capability)
 	request.Header.Set("Content-Type", "application/json")
+	requestStarted := time.Now()
 	response, doErr := http.DefaultClient.Do(request)
 	if doErr != nil {
+		log.Printf("INFO cache_transfer operation=restore_client outcome=error preset=%s cache_key=%s http_request_ms=%d total_ms=%d", component.Name, key, time.Since(requestStarted).Milliseconds(), time.Since(started).Milliseconds())
 		return doErr
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusNoContent {
+		log.Printf("INFO cache_transfer operation=restore_client outcome=miss preset=%s cache_key=%s http_request_ms=%d total_ms=%d", component.Name, key, time.Since(requestStarted).Milliseconds(), time.Since(started).Milliseconds())
 		return nil
 	}
 	if response.StatusCode != http.StatusOK {
-		return cacheHelperHTTPError("restore", response)
+		restoreErr := cacheHelperHTTPError("restore", response)
+		log.Printf("INFO cache_transfer operation=restore_client outcome=restore_error preset=%s cache_key=%s http_request_ms=%d total_ms=%d error=%v", component.Name, key, time.Since(requestStarted).Milliseconds(), time.Since(started).Milliseconds(), restoreErr)
+		return restoreErr
 	}
 	size := response.ContentLength
 	publication := domain.WorkspaceRevisionPublication{StorageKey: "cache/transport.tar.gz", ContentDigest: strings.TrimSpace(response.Header.Get("Content-Digest")), SizeBytes: &size}
+	timedBody := &timedReadCloser{ReadCloser: response.Body}
 	if !splitCacheComponentsEnabled() {
-		return restoreCacheArchive(ctx, response.Body, publication, destination, component.Name, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
+		extractStarted := time.Now()
+		restoreErr := restoreCacheArchive(ctx, timedBody, publication, destination, component.Name, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
+		logRestoreCacheTransfer(component.Name, key, size, extractStarted.Sub(requestStarted), time.Since(extractStarted), timedBody.readDuration, time.Since(started), restoreErr)
+		return restoreErr
 	}
-	return workspacepkg.RestoreArchive(ctx, response.Body, publication, destination)
+	extractStarted := time.Now()
+	restoreErr := workspacepkg.RestoreArchive(ctx, timedBody, publication, destination)
+	logRestoreCacheTransfer(component.Name, key, size, extractStarted.Sub(requestStarted), time.Since(extractStarted), timedBody.readDuration, time.Since(started), restoreErr)
+	return restoreErr
+}
+
+func logRestoreCacheTransfer(preset, key string, size int64, requestDuration, extractDuration, readDuration, total time.Duration, restoreErr error) {
+	outcome := "hit"
+	if restoreErr != nil {
+		outcome = "restore_error"
+	}
+	processingDuration := extractDuration - readDuration
+	if processingDuration < 0 {
+		processingDuration = 0
+	}
+	log.Printf("INFO cache_transfer operation=restore_client outcome=%s preset=%s cache_key=%s compressed_bytes=%d http_request_ms=%d response_body_read_ms=%d gzip_tar_extract_and_fs_ms=%d total_ms=%d error=%v", outcome, preset, key, size, requestDuration.Milliseconds(), readDuration.Milliseconds(), processingDuration.Milliseconds(), total.Milliseconds(), restoreErr)
+}
+
+type timedReadCloser struct {
+	io.ReadCloser
+	readDuration time.Duration
+}
+
+func (r *timedReadCloser) Read(data []byte) (int, error) {
+	started := time.Now()
+	read, err := r.ReadCloser.Read(data)
+	r.readDuration += time.Since(started)
+	return read, err
 }
 
 func restoreCacheArchive(ctx context.Context, archive io.Reader, publication domain.WorkspaceRevisionPublication, root string, preset string, workingDir string) error {
@@ -164,33 +218,43 @@ func runCacheSaveAfterBuild(ctx context.Context) error {
 }
 
 func runCacheSave(ctx context.Context) error {
-	apiURL, tokenPath, executionJobID, podUID, root, preset, stateRoot, policy, err := cacheHelperConfig()
-	if err != nil || policy == domain.CachePolicyOff || policy == domain.CachePolicyPull {
+	config, err := cacheHelperConfig()
+	if err != nil {
 		return err
 	}
-	keys, keyErr := loadPreparedCacheKeys(stateRoot)
-	if keyErr != nil {
-		return reportCacheSideEffectError("save", keyErr)
-	}
-	projectedToken, readErr := os.ReadFile(tokenPath)
-	if readErr != nil {
-		return reportCacheSideEffectError("save", fmt.Errorf("read cache helper token: %w", readErr))
-	}
-	capability, exchangeErr := exchangeWorkspaceCapability(ctx, apiURL, strings.TrimSpace(string(projectedToken)), executionJobID, podUID, domain.WorkspaceHelperRoleCacheSave)
-	if exchangeErr != nil {
-		return reportCacheSideEffectError("save", exchangeErr)
-	}
-	components, componentErr := cacheComponentsForHelper(preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
+	components, componentErr := cacheComponentsForHelper(config.preset, strings.TrimSpace(os.Getenv(cacheHelperWorkingDir)))
 	if componentErr != nil {
 		return reportCacheSideEffectError("save", componentErr)
 	}
+	canSave := false
+	for _, component := range components {
+		canSave = canSave || cachePolicyAllowsSave(config.componentPolicy(component.Name))
+	}
+	if !canSave {
+		return nil
+	}
+	keys, keyErr := loadPreparedCacheKeys(config.stateRoot)
+	if keyErr != nil {
+		return reportCacheSideEffectError("save", keyErr)
+	}
+	projectedToken, readErr := os.ReadFile(config.tokenPath)
+	if readErr != nil {
+		return reportCacheSideEffectError("save", fmt.Errorf("read cache helper token: %w", readErr))
+	}
+	capability, exchangeErr := exchangeWorkspaceCapability(ctx, config.apiURL, strings.TrimSpace(string(projectedToken)), config.executionJobID, config.podUID, domain.WorkspaceHelperRoleCacheSave)
+	if exchangeErr != nil {
+		return reportCacheSideEffectError("save", exchangeErr)
+	}
 	split := splitCacheComponentsEnabled()
 	for index, component := range components {
-		source := root
-		if split {
-			source = filepath.Join(root, "paths", fmt.Sprintf("%03d", index))
+		if !cachePolicyAllowsSave(config.componentPolicy(component.Name)) {
+			continue
 		}
-		if saveErr := saveCacheComponent(ctx, apiURL, capability, executionJobID, podUID, source, component.Name, keys[component.Name]); saveErr != nil {
+		source := config.root
+		if split {
+			source = filepath.Join(config.root, "paths", fmt.Sprintf("%03d", index))
+		}
+		if saveErr := saveCacheComponent(ctx, config.apiURL, capability, config.executionJobID, config.podUID, source, component.Name, keys[component.Name]); saveErr != nil {
 			return reportCacheSideEffectError("save", saveErr)
 		}
 	}
@@ -198,13 +262,38 @@ func runCacheSave(ctx context.Context) error {
 }
 
 func saveCacheComponent(ctx context.Context, apiURL, capability, executionJobID, podUID, source, preset, key string) error {
-	archive, publication, archiveErr := workspacepkg.ArchiveDirectory(ctx, source)
+	started := time.Now()
+	preclaimStarted := time.Now()
+	acquired, claimToken, preclaimErr := claimCachePublish(ctx, apiURL, capability, executionJobID, podUID, preset, key)
+	preclaimDuration := time.Since(preclaimStarted)
+	if preclaimErr != nil {
+		log.Printf("INFO cache_transfer operation=save_client outcome=preclaim_error preclaim_outcome=error preset=%s cache_key=%s preclaim_ms=%d archive_skipped=true claim_lifecycle=not_acquired total_ms=%d", preset, key, preclaimDuration.Milliseconds(), time.Since(started).Milliseconds())
+		return preclaimErr
+	}
+	if !acquired {
+		log.Printf("INFO cache_transfer operation=save_client outcome=deduplicated_publish preclaim_outcome=not_acquired preset=%s cache_key=%s preclaim_ms=%d archive_skipped=true claim_lifecycle=not_acquired total_ms=%d", preset, key, preclaimDuration.Milliseconds(), time.Since(started).Milliseconds())
+		return nil
+	}
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		if releaseErr := releaseCachePublishClaim(context.Background(), apiURL, capability, executionJobID, podUID, preset, key, claimToken); releaseErr != nil {
+			log.Printf("WARN cache_transfer operation=save_client outcome=claim_release_error preset=%s cache_key=%s claim_lifecycle=release_failed error=%v", preset, key, releaseErr)
+		}
+	}()
+	archiveStarted := time.Now()
+	archive, publication, archiveErr := archiveCacheDirectory(ctx, source)
+	archiveCreationDuration := time.Since(archiveStarted)
 	if archiveErr != nil {
+		log.Printf("INFO cache_transfer operation=save_client outcome=archive_error preclaim_outcome=acquired preset=%s cache_key=%s preclaim_ms=%d archive_skipped=false claim_lifecycle=expires_after_archive_error gzip_tar_create_and_fs_ms=%d total_ms=%d", preset, key, preclaimDuration.Milliseconds(), archiveCreationDuration.Milliseconds(), time.Since(started).Milliseconds())
 		return archiveErr
 	}
 	defer func() { _ = archive.Close() }()
 	request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/cache/save", archive)
 	if requestErr != nil {
+		log.Printf("INFO cache_transfer operation=save_client outcome=request_error preclaim_outcome=acquired preset=%s cache_key=%s compressed_bytes=%d preclaim_ms=%d archive_skipped=false claim_lifecycle=expires_after_request_error gzip_tar_create_and_fs_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, preclaimDuration.Milliseconds(), archiveCreationDuration.Milliseconds(), time.Since(started).Milliseconds())
 		return requestErr
 	}
 	request.ContentLength = *publication.SizeBytes
@@ -216,13 +305,79 @@ func saveCacheComponent(ctx context.Context, apiURL, capability, executionJobID,
 	request.Header.Set("Coyote-Pod-UID", podUID)
 	request.Header.Set("Coyote-Cache-Preset", preset)
 	request.Header.Set("Coyote-Cache-Key", key)
+	request.Header.Set("Coyote-Cache-Claim-Token", claimToken)
+	uploadStarted := time.Now()
+	response, doErr := http.DefaultClient.Do(request)
+	if doErr != nil {
+		log.Printf("INFO cache_transfer operation=save_client outcome=upload_error preclaim_outcome=acquired preset=%s cache_key=%s compressed_bytes=%d preclaim_ms=%d archive_skipped=false claim_lifecycle=unknown_after_transport_error gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, preclaimDuration.Milliseconds(), archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
+		return doErr
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusNoContent {
+		log.Printf("INFO cache_transfer operation=save_client outcome=upload_error preclaim_outcome=acquired preset=%s cache_key=%s compressed_bytes=%d preclaim_ms=%d archive_skipped=false claim_lifecycle=rejected gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, preclaimDuration.Milliseconds(), archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
+		return cacheHelperHTTPError("save", response)
+	}
+	completed = true
+	log.Printf("INFO cache_transfer operation=save_client outcome=complete preclaim_outcome=acquired preset=%s cache_key=%s compressed_bytes=%d preclaim_ms=%d archive_skipped=false claim_lifecycle=completed gzip_tar_create_and_fs_ms=%d http_upload_and_finalize_ms=%d total_ms=%d", preset, key, *publication.SizeBytes, preclaimDuration.Milliseconds(), archiveCreationDuration.Milliseconds(), time.Since(uploadStarted).Milliseconds(), time.Since(started).Milliseconds())
+	return nil
+}
+
+func claimCachePublish(ctx context.Context, apiURL, capability, executionJobID, podUID, preset, key string) (bool, string, error) {
+	body, marshalErr := json.Marshal(api.WorkspaceHelperCacheRequest{ExecutionJobID: executionJobID, PodUID: podUID, Preset: preset, CacheKey: key})
+	if marshalErr != nil {
+		return false, "", marshalErr
+	}
+	request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/cache/publish-claim", bytes.NewReader(body))
+	if requestErr != nil {
+		return false, "", requestErr
+	}
+	request.Header.Set("Authorization", "Bearer "+capability)
+	request.Header.Set("Content-Type", "application/json")
+	response, doErr := http.DefaultClient.Do(request)
+	if doErr != nil {
+		return false, "", doErr
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return false, "", cacheHelperHTTPError("publish claim", response)
+	}
+	var payload struct {
+		Data api.WorkspaceHelperCachePublishClaimResponse `json:"data"`
+	}
+	if decodeErr := json.NewDecoder(response.Body).Decode(&payload); decodeErr != nil {
+		return false, "", decodeErr
+	}
+	switch payload.Data.Outcome {
+	case "acquired":
+		if strings.TrimSpace(payload.Data.ClaimToken) == "" {
+			return false, "", errors.New("cache publish claim response omitted claim token")
+		}
+		return true, payload.Data.ClaimToken, nil
+	case "not_acquired":
+		return false, "", nil
+	default:
+		return false, "", fmt.Errorf("cache publish claim returned unknown outcome %q", payload.Data.Outcome)
+	}
+}
+
+func releaseCachePublishClaim(ctx context.Context, apiURL, capability, executionJobID, podUID, preset, key, claimToken string) error {
+	body, marshalErr := json.Marshal(api.WorkspaceHelperCacheRequest{ExecutionJobID: executionJobID, PodUID: podUID, Preset: preset, CacheKey: key, ClaimToken: claimToken})
+	if marshalErr != nil {
+		return marshalErr
+	}
+	request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/internal/workspace-helper/cache/publish-claim/release", bytes.NewReader(body))
+	if requestErr != nil {
+		return requestErr
+	}
+	request.Header.Set("Authorization", "Bearer "+capability)
+	request.Header.Set("Content-Type", "application/json")
 	response, doErr := http.DefaultClient.Do(request)
 	if doErr != nil {
 		return doErr
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusNoContent {
-		return cacheHelperHTTPError("save", response)
+		return cacheHelperHTTPError("publish claim release", response)
 	}
 	return nil
 }
@@ -260,19 +415,75 @@ func reportCacheSideEffectError(operation string, err error) error {
 	return nil
 }
 
-func cacheHelperConfig() (string, string, string, string, string, string, string, domain.CachePolicy, error) {
-	apiURL := strings.TrimRight(strings.TrimSpace(os.Getenv(workspaceHelperAPIURL)), "/")
-	tokenPath := strings.TrimSpace(os.Getenv(workspaceHelperTokenPath))
-	executionJobID := strings.TrimSpace(os.Getenv(workspaceHelperExecutionJobID))
-	podUID := strings.TrimSpace(os.Getenv(workspaceHelperPodUID))
-	root := strings.TrimSpace(os.Getenv(cacheHelperRoot))
-	preset := strings.TrimSpace(os.Getenv(cacheHelperPreset))
-	stateRoot := strings.TrimSpace(os.Getenv(cacheHelperStateRoot))
-	policy := domain.NormalizeCachePolicy(domain.CachePolicy(os.Getenv(cacheHelperPolicy)))
-	if apiURL == "" || tokenPath == "" || executionJobID == "" || podUID == "" || root == "" || preset == "" || stateRoot == "" {
-		return "", "", "", "", "", "", "", policy, errors.New("cache helper requires internal API URL, token path, execution job ID, pod UID, root, preset, and state root")
+type cacheHelperConfiguration struct {
+	apiURL            string
+	tokenPath         string
+	executionJobID    string
+	podUID            string
+	root              string
+	preset            string
+	stateRoot         string
+	policy            domain.CachePolicy
+	componentPolicies map[string]domain.CachePolicy
+}
+
+func (c cacheHelperConfiguration) componentPolicy(component string) domain.CachePolicy {
+	if policy, ok := c.componentPolicies[component]; ok {
+		return policy
 	}
-	return apiURL, tokenPath, executionJobID, podUID, root, preset, stateRoot, policy, nil
+	return c.policy
+}
+
+func cacheHelperConfig() (cacheHelperConfiguration, error) {
+	config := cacheHelperConfiguration{
+		apiURL:         strings.TrimRight(strings.TrimSpace(os.Getenv(workspaceHelperAPIURL)), "/"),
+		tokenPath:      strings.TrimSpace(os.Getenv(workspaceHelperTokenPath)),
+		executionJobID: strings.TrimSpace(os.Getenv(workspaceHelperExecutionJobID)),
+		podUID:         strings.TrimSpace(os.Getenv(workspaceHelperPodUID)),
+		root:           strings.TrimSpace(os.Getenv(cacheHelperRoot)),
+		preset:         strings.TrimSpace(os.Getenv(cacheHelperPreset)),
+		stateRoot:      strings.TrimSpace(os.Getenv(cacheHelperStateRoot)),
+		policy:         domain.NormalizeCachePolicy(domain.CachePolicy(os.Getenv(cacheHelperPolicy))),
+	}
+	if config.apiURL == "" || config.tokenPath == "" || config.executionJobID == "" || config.podUID == "" || config.root == "" || config.preset == "" || config.stateRoot == "" {
+		return cacheHelperConfiguration{}, errors.New("cache helper requires internal API URL, token path, execution job ID, pod UID, root, preset, and state root")
+	}
+	componentPolicies, policyErr := cacheComponentPolicies()
+	if policyErr != nil {
+		return cacheHelperConfiguration{}, policyErr
+	}
+	config.componentPolicies = componentPolicies
+	return config, nil
+}
+
+func cacheComponentPolicies() (map[string]domain.CachePolicy, error) {
+	raw := strings.TrimSpace(os.Getenv(cacheHelperComponentPolicies))
+	if raw == "" {
+		return nil, nil
+	}
+	values := map[string]string{}
+	if unmarshalErr := json.Unmarshal([]byte(raw), &values); unmarshalErr != nil {
+		return nil, fmt.Errorf("parse cache component policies: %w", unmarshalErr)
+	}
+	if len(values) == 0 {
+		return nil, errors.New("cache component policies cannot be empty")
+	}
+	policies := make(map[string]domain.CachePolicy, len(values))
+	for component, value := range values {
+		if strings.TrimSpace(component) == "" || !cachepkg.IsSupportedPolicy(value) || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("invalid cache component policy for %q", component)
+		}
+		policies[component] = domain.NormalizeCachePolicy(domain.CachePolicy(value))
+	}
+	return policies, nil
+}
+
+func cachePolicyAllowsRestore(policy domain.CachePolicy) bool {
+	return policy != domain.CachePolicyOff && policy != domain.CachePolicyPush
+}
+
+func cachePolicyAllowsSave(policy domain.CachePolicy) bool {
+	return policy != domain.CachePolicyOff && policy != domain.CachePolicyPull
 }
 
 func savePreparedCacheKey(stateRoot string, key string) error {

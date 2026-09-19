@@ -1,11 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +34,7 @@ func TestWorkspaceHelperCacheServiceRestoreHitMarksAccessed(t *testing.T) {
 	}
 	accessedAt := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
 	harness.service.now = func() time.Time { return accessedAt }
+	logs := captureCacheTransferLogs(t)
 
 	payload, found, err := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
 	if err != nil || !found {
@@ -39,6 +42,9 @@ func TestWorkspaceHelperCacheServiceRestoreHitMarksAccessed(t *testing.T) {
 	}
 	if harness.store.restoreCalls != 1 || harness.store.openCalls != 0 {
 		t.Fatalf("legacy restore calls=%d open calls=%d, want 1 and 0", harness.store.restoreCalls, harness.store.openCalls)
+	}
+	if !strings.Contains(logs.String(), "transfer_mode=legacy_materialized") {
+		t.Fatalf("restore logs=%q, want legacy materialized mode", logs.String())
 	}
 	defer func() { _ = payload.Archive.Close() }()
 	destination := t.TempDir()
@@ -52,6 +58,24 @@ func TestWorkspaceHelperCacheServiceRestoreHitMarksAccessed(t *testing.T) {
 	entry, found, findErr := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey)
 	if findErr != nil || !found || entry.LastAccessedAt == nil || !entry.LastAccessedAt.Equal(accessedAt) {
 		t.Fatalf("accessed entry=%#v found=%t err=%v", entry, found, findErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceLegacyStorageMissRecordsMiss(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	objectKey := cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, "sha256:"+strings.Repeat("a", 64))
+	if _, upsertErr := harness.entries.Upsert(context.Background(), cacheEntryInput(harness, objectKey)); upsertErr != nil {
+		t.Fatalf("seed cache metadata: %v", upsertErr)
+	}
+	harness.store.restoreMiss = true
+	logs := captureCacheTransferLogs(t)
+
+	_, found, restoreErr := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if restoreErr != nil || found {
+		t.Fatalf("restore found=%t err=%v", found, restoreErr)
+	}
+	if !strings.Contains(logs.String(), "outcome=miss") || strings.Contains(logs.String(), "outcome=restore_error") {
+		t.Fatalf("restore logs=%q, want miss without restore_error", logs.String())
 	}
 }
 
@@ -71,6 +95,7 @@ func TestWorkspaceHelperCacheServiceRestoreStreamsCompatibleArchive(t *testing.T
 	if _, upsertErr := harness.entries.Upsert(context.Background(), entry); upsertErr != nil {
 		t.Fatalf("seed cache metadata: %v", upsertErr)
 	}
+	logs := captureCacheTransferLogs(t)
 
 	payload, found, restoreErr := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
 	if restoreErr != nil || !found {
@@ -80,6 +105,12 @@ func TestWorkspaceHelperCacheServiceRestoreStreamsCompatibleArchive(t *testing.T
 	if harness.store.restoreCalls != 0 || harness.store.openCalls != 1 {
 		t.Fatalf("directory restore calls=%d open calls=%d, want 0 and 1", harness.store.restoreCalls, harness.store.openCalls)
 	}
+	if payload.Publication.ContentDigest != source.publication.ContentDigest {
+		t.Fatalf("publication digest=%q, want %q", payload.Publication.ContentDigest, source.publication.ContentDigest)
+	}
+	if !strings.Contains(logs.String(), "transfer_mode=direct") {
+		t.Fatalf("restore logs=%q, want direct mode", logs.String())
+	}
 	destination := t.TempDir()
 	if archiveRestoreErr := workspace.RestoreArchive(context.Background(), payload.Archive, payload.Publication, destination); archiveRestoreErr != nil {
 		t.Fatalf("restore direct archive: %v", archiveRestoreErr)
@@ -87,6 +118,80 @@ func TestWorkspaceHelperCacheServiceRestoreStreamsCompatibleArchive(t *testing.T
 	contents, readErr := os.ReadFile(filepath.Join(destination, "cached.txt"))
 	if readErr != nil || string(contents) != "cache hit" {
 		t.Fatalf("restored content=%q err=%v", contents, readErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceRestoreStreamsChecksumOnlyLegacyArchive(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	source := cacheArchive(t, "cached.txt", "cache hit")
+	defer func() { _ = source.archive.Close() }()
+	objectKey := cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, source.publication.ContentDigest)
+	saved, saveErr := harness.store.SaveArchive(context.Background(), objectKey, source.archive)
+	if saveErr != nil {
+		t.Fatalf("seed legacy cache object: %v", saveErr)
+	}
+	entry := cacheEntryInput(harness, objectKey)
+	entry.SizeBytes = saved.SizeBytes
+	entry.Checksum = saved.Checksum
+	entry.ContentDigest = ""
+	if _, upsertErr := harness.entries.Upsert(context.Background(), entry); upsertErr != nil {
+		t.Fatalf("seed legacy cache metadata: %v", upsertErr)
+	}
+	logs := captureCacheTransferLogs(t)
+
+	payload, found, restoreErr := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if restoreErr != nil || !found {
+		t.Fatalf("restore found=%t err=%v", found, restoreErr)
+	}
+	defer func() { _ = payload.Archive.Close() }()
+	if harness.store.restoreCalls != 0 || harness.store.openCalls != 1 {
+		t.Fatalf("directory restore calls=%d open calls=%d, want 0 and 1", harness.store.restoreCalls, harness.store.openCalls)
+	}
+	wantDigest := "sha256:" + saved.Checksum
+	if payload.Publication.ContentDigest != wantDigest {
+		t.Fatalf("publication digest=%q, want %q", payload.Publication.ContentDigest, wantDigest)
+	}
+	if !strings.Contains(logs.String(), "transfer_mode=direct") {
+		t.Fatalf("restore logs=%q, want direct mode", logs.String())
+	}
+}
+
+func TestWorkspaceHelperCacheServiceRestoreMaterializesUnsupportedLegacyArchives(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		checksum    string
+		compression string
+	}{
+		{name: "malformed checksum", checksum: "not-a-sha256", compression: "tar.gz"},
+		{name: "unsupported compression", checksum: strings.Repeat("a", 64), compression: "zip"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			harness := newWorkspaceHelperCacheServiceTestHarness(t)
+			source := cacheArchive(t, "cached.txt", "cache hit")
+			objectKey := cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, source.publication.ContentDigest)
+			if _, saveErr := harness.store.Save(context.Background(), objectKey, source.root); saveErr != nil {
+				t.Fatalf("seed cache object: %v", saveErr)
+			}
+			entry := cacheEntryInput(harness, objectKey)
+			entry.Checksum = testCase.checksum
+			entry.Compression = testCase.compression
+			if _, upsertErr := harness.entries.Upsert(context.Background(), entry); upsertErr != nil {
+				t.Fatalf("seed cache metadata: %v", upsertErr)
+			}
+			logs := captureCacheTransferLogs(t)
+
+			payload, found, restoreErr := harness.service.Restore(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+			if restoreErr != nil || !found {
+				t.Fatalf("restore found=%t err=%v", found, restoreErr)
+			}
+			defer func() { _ = payload.Archive.Close() }()
+			if harness.store.restoreCalls != 1 || harness.store.openCalls != 0 {
+				t.Fatalf("directory restore calls=%d open calls=%d, want 1 and 0", harness.store.restoreCalls, harness.store.openCalls)
+			}
+			if !strings.Contains(logs.String(), "transfer_mode=legacy_materialized") {
+				t.Fatalf("restore logs=%q, want legacy materialized mode", logs.String())
+			}
+		})
 	}
 }
 
@@ -209,19 +314,349 @@ func TestWorkspaceHelperCacheServiceSaveLateValidationFailureDoesNotPublishFinal
 	}
 }
 
-func TestWorkspaceHelperCacheServiceSaveSkipsUnchangedContent(t *testing.T) {
+func TestWorkspaceHelperCacheServiceSaveSkipsCanonicalUnchangedContentForAllPresets(t *testing.T) {
+	for _, preset := range []string{"go-module", "go-build", "node"} {
+		t.Run(preset, func(t *testing.T) {
+			harness := newWorkspaceHelperCacheServiceTestHarnessForPreset(t, preset)
+			harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+			archive := cacheArchive(t, "module", "unchanged")
+			archiveBytes, readErr := io.ReadAll(archive.archive)
+			if readErr != nil {
+				t.Fatalf("read archive: %v", readErr)
+			}
+			if closeErr := archive.archive.Close(); closeErr != nil {
+				t.Fatalf("close archive: %v", closeErr)
+			}
+			input := canonicalCacheEntryInput(harness, preset, harness.cacheKey, archive.publication)
+			if _, upsertErr := harness.entries.Upsert(context.Background(), input); upsertErr != nil {
+				t.Fatalf("seed entry: %v", upsertErr)
+			}
+			logs := captureCacheTransferLogs(t)
+
+			if saveErr := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", preset, harness.cacheKey, bytes.NewReader(archiveBytes), archive.publication); saveErr != nil {
+				t.Fatalf("save unchanged: %v", saveErr)
+			}
+			if harness.store.saveCalls != 0 || harness.store.archiveSaveCalls != 0 {
+				t.Fatalf("store saves=%d archive saves=%d, want 0", harness.store.saveCalls, harness.store.archiveSaveCalls)
+			}
+			if !strings.Contains(logs.String(), "outcome=skipped_publish") {
+				t.Fatalf("save logs=%q, want skipped_publish", logs.String())
+			}
+		})
+	}
+}
+
+func TestWorkspaceHelperCacheServiceClaimedSaveCompletesExistingClaim(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	claim, claimErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if claimErr != nil || !claim.Acquired || claim.ClaimToken == "" {
+		t.Fatalf("claim=%+v err=%v", claim, claimErr)
+	}
+	archive := cacheArchive(t, "module", "claimed")
+	defer func() { _ = archive.archive.Close() }()
+
+	if saveErr := harness.service.SaveClaimed(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, claim.ClaimToken, archive.archive, archive.publication); saveErr != nil {
+		t.Fatalf("save claimed cache: %v", saveErr)
+	}
+	entry, found, findErr := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey)
+	if findErr != nil || !found || entry.ContentDigest != archive.publication.ContentDigest {
+		t.Fatalf("entry=%+v found=%t err=%v", entry, found, findErr)
+	}
+	claimState := domain.CachePublishClaim{JobID: cacheJobID(harness.build), Preset: "go", CacheKey: harness.cacheKey, ClaimToken: claim.ClaimToken}
+	if validateErr := harness.entries.ValidatePublishClaim(context.Background(), claimState, harness.job.ID, harness.service.now()); !errors.Is(validateErr, repository.ErrCachePublishClaimStale) {
+		t.Fatalf("completed claim validation error=%v, want stale", validateErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceClaimedSaveCompletesUnreclaimedExpiredClaim(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	now := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
+	harness.service.now = func() time.Time { return now }
+	claim, claimErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if claimErr != nil || !claim.Acquired {
+		t.Fatalf("claim=%+v err=%v", claim, claimErr)
+	}
+	harness.service.now = func() time.Time { return now.Add(defaultWorkspaceHelperCachePublishLease + time.Second) }
+	archive := cacheArchive(t, "module", "completed after archive delay")
+	defer func() { _ = archive.archive.Close() }()
+
+	if saveErr := harness.service.SaveClaimed(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, claim.ClaimToken, archive.archive, archive.publication); saveErr != nil {
+		t.Fatalf("save unreclaimed expired claim: %v", saveErr)
+	}
+	entry, found, findErr := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey)
+	if findErr != nil || !found || entry.ContentDigest != archive.publication.ContentDigest {
+		t.Fatalf("entry=%+v found=%t err=%v", entry, found, findErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceDeduplicatesOnlyAfterClaimReplacement(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	now := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
+	harness.service.now = func() time.Time { return now }
+	harness.store.archiveSaveHook = func() {
+		now = now.Add(defaultWorkspaceHelperCachePublishLease)
+		if _, acquired, claimErr := harness.entries.TryAcquirePublishClaim(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey, "replacement-publisher", now, defaultWorkspaceHelperCachePublishLease); claimErr != nil || !acquired {
+			t.Fatalf("replace active claim acquired=%t err=%v", acquired, claimErr)
+		}
+	}
+	archive := cacheArchive(t, "module", "publisher A")
+	defer func() { _ = archive.archive.Close() }()
+
+	if saveErr := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication); saveErr != nil {
+		t.Fatalf("save after replacement: %v", saveErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceClaimedSaveRejectsInvalidAndReplacedClaimsBeforeUpload(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		claim func(*workspaceHelperCacheServiceTestHarness) (string, string)
+	}{
+		{name: "invalid token", claim: func(*workspaceHelperCacheServiceTestHarness) (string, string) {
+			return "execution-job", "invalid"
+		}},
+		{name: "wrong owner", claim: func(harness *workspaceHelperCacheServiceTestHarness) (string, string) {
+			claim, claimErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+			if claimErr != nil || !claim.Acquired {
+				t.Fatalf("claim=%+v err=%v", claim, claimErr)
+			}
+			harness.capabilities.expectedJobID = "other-execution-job"
+			return "other-execution-job", claim.ClaimToken
+		}},
+		{name: "replaced token", claim: func(harness *workspaceHelperCacheServiceTestHarness) (string, string) {
+			now := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
+			harness.service.now = func() time.Time { return now }
+			claim, claimErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+			if claimErr != nil || !claim.Acquired {
+				t.Fatalf("claim=%+v err=%v", claim, claimErr)
+			}
+			harness.service.now = func() time.Time { return now.Add(defaultWorkspaceHelperCachePublishLease) }
+			replacement, replacementErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+			if replacementErr != nil || !replacement.Acquired || !replacement.Reclaimed {
+				t.Fatalf("replacement=%+v err=%v", replacement, replacementErr)
+			}
+			return harness.job.ID, claim.ClaimToken
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			harness := newWorkspaceHelperCacheServiceTestHarness(t)
+			harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+			archive := cacheArchive(t, "module", "rejected")
+			defer func() { _ = archive.archive.Close() }()
+			executionJobID, claimToken := testCase.claim(harness)
+
+			saveErr := harness.service.SaveClaimed(context.Background(), "token", executionJobID, "pod-uid", "go", harness.cacheKey, claimToken, archive.archive, archive.publication)
+			if !errors.Is(saveErr, ErrWorkspaceHelperCachePublishClaimInvalid) {
+				t.Fatalf("save error=%v, want invalid publish claim", saveErr)
+			}
+			if harness.store.archiveSaveCalls != 0 {
+				t.Fatalf("archive uploads=%d, want 0", harness.store.archiveSaveCalls)
+			}
+		})
+	}
+}
+
+func TestWorkspaceHelperCacheServicePublishClaimDeduplicatesAndRecoversStaleClaim(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	now := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
+	harness.service.now = func() time.Time { return now }
+	first, firstErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if firstErr != nil || !first.Acquired {
+		t.Fatalf("first claim=%+v err=%v", first, firstErr)
+	}
+	second, secondErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if secondErr != nil || second.Acquired {
+		t.Fatalf("concurrent claim=%+v err=%v", second, secondErr)
+	}
+
+	harness.service.now = func() time.Time { return now.Add(defaultWorkspaceHelperCachePublishLease) }
+	recovered, recoveredErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if recoveredErr != nil || !recovered.Acquired || !recovered.Reclaimed || recovered.ClaimToken == first.ClaimToken {
+		t.Fatalf("recovered claim=%+v err=%v", recovered, recoveredErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceFailedClaimedSaveReleasesClaim(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	claim, claimErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if claimErr != nil || !claim.Acquired {
+		t.Fatalf("claim=%+v err=%v", claim, claimErr)
+	}
+	harness.store.saveErr = errors.New("store unavailable")
+	archive := cacheArchive(t, "module", "failed")
+	defer func() { _ = archive.archive.Close() }()
+	if saveErr := harness.service.SaveClaimed(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, claim.ClaimToken, archive.archive, archive.publication); saveErr == nil {
+		t.Fatal("expected save failure")
+	}
+	harness.store.saveErr = nil
+
+	retry, retryErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if retryErr != nil || !retry.Acquired {
+		t.Fatalf("retry claim=%+v err=%v", retry, retryErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceReleasePublishClaimAllowsImmediateRetry(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	claim, claimErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if claimErr != nil || !claim.Acquired {
+		t.Fatalf("claim=%+v err=%v", claim, claimErr)
+	}
+	if releaseErr := harness.service.ReleasePublishClaim(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, claim.ClaimToken); releaseErr != nil {
+		t.Fatalf("release claim: %v", releaseErr)
+	}
+	retry, retryErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if retryErr != nil || !retry.Acquired {
+		t.Fatalf("retry claim=%+v err=%v", retry, retryErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceReleasePublishClaimCannotReleaseOtherOwner(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	claim, claimErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if claimErr != nil || !claim.Acquired {
+		t.Fatalf("claim=%+v err=%v", claim, claimErr)
+	}
+	harness.capabilities.expectedJobID = "other-execution-job"
+	if releaseErr := harness.service.ReleasePublishClaim(context.Background(), "token", "other-execution-job", "pod-uid", "go", harness.cacheKey, claim.ClaimToken); releaseErr != nil {
+		t.Fatalf("wrong-owner release: %v", releaseErr)
+	}
+	harness.capabilities.expectedJobID = harness.job.ID
+	if releaseErr := harness.service.ReleasePublishClaim(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, "wrong-token"); releaseErr != nil {
+		t.Fatalf("wrong-token release: %v", releaseErr)
+	}
+	claimState := domain.CachePublishClaim{JobID: cacheJobID(harness.build), Preset: "go", CacheKey: harness.cacheKey, ClaimToken: claim.ClaimToken}
+	if validateErr := harness.entries.ValidatePublishClaim(context.Background(), claimState, harness.job.ID, harness.service.now()); validateErr != nil {
+		t.Fatalf("owner claim was released: %v", validateErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceReleasePublishClaimIsIdempotentAfterCompletion(t *testing.T) {
+	harness := newWorkspaceHelperCacheServiceTestHarness(t)
+	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+	claim, claimErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if claimErr != nil || !claim.Acquired {
+		t.Fatalf("claim=%+v err=%v", claim, claimErr)
+	}
+	archive := cacheArchive(t, "module", "completed")
+	defer func() { _ = archive.archive.Close() }()
+	if saveErr := harness.service.SaveClaimed(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, claim.ClaimToken, archive.archive, archive.publication); saveErr != nil {
+		t.Fatalf("complete claimed save: %v", saveErr)
+	}
+	if releaseErr := harness.service.ReleasePublishClaim(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, claim.ClaimToken); releaseErr != nil {
+		t.Fatalf("release completed claim: %v", releaseErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceClaimedSavePreservesCanonicalSkip(t *testing.T) {
 	harness := newWorkspaceHelperCacheServiceTestHarness(t)
 	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
 	archive := cacheArchive(t, "module", "unchanged")
 	defer func() { _ = archive.archive.Close() }()
-	if _, upsertErr := harness.entries.Upsert(context.Background(), repository.CacheEntryUpsertInput{JobID: cacheJobID(harness.build), Preset: "go", CacheKey: harness.cacheKey, StorageProvider: harness.store.Provider(), ObjectKey: "ready", ContentDigest: archive.publication.ContentDigest, Compression: "tar.gz", Status: domain.CacheEntryStatusReady, CreatedByBuildID: harness.build.ID, CreatedByStepID: harness.step.ID}); upsertErr != nil {
-		t.Fatalf("seed entry: %v", upsertErr)
+	if _, upsertErr := harness.entries.Upsert(context.Background(), canonicalCacheEntryInput(harness, "go", harness.cacheKey, archive.publication)); upsertErr != nil {
+		t.Fatalf("seed canonical entry: %v", upsertErr)
 	}
-	if saveErr := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication); saveErr != nil {
-		t.Fatalf("save unchanged: %v", saveErr)
+	claim, claimErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if claimErr != nil || !claim.Acquired {
+		t.Fatalf("claim=%+v err=%v", claim, claimErr)
 	}
-	if harness.store.saveCalls != 0 || harness.store.archiveSaveCalls != 0 {
-		t.Fatalf("store saves=%d archive saves=%d, want 0", harness.store.saveCalls, harness.store.archiveSaveCalls)
+
+	if saveErr := harness.service.SaveClaimed(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, claim.ClaimToken, archive.archive, archive.publication); saveErr != nil {
+		t.Fatalf("save canonical cache: %v", saveErr)
+	}
+	if harness.store.archiveSaveCalls != 0 {
+		t.Fatalf("archive uploads=%d, want 0", harness.store.archiveSaveCalls)
+	}
+	retry, retryErr := harness.service.ClaimPublish(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey)
+	if retryErr != nil || !retry.Acquired {
+		t.Fatalf("claim after canonical skip=%+v err=%v", retry, retryErr)
+	}
+}
+
+func TestWorkspaceHelperCacheServiceSaveRepairsDivergentReadyEntry(t *testing.T) {
+	testCases := []struct {
+		name   string
+		mutate func(*repository.CacheEntryUpsertInput)
+	}{
+		{name: "stale checksum", mutate: func(input *repository.CacheEntryUpsertInput) {
+			input.Checksum = strings.Repeat("0", 64)
+		}},
+		{name: "wrong size", mutate: func(input *repository.CacheEntryUpsertInput) {
+			input.SizeBytes++
+		}},
+		{name: "legacy mutable object key", mutate: func(input *repository.CacheEntryUpsertInput) {
+			input.ObjectKey = "v1/jobs/logical-job/go/mutable"
+		}},
+		{name: "unsupported compression", mutate: func(input *repository.CacheEntryUpsertInput) {
+			input.Compression = "zip"
+		}},
+		{name: "wrong storage provider", mutate: func(input *repository.CacheEntryUpsertInput) {
+			input.StorageProvider = domain.StorageProviderGCS
+		}},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			harness := newWorkspaceHelperCacheServiceTestHarness(t)
+			harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
+			archive := cacheArchive(t, "module", "repair")
+			archiveBytes, readErr := io.ReadAll(archive.archive)
+			if readErr != nil {
+				t.Fatalf("read archive: %v", readErr)
+			}
+			if closeErr := archive.archive.Close(); closeErr != nil {
+				t.Fatalf("close archive: %v", closeErr)
+			}
+			input := canonicalCacheEntryInput(harness, "go", harness.cacheKey, archive.publication)
+			testCase.mutate(&input)
+			if _, upsertErr := harness.entries.Upsert(context.Background(), input); upsertErr != nil {
+				t.Fatalf("seed divergent entry: %v", upsertErr)
+			}
+			logs := captureCacheTransferLogs(t)
+
+			if saveErr := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, bytes.NewReader(archiveBytes), archive.publication); saveErr != nil {
+				t.Fatalf("repair save: %v", saveErr)
+			}
+			if harness.store.archiveSaveCalls != 1 || harness.store.archivePromoteCalls != 1 {
+				t.Fatalf("archive saves=%d promotions=%d, want 1 and 1", harness.store.archiveSaveCalls, harness.store.archivePromoteCalls)
+			}
+			if strings.Contains(logs.String(), "outcome=skipped_publish") {
+				t.Fatalf("repair logs=%q, did not want skipped_publish", logs.String())
+			}
+			entry, found, findErr := harness.entries.FindReadyByKey(context.Background(), cacheJobID(harness.build), "go", harness.cacheKey)
+			if findErr != nil || !found {
+				t.Fatalf("repaired entry found=%t err=%v", found, findErr)
+			}
+			wantObjectKey := cacheObjectKey(cacheJobID(harness.build), "go", harness.cacheKey, archive.publication.ContentDigest)
+			wantChecksum := strings.TrimPrefix(archive.publication.ContentDigest, "sha256:")
+			if entry.Status != domain.CacheEntryStatusReady ||
+				entry.ContentDigest != archive.publication.ContentDigest ||
+				entry.Compression != "tar.gz" ||
+				entry.Checksum != wantChecksum ||
+				entry.SizeBytes != *archive.publication.SizeBytes ||
+				entry.ObjectKey != wantObjectKey ||
+				entry.StorageProvider != harness.store.Provider() {
+				t.Fatalf("repaired entry=%#v, want canonical publication metadata", entry)
+			}
+
+			logs.Reset()
+			if saveErr := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, bytes.NewReader(archiveBytes), archive.publication); saveErr != nil {
+				t.Fatalf("save after repair: %v", saveErr)
+			}
+			if harness.store.archiveSaveCalls != 1 || harness.store.archivePromoteCalls != 1 {
+				t.Fatalf("archive saves=%d promotions=%d after retry, want unchanged", harness.store.archiveSaveCalls, harness.store.archivePromoteCalls)
+			}
+			if !strings.Contains(logs.String(), "outcome=skipped_publish") {
+				t.Fatalf("save-after-repair logs=%q, want skipped_publish", logs.String())
+			}
+		})
 	}
 }
 
@@ -300,6 +735,10 @@ func TestWorkspaceHelperCacheServiceRejectsWrongRoleAndIdentity(t *testing.T) {
 			archive := cacheArchive(t, "file", "value")
 			defer func() { _ = archive.archive.Close() }()
 			return h.service.Save(context.Background(), "token", h.job.ID, "pod-uid", "go", h.cacheKey, archive.archive, archive.publication)
+		}},
+		{name: "publish claim role", role: domain.WorkspaceHelperRoleCacheRestore, jobID: "execution-job", podUID: "pod-uid", operation: func(h *workspaceHelperCacheServiceTestHarness) error {
+			_, err := h.service.ClaimPublish(context.Background(), "token", h.job.ID, "pod-uid", "go", h.cacheKey)
+			return err
 		}},
 		{name: "execution job", role: domain.WorkspaceHelperRoleCacheRestore, jobID: "other-job", podUID: "pod-uid", operation: func(h *workspaceHelperCacheServiceTestHarness) error {
 			_, _, err := h.service.Restore(context.Background(), "token", "other-job", "pod-uid", "go", h.cacheKey)
@@ -452,10 +891,18 @@ type workspaceHelperCacheServiceTestHarness struct {
 }
 
 func newWorkspaceHelperCacheServiceTestHarness(t *testing.T) *workspaceHelperCacheServiceTestHarness {
+	return newWorkspaceHelperCacheServiceTestHarnessForPreset(t, "go")
+}
+
+func newWorkspaceHelperCacheServiceTestHarnessForPreset(t *testing.T, preset string) *workspaceHelperCacheServiceTestHarness {
 	t.Helper()
 	logicalJobID := "logical-job"
 	build := domain.Build{ID: "build-1", JobID: &logicalJobID}
-	step := domain.BuildStep{ID: "step-1", BuildID: build.ID, WorkingDir: ".", Cache: &domain.StepCacheConfig{Preset: "go"}}
+	stepPreset := preset
+	if preset == "go-module" || preset == "go-build" {
+		stepPreset = "go"
+	}
+	step := domain.BuildStep{ID: "step-1", BuildID: build.ID, WorkingDir: ".", Cache: &domain.StepCacheConfig{Preset: stepPreset}}
 	job := domain.ExecutionJob{ID: "execution-job", BuildID: build.ID, StepID: step.ID}
 	capabilities := &workspaceHelperCacheCapabilityFake{expectedRole: domain.WorkspaceHelperRoleCacheRestore, expectedJobID: job.ID, expectedPodUID: "pod-uid"}
 	store := &workspaceHelperCacheStoreFake{inner: cachepkg.NewFilesystemStore(t.TempDir())}
@@ -464,11 +911,37 @@ func newWorkspaceHelperCacheServiceTestHarness(t *testing.T) *workspaceHelperCac
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
-	return &workspaceHelperCacheServiceTestHarness{service: service, capabilities: capabilities, entries: entries, store: store, build: build, job: job, step: step, cacheKey: "go:" + strings.Repeat("a", 64)}
+	return &workspaceHelperCacheServiceTestHarness{service: service, capabilities: capabilities, entries: entries, store: store, build: build, job: job, step: step, cacheKey: preset + ":" + strings.Repeat("a", 64)}
+}
+
+func captureCacheTransferLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buffer := &bytes.Buffer{}
+	previous := log.Writer()
+	log.SetOutput(buffer)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	return buffer
 }
 
 func cacheEntryInput(harness *workspaceHelperCacheServiceTestHarness, objectKey string) repository.CacheEntryUpsertInput {
 	return repository.CacheEntryUpsertInput{JobID: cacheJobID(harness.build), Preset: "go", CacheKey: harness.cacheKey, StorageProvider: harness.store.Provider(), ObjectKey: objectKey, SizeBytes: 1, Checksum: "checksum", Compression: "tar.gz", Status: domain.CacheEntryStatusReady, CreatedByBuildID: harness.build.ID, CreatedByStepID: harness.step.ID}
+}
+
+func canonicalCacheEntryInput(harness *workspaceHelperCacheServiceTestHarness, preset string, cacheKey string, publication domain.WorkspaceRevisionPublication) repository.CacheEntryUpsertInput {
+	return repository.CacheEntryUpsertInput{
+		JobID:            cacheJobID(harness.build),
+		Preset:           preset,
+		CacheKey:         cacheKey,
+		StorageProvider:  harness.store.Provider(),
+		ObjectKey:        cacheObjectKey(cacheJobID(harness.build), preset, cacheKey, publication.ContentDigest),
+		SizeBytes:        *publication.SizeBytes,
+		Checksum:         strings.TrimPrefix(publication.ContentDigest, "sha256:"),
+		ContentDigest:    publication.ContentDigest,
+		Compression:      "tar.gz",
+		Status:           domain.CacheEntryStatusReady,
+		CreatedByBuildID: harness.build.ID,
+		CreatedByStepID:  harness.step.ID,
+	}
 }
 
 type workspaceHelperCacheCapabilityFake struct {
@@ -512,6 +985,8 @@ type workspaceHelperCacheStoreFake struct {
 	archivePromoteCalls int
 	archiveDeleteCalls  int
 	archiveBytes        int64
+	archiveSaveHook     func()
+	restoreMiss         bool
 	restoreCalls        int
 	openCalls           int
 }
@@ -519,6 +994,9 @@ type workspaceHelperCacheStoreFake struct {
 func (f *workspaceHelperCacheStoreFake) Provider() domain.StorageProvider { return f.inner.Provider() }
 func (f *workspaceHelperCacheStoreFake) Restore(ctx context.Context, key string, destination string) (cachepkg.RestoreResult, error) {
 	f.restoreCalls++
+	if f.restoreMiss {
+		return cachepkg.RestoreResult{}, nil
+	}
 	return f.inner.Restore(ctx, key, destination)
 }
 func (f *workspaceHelperCacheStoreFake) Save(ctx context.Context, key string, source string) (cachepkg.SaveResult, error) {
@@ -536,6 +1014,9 @@ func (f *workspaceHelperCacheStoreFake) SaveArchive(ctx context.Context, key str
 	f.archiveSaveCalls++
 	if f.saveErr != nil {
 		return cachepkg.SaveResult{}, f.saveErr
+	}
+	if f.archiveSaveHook != nil {
+		f.archiveSaveHook()
 	}
 	return f.inner.SaveArchive(ctx, key, &countingCacheArchiveReader{reader: archive, count: &f.archiveBytes})
 }
