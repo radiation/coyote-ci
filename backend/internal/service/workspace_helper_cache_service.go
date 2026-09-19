@@ -125,7 +125,7 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 		return ErrWorkspaceHelperCacheInvalidInput
 	}
 	jobID := cacheJobID(build)
-	if s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication.ContentDigest) {
+	if s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication) {
 		log.Printf("INFO cache publish skipped unchanged job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
 		return nil
 	}
@@ -147,7 +147,7 @@ func (s *WorkspaceHelperCacheService) Save(ctx context.Context, capabilityToken 
 			log.Printf("WARN cache publish claim release failed job_id=%s preset=%s key=%s err=%v", jobID, preset, cacheKey, releaseErr)
 		}
 	}()
-	if s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication.ContentDigest) {
+	if s.cacheContentIsReady(ctx, jobID, preset, cacheKey, publication) {
 		log.Printf("INFO cache publish skipped unchanged_after_claim job_id=%s preset=%s key=%s", jobID, preset, cacheKey)
 		return nil
 	}
@@ -236,9 +236,38 @@ func directCacheArchiveCompatible(entry domain.CacheEntry) bool {
 	return entry.Compression == "tar.gz" && strings.TrimSpace(entry.ContentDigest) == "sha256:"+strings.TrimSpace(entry.Checksum)
 }
 
-func (s *WorkspaceHelperCacheService) cacheContentIsReady(ctx context.Context, jobID, preset, cacheKey, contentDigest string) bool {
+func (s *WorkspaceHelperCacheService) cacheContentIsReady(ctx context.Context, jobID, preset, cacheKey string, publication domain.WorkspaceRevisionPublication) bool {
 	entry, found, err := s.entries.FindReadyByKey(ctx, jobID, preset, cacheKey)
-	return err == nil && found && strings.TrimSpace(entry.ContentDigest) == strings.TrimSpace(contentDigest)
+	if err != nil || !found {
+		return false
+	}
+	return cacheEntryMatchesPublication(entry, s.store.Provider(), jobID, preset, cacheKey, publication)
+}
+
+func cacheEntryMatchesPublication(entry domain.CacheEntry, provider domain.StorageProvider, jobID, preset, cacheKey string, publication domain.WorkspaceRevisionPublication) bool {
+	if entry.Status != domain.CacheEntryStatusReady {
+		return false
+	}
+	contentDigest := strings.TrimSpace(publication.ContentDigest)
+	if strings.TrimSpace(entry.ContentDigest) != contentDigest {
+		return false
+	}
+	if strings.TrimSpace(entry.Compression) != "tar.gz" {
+		return false
+	}
+	if strings.TrimSpace(entry.Checksum) != strings.TrimPrefix(contentDigest, "sha256:") {
+		return false
+	}
+	if publication.SizeBytes == nil || entry.SizeBytes != *publication.SizeBytes {
+		return false
+	}
+	if strings.TrimSpace(entry.ObjectKey) != cacheObjectKey(jobID, preset, cacheKey, publication.ContentDigest) {
+		return false
+	}
+	if entry.StorageProvider != provider {
+		return false
+	}
+	return true
 }
 
 func (s *WorkspaceHelperCacheService) authorizeAndValidate(ctx context.Context, token string, executionJobID string, podUID string, preset string, cacheKey string, role domain.WorkspaceHelperRole) (domain.Build, domain.BuildStep, error) {
