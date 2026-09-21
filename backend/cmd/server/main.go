@@ -551,11 +551,15 @@ func newWorkspaceHelperHandlerWithVerifier(cfg config.Config, executionJobs repo
 	if !cfg.WorkspaceHelperCapabilityEnabled {
 		return nil, nil
 	}
+	capabilitySecret, err := cfg.WorkspaceHelperCapabilitySecretValue()
+	if err != nil {
+		return nil, err
+	}
 	verifier, err := newVerifier(cfg.WorkspaceHelperKubeconfig, cfg.WorkspaceHelperServiceAccount)
 	if err != nil {
 		return nil, err
 	}
-	capabilities, err := service.NewWorkspaceHelperCapabilityService(executionJobs, verifier, cfg.WorkspaceHelperCapabilitySecret)
+	capabilities, err := service.NewWorkspaceHelperCapabilityService(executionJobs, verifier, capabilitySecret)
 	if err != nil {
 		return nil, err
 	}

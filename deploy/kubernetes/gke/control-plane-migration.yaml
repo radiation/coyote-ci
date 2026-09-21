@@ -1,0 +1,63 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: coyote-migrate
+  namespace: coyote-ci
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coyote-migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: coyote-migrate
+      containers:
+        - name: migrate
+          image: __COYOTE_MIGRATE_IMAGE__
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DATABASE_URL_FILE
+              value: /var/run/secrets/coyote/database-url
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+              ephemeral-storage: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 256Mi
+          volumeMounts:
+            - name: database-url
+              mountPath: /var/run/secrets/coyote
+              readOnly: true
+      initContainers:
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.4@sha256:88501f0a695a586988add1b8a206fdf3f29f9a1a3deeb9b45ef2b1481ea6be83
+          restartPolicy: Always
+          args:
+            - --address=127.0.0.1
+            - --port=5432
+            - __CLOUD_SQL_INSTANCE__
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: database-url
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: coyote-migrate-secrets

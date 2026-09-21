@@ -40,6 +40,7 @@ type Config struct {
 	WorkspaceHelperKubeconfig              string
 	WorkspaceHelperServiceAccount          string
 	WorkspaceHelperCapabilitySecret        string
+	WorkspaceHelperCapabilitySecretFile    string
 	WorkspaceHelperMaxUploadSizeMB         int
 	WorkspaceRevisionMaxUploadSizeMB       int
 	WorkspaceRevisionMaxUncompressedSizeMB int
@@ -136,6 +137,7 @@ func Load() Config {
 		WorkspaceHelperKubeconfig:              getEnv("COYOTE_WORKSPACE_HELPER_KUBECONFIG", ""),
 		WorkspaceHelperServiceAccount:          getEnv("COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT", "coyote-workspace-helper"),
 		WorkspaceHelperCapabilitySecret:        getEnv("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET", ""),
+		WorkspaceHelperCapabilitySecretFile:    getEnv("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE", ""),
 		WorkspaceHelperMaxUploadSizeMB:         getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB", 1024),
 		WorkspaceRevisionMaxUploadSizeMB:       getEnvInt("COYOTE_WORKSPACE_REVISION_MAX_UPLOAD_SIZE_MB", 2048),
 		WorkspaceRevisionMaxUncompressedSizeMB: getEnvIntFallback("COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB", "COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 4096),
@@ -230,6 +232,20 @@ func (c Config) DatabaseURL() (string, error) {
 
 func (c Config) UsesDatabaseURL() bool {
 	return strings.TrimSpace(c.DatabaseURLFile) != "" || strings.TrimSpace(c.DatabaseURLValue) != ""
+}
+
+func (c Config) WorkspaceHelperCapabilitySecretValue() (string, error) {
+	if secretFile := strings.TrimSpace(c.WorkspaceHelperCapabilitySecretFile); secretFile != "" {
+		contents, err := os.ReadFile(secretFile)
+		if err != nil {
+			return "", fmt.Errorf("read COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE %q: %w", secretFile, err)
+		}
+		if secret := strings.TrimSpace(string(contents)); secret != "" {
+			return secret, nil
+		}
+		return "", fmt.Errorf("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE %q is empty", secretFile)
+	}
+	return strings.TrimSpace(c.WorkspaceHelperCapabilitySecret), nil
 }
 
 func (c Config) DatabaseConfigMode() string {

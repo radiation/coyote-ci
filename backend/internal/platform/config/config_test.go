@@ -401,6 +401,7 @@ func TestLoad(t *testing.T) {
 		"COYOTE_WORKSPACE_HELPER_KUBECONFIG",
 		"COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT",
 		"COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET",
+		"COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE",
 		"COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB",
 		"COYOTE_WORKSPACE_REVISION_MAX_UPLOAD_SIZE_MB",
 		"COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB",
@@ -506,6 +507,7 @@ func TestLoadWorkspaceHelperCapabilityConfig(t *testing.T) {
 	if !cfg.WorkspaceHelperCapabilityEnabled {
 		t.Fatal("expected workspace helper capability exchange to be enabled")
 	}
+
 	if cfg.WorkspaceHelperKubeconfig != "/server/kubeconfig" {
 		t.Fatalf("kubeconfig=%q", cfg.WorkspaceHelperKubeconfig)
 	}
@@ -517,6 +519,26 @@ func TestLoadWorkspaceHelperCapabilityConfig(t *testing.T) {
 	}
 	if cfg.CacheArchiveMaxUncompressedSizeMB != 2048 || cfg.CacheArchiveMaxEntries != 20000 {
 		t.Fatalf("cache limits=%d MiB/%d entries", cfg.CacheArchiveMaxUncompressedSizeMB, cfg.CacheArchiveMaxEntries)
+	}
+}
+
+func TestWorkspaceHelperCapabilitySecretValuePrefersFile(t *testing.T) {
+	secretFile := filepath.Join(t.TempDir(), "workspace-helper-secret")
+	if writeErr := os.WriteFile(secretFile, []byte("file-secret\n"), 0o600); writeErr != nil {
+		t.Fatalf("write secret file: %v", writeErr)
+	}
+
+	cfg := Config{
+		WorkspaceHelperCapabilitySecret:     "environment-secret",
+		WorkspaceHelperCapabilitySecretFile: secretFile,
+	}
+	secret, secretErr := cfg.WorkspaceHelperCapabilitySecretValue()
+	if secretErr != nil || secret != "file-secret" {
+		t.Fatalf("secret=%q err=%v", secret, secretErr)
+	}
+
+	if _, missingErr := (Config{WorkspaceHelperCapabilitySecretFile: filepath.Join(t.TempDir(), "missing")}).WorkspaceHelperCapabilitySecretValue(); missingErr == nil {
+		t.Fatal("expected unreadable secret file error")
 	}
 }
 

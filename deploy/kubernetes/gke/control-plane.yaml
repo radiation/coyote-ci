@@ -1,0 +1,301 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coyote-server
+  namespace: coyote-ci
+  annotations:
+    iam.gke.io/gcp-service-account: __COYOTE_SERVER_GSA__
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coyote-migrate
+  namespace: coyote-ci
+  annotations:
+    iam.gke.io/gcp-service-account: __COYOTE_MIGRATE_GSA__
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coyote-server-workspace-verifier
+  namespace: coyote-ci
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coyote-server-workspace-verifier
+  namespace: coyote-ci
+subjects:
+  - kind: ServiceAccount
+    name: coyote-server
+    namespace: coyote-ci
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coyote-server-workspace-verifier
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: coyote-server-tokenreview
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: coyote-server-tokenreview
+subjects:
+  - kind: ServiceAccount
+    name: coyote-server
+    namespace: coyote-ci
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: coyote-server-tokenreview
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: coyote-server-secrets
+  namespace: coyote-ci
+spec:
+  provider: gke
+  parameters:
+    secrets: |
+      - resourceName: "projects/__GCP_PROJECT__/secrets/__DATABASE_URL_SECRET__/versions/latest"
+        path: "database-url"
+      - resourceName: "projects/__GCP_PROJECT__/secrets/__WORKSPACE_HELPER_CAPABILITY_SECRET__/versions/latest"
+        path: "workspace-helper-capability-secret"
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: coyote-migrate-secrets
+  namespace: coyote-ci
+spec:
+  provider: gke
+  parameters:
+    secrets: |
+      - resourceName: "projects/__GCP_PROJECT__/secrets/__DATABASE_URL_SECRET__/versions/latest"
+        path: "database-url"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coyote-control-plane
+  namespace: coyote-ci
+data:
+  APP_PORT: "8080"
+  AUTH_MODE: "__AUTH_MODE__"
+  COYOTE_WORKSPACE_HELPER_ENABLED: "true"
+  COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT: "coyote-workspace-helper"
+  COYOTE_KUBERNETES_CACHE_HELPER_ENABLED: "true"
+  COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED: "true"
+  ARTIFACT_STORAGE_PROVIDER: "gcs"
+  ARTIFACT_STORAGE_STRICT: "true"
+  ARTIFACT_GCS_BUCKET: "__ARTIFACT_GCS_BUCKET__"
+  ARTIFACT_GCS_PREFIX: "__ARTIFACT_GCS_PREFIX__"
+  ARTIFACT_GCS_PROJECT: "__GCP_PROJECT__"
+  WORKER_CACHE_STORAGE_PROVIDER: "gcs"
+  WORKER_CACHE_STORAGE_STRICT: "true"
+  WORKER_CACHE_GCS_BUCKET: "__CACHE_GCS_BUCKET__"
+  WORKER_CACHE_GCS_PREFIX: "__CACHE_GCS_PREFIX__"
+  WORKER_CACHE_GCS_PROJECT: "__GCP_PROJECT__"
+  WORKSPACE_REVISION_STORAGE_PROVIDER: "gcs"
+  WORKSPACE_REVISION_STORAGE_STRICT: "true"
+  WORKSPACE_REVISION_GCS_BUCKET: "__WORKSPACE_REVISION_GCS_BUCKET__"
+  WORKSPACE_REVISION_GCS_PREFIX: "__WORKSPACE_REVISION_GCS_PREFIX__"
+  EMAIL_NOTIFICATIONS_ENABLED: "false"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coyote-server
+  namespace: coyote-ci
+spec:
+  selector:
+    app.kubernetes.io/name: coyote-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Keeps the existing frontend image's same-origin upstream unchanged.
+apiVersion: v1
+kind: Service
+metadata:
+  name: server
+  namespace: coyote-ci
+spec:
+  selector:
+    app.kubernetes.io/name: coyote-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coyote-server
+  namespace: coyote-ci
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coyote-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coyote-server
+    spec:
+      serviceAccountName: coyote-server
+      containers:
+        - name: server
+          image: __COYOTE_SERVER_IMAGE__
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: coyote-control-plane
+          env:
+            - name: DATABASE_URL_FILE
+              value: /var/run/secrets/coyote/database-url
+            - name: COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE
+              value: /var/run/secrets/coyote/workspace-helper-capability-secret
+          ports:
+            - name: http
+              containerPort: 8080
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 2Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+              ephemeral-storage: 4Gi
+          volumeMounts:
+            - name: control-plane-secrets
+              mountPath: /var/run/secrets/coyote
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.4@sha256:88501f0a695a586988add1b8a206fdf3f29f9a1a3deeb9b45ef2b1481ea6be83
+          args:
+            - --address=127.0.0.1
+            - --port=5432
+            - __CLOUD_SQL_INSTANCE__
+          ports:
+            - name: postgres
+              containerPort: 5432
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: control-plane-secrets
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: coyote-server-secrets
+        - name: tmp
+          emptyDir:
+            sizeLimit: 4Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coyote-frontend
+  namespace: coyote-ci
+spec:
+  selector:
+    app.kubernetes.io/name: coyote-frontend
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coyote-frontend
+  namespace: coyote-ci
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coyote-frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coyote-frontend
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: frontend
+          image: __COYOTE_FRONTEND_IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+              ephemeral-storage: 256Mi
