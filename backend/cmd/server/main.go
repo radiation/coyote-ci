@@ -334,12 +334,20 @@ func main() {
 	var sessionManager *auth.CookieSessionManager
 	var authHandler *handler.AuthHandler
 	if authMode == auth.ModeOIDC {
+		sessionSecret, sessionSecretErr := cfg.SessionSecretValue()
+		if sessionSecretErr != nil {
+			log.Fatalf("failed to resolve session secret: %v", sessionSecretErr)
+		}
+		oidcClientSecret, oidcClientSecretErr := cfg.OIDCClientSecretValue()
+		if oidcClientSecretErr != nil {
+			log.Fatalf("failed to resolve OIDC client secret: %v", oidcClientSecretErr)
+		}
 		sameSite, sameSiteErr := auth.ParseSameSite(cfg.SessionCookieSameSite)
 		if sameSiteErr != nil {
 			log.Fatalf("invalid session cookie same-site setting: %v", sameSiteErr)
 		}
 		createdSessionManager, sessionErr := auth.NewCookieSessionManager(auth.CookieSessionConfig{
-			Secret:     cfg.SessionSecret,
+			Secret:     sessionSecret,
 			CookieName: cfg.SessionCookieName,
 			Secure:     cfg.SessionCookieSecure,
 			SameSite:   sameSite,
@@ -352,7 +360,7 @@ func main() {
 		oidcAuthenticator, oidcErr := auth.NewOIDCAuthenticator(context.Background(), auth.OIDCConfig{
 			IssuerURL:    cfg.OIDCIssuerURL,
 			ClientID:     cfg.OIDCClientID,
-			ClientSecret: cfg.OIDCClientSecret,
+			ClientSecret: oidcClientSecret,
 			RedirectURL:  cfg.OIDCRedirectURL,
 			Scopes:       auth.ParseOIDCScopes(cfg.OIDCScopes),
 		})

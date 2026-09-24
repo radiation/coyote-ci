@@ -17,7 +17,14 @@ cache_bucket="${WORKER_CACHE_GCS_BUCKET:-}"
 cache_prefix="${WORKER_CACHE_GCS_PREFIX:-coyote-ci/cache}"
 revision_bucket="${WORKSPACE_REVISION_GCS_BUCKET:-}"
 revision_prefix="${WORKSPACE_REVISION_GCS_PREFIX:-workspace-revisions}"
-auth_mode="${CONTROL_PLANE_AUTH_MODE:-disabled}"
+auth_mode="${CONTROL_PLANE_AUTH_MODE:-}"
+bootstrap_admin_emails="${CONTROL_PLANE_BOOTSTRAP_ADMIN_EMAILS:-}"
+oidc_issuer_url="${CONTROL_PLANE_OIDC_ISSUER_URL:-}"
+oidc_client_id="${CONTROL_PLANE_OIDC_CLIENT_ID:-}"
+oidc_client_secret_name="${CONTROL_PLANE_OIDC_CLIENT_SECRET_NAME:-coyote-staging-oidc-client-secret}"
+oidc_redirect_url="${CONTROL_PLANE_OIDC_REDIRECT_URL:-}"
+oidc_scopes="${CONTROL_PLANE_OIDC_SCOPES:-openid email profile}"
+session_secret_name="${CONTROL_PLANE_SESSION_SECRET_NAME:-coyote-staging-session-secret}"
 timeout_seconds="${GKE_DEPLOY_TIMEOUT_SECONDS:-300}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 render_dir="$(mktemp -d)"
@@ -61,14 +68,25 @@ render_manifest() {
     -e "s|__WORKSPACE_REVISION_GCS_BUCKET__|$(escape_sed "$revision_bucket")|g" \
     -e "s|__WORKSPACE_REVISION_GCS_PREFIX__|$(escape_sed "$revision_prefix")|g" \
     -e "s|__AUTH_MODE__|$(escape_sed "$auth_mode")|g" \
+    -e "s|__BOOTSTRAP_ADMIN_EMAILS__|$(escape_sed "$bootstrap_admin_emails")|g" \
+    -e "s|__OIDC_ISSUER_URL__|$(escape_sed "$oidc_issuer_url")|g" \
+    -e "s|__OIDC_CLIENT_ID__|$(escape_sed "$oidc_client_id")|g" \
+    -e "s|__OIDC_CLIENT_SECRET__|$(escape_sed "$oidc_client_secret_name")|g" \
+    -e "s|__OIDC_REDIRECT_URL__|$(escape_sed "$oidc_redirect_url")|g" \
+    -e "s|__OIDC_SCOPES__|$(escape_sed "$oidc_scopes")|g" \
+    -e "s|__SESSION_SECRET__|$(escape_sed "$session_secret_name")|g" \
     "$source" > "$destination"
 }
 
 require_command kubectl
 
 [[ "$namespace" == "coyote-ci" ]] || { echo "GKE_NAMESPACE must be coyote-ci" >&2; exit 1; }
+[[ "$auth_mode" == "oidc" ]] || { echo "CONTROL_PLANE_AUTH_MODE must be oidc; disabled and header modes are not safe for this deployment" >&2; exit 1; }
 for setting in server_gsa migrate_gsa artifact_bucket cache_bucket revision_bucket; do
   [[ -n "${!setting}" ]] || { echo "$setting must not be empty" >&2; exit 1; }
+done
+for setting in bootstrap_admin_emails oidc_issuer_url oidc_client_id oidc_client_secret_name oidc_redirect_url session_secret_name; do
+  [[ -n "${!setting}" ]] || { echo "$setting must not be empty for OIDC control-plane deployment" >&2; exit 1; }
 done
 require_digest_image COYOTE_SERVER_IMAGE "$server_image"
 require_digest_image COYOTE_FRONTEND_IMAGE "$frontend_image"

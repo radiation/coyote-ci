@@ -73,6 +73,10 @@ spec:
         path: "database-url"
       - resourceName: "projects/__GCP_PROJECT__/secrets/__WORKSPACE_HELPER_CAPABILITY_SECRET__/versions/latest"
         path: "workspace-helper-capability-secret"
+      - resourceName: "projects/__GCP_PROJECT__/secrets/__OIDC_CLIENT_SECRET__/versions/latest"
+        path: "oidc-client-secret"
+      - resourceName: "projects/__GCP_PROJECT__/secrets/__SESSION_SECRET__/versions/latest"
+        path: "session-secret"
 ---
 apiVersion: secrets-store.csi.x-k8s.io/v1
 kind: SecretProviderClass
@@ -94,6 +98,14 @@ metadata:
 data:
   APP_PORT: "8080"
   AUTH_MODE: "__AUTH_MODE__"
+  BOOTSTRAP_ADMIN_EMAILS: "__BOOTSTRAP_ADMIN_EMAILS__"
+  OIDC_ISSUER_URL: "__OIDC_ISSUER_URL__"
+  OIDC_CLIENT_ID: "__OIDC_CLIENT_ID__"
+  OIDC_REDIRECT_URL: "__OIDC_REDIRECT_URL__"
+  OIDC_SCOPES: "__OIDC_SCOPES__"
+  SESSION_COOKIE_NAME: "coyote_session"
+  SESSION_COOKIE_SECURE: "true"
+  SESSION_COOKIE_SAME_SITE: "lax"
   COYOTE_WORKSPACE_HELPER_ENABLED: "true"
   COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT: "coyote-workspace-helper"
   COYOTE_KUBERNETES_CACHE_HELPER_ENABLED: "true"
@@ -174,6 +186,10 @@ spec:
               value: /var/run/secrets/coyote/database-url
             - name: COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE
               value: /var/run/secrets/coyote/workspace-helper-capability-secret
+            - name: OIDC_CLIENT_SECRET_FILE
+              value: /var/run/secrets/coyote/oidc-client-secret
+            - name: SESSION_SECRET_FILE
+              value: /var/run/secrets/coyote/session-secret
           ports:
             - name: http
               containerPort: 8080

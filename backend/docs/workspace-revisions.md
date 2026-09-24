@@ -6,6 +6,10 @@ deletes its durable bytes; it does not update revision repository state. Publish
 metadata records the storage provider with the key, digest, and size so reads use
 the provider that created the revision.
 
+Publishing revisions do not yet have archive metadata, so their
+`storage_provider` is `NULL`. Published and deleted revisions require an
+explicit `filesystem` or `gcs` provider, alongside their digest, key, and size.
+
 The filesystem store writes objects beneath
 its configured root at the provider-neutral key
 `workspace-revisions/<revision-id>.tar.gz`. The object is a streaming tar+gzip

@@ -83,9 +83,11 @@ type Config struct {
 	OIDCIssuerURL                          string
 	OIDCClientID                           string
 	OIDCClientSecret                       string
+	OIDCClientSecretFile                   string
 	OIDCRedirectURL                        string
 	OIDCScopes                             string
 	SessionSecret                          string
+	SessionSecretFile                      string
 	SessionCookieName                      string
 	SessionCookieSecure                    bool
 	SessionCookieSameSite                  string
@@ -180,9 +182,11 @@ func Load() Config {
 		OIDCIssuerURL:                          getEnv("OIDC_ISSUER_URL", ""),
 		OIDCClientID:                           getEnv("OIDC_CLIENT_ID", ""),
 		OIDCClientSecret:                       getEnv("OIDC_CLIENT_SECRET", ""),
+		OIDCClientSecretFile:                   getEnv("OIDC_CLIENT_SECRET_FILE", ""),
 		OIDCRedirectURL:                        oidcRedirectURL,
 		OIDCScopes:                             getEnv("OIDC_SCOPES", "openid email profile"),
 		SessionSecret:                          getEnv("SESSION_SECRET", ""),
+		SessionSecretFile:                      getEnv("SESSION_SECRET_FILE", ""),
 		SessionCookieName:                      getEnv("SESSION_COOKIE_NAME", "coyote_session"),
 		SessionCookieSecure:                    getEnvBool("SESSION_COOKIE_SECURE", defaultSessionCookieSecure(oidcRedirectURL)),
 		SessionCookieSameSite:                  getEnv("SESSION_COOKIE_SAME_SITE", "lax"),
@@ -235,17 +239,29 @@ func (c Config) UsesDatabaseURL() bool {
 }
 
 func (c Config) WorkspaceHelperCapabilitySecretValue() (string, error) {
-	if secretFile := strings.TrimSpace(c.WorkspaceHelperCapabilitySecretFile); secretFile != "" {
+	return secretValue(c.WorkspaceHelperCapabilitySecret, c.WorkspaceHelperCapabilitySecretFile, "COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE")
+}
+
+func (c Config) OIDCClientSecretValue() (string, error) {
+	return secretValue(c.OIDCClientSecret, c.OIDCClientSecretFile, "OIDC_CLIENT_SECRET_FILE")
+}
+
+func (c Config) SessionSecretValue() (string, error) {
+	return secretValue(c.SessionSecret, c.SessionSecretFile, "SESSION_SECRET_FILE")
+}
+
+func secretValue(value string, file string, fileVariable string) (string, error) {
+	if secretFile := strings.TrimSpace(file); secretFile != "" {
 		contents, err := os.ReadFile(secretFile)
 		if err != nil {
-			return "", fmt.Errorf("read COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE %q: %w", secretFile, err)
+			return "", fmt.Errorf("read %s %q: %w", fileVariable, secretFile, err)
 		}
 		if secret := strings.TrimSpace(string(contents)); secret != "" {
 			return secret, nil
 		}
-		return "", fmt.Errorf("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE %q is empty", secretFile)
+		return "", fmt.Errorf("%s %q is empty", fileVariable, secretFile)
 	}
-	return strings.TrimSpace(c.WorkspaceHelperCapabilitySecret), nil
+	return strings.TrimSpace(value), nil
 }
 
 func (c Config) DatabaseConfigMode() string {

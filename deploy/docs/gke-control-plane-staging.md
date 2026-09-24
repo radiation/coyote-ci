@@ -14,14 +14,25 @@ Create these Secret Manager secrets outside source control:
   `127.0.0.1:5432` as the host, for the Cloud SQL Auth Proxy sidecar.
 - `coyote-workspace-helper-capability-secret`: the capability secret shared
   with workspace helper execution Pods for the staging control plane.
+- `coyote-staging-oidc-client-secret`: the OIDC client secret for this staging
+  deployment.
+- `coyote-staging-session-secret`: a high-entropy, independent session-signing
+  secret for this staging deployment.
 
-The server `SecretProviderClass/coyote-server-secrets` mounts both files. The
-migration `SecretProviderClass/coyote-migrate-secrets` mounts only the database
-URL, so the migration workload cannot request the workspace-helper capability
-secret. The database URL is read by the server and migration image through
-`DATABASE_URL_FILE`. The workspace-helper secret is read by the server through
-`COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE`; it is never placed in a
-manifest or ConfigMap.
+The server `SecretProviderClass/coyote-server-secrets` mounts all four server
+files. The migration `SecretProviderClass/coyote-migrate-secrets` mounts only
+the database URL, so the migration workload cannot request workspace-helper or
+OIDC secrets. The database URL is read by the server and migration image
+through `DATABASE_URL_FILE`. The workspace-helper secret is read through
+`COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE`; OIDC and session secrets are
+read through `OIDC_CLIENT_SECRET_FILE` and `SESSION_SECRET_FILE`. None are
+placed in a manifest or ConfigMap.
+
+The staging control plane requires `AUTH_MODE=oidc`. It does not support
+`disabled` mode because untrusted execution Pods share the namespace and can
+resolve the ClusterIP Service. `header` mode is also rejected because its
+caller-controlled headers are not an authentication boundary for workloads.
+Workspace-helper routes retain their independent capability authorization.
 
 ## External IAM setup
 
@@ -71,7 +82,8 @@ gcloud storage buckets add-iam-policy-binding "gs://${WORKSPACE_REVISION_BUCKET}
 Grant Secret Manager access at the secret resource, not project-wide:
 
 ```sh
-for secret in coyote-staging-database-url coyote-workspace-helper-capability-secret; do
+for secret in coyote-staging-database-url coyote-workspace-helper-capability-secret \
+  coyote-staging-oidc-client-secret coyote-staging-session-secret; do
   gcloud secrets add-iam-policy-binding "$secret" --project="$GCP_PROJECT" \
     --member="serviceAccount:${SERVER_GSA}" --role=roles/secretmanager.secretAccessor
 done
@@ -103,6 +115,11 @@ export COYOTE_STAGING_DATABASE_URL_SECRET=coyote-staging-database-url
 export ARTIFACT_GCS_BUCKET="$ARTIFACT_BUCKET"
 export WORKER_CACHE_GCS_BUCKET="$CACHE_BUCKET"
 export WORKSPACE_REVISION_GCS_BUCKET="$WORKSPACE_REVISION_BUCKET"
+export CONTROL_PLANE_AUTH_MODE=oidc
+export CONTROL_PLANE_OIDC_ISSUER_URL=https://issuer.example.com
+export CONTROL_PLANE_OIDC_CLIENT_ID=coyote-ci-staging
+export CONTROL_PLANE_OIDC_REDIRECT_URL=https://<temporary-staging-hostname>/auth/callback
+export CONTROL_PLANE_BOOTSTRAP_ADMIN_EMAILS=admin@example.com
 make gke-control-plane-deploy
 make gke-control-plane-smoke
 ```
@@ -113,6 +130,13 @@ completed migration Job, waits for the new migration Job, then scales and waits
 for the server before the frontend. The completed migration Job is retained for
 staging diagnostics until the next deployment explicitly replaces it. A
 migration failure stops the rollout.
+
+The OIDC provider must register the configured temporary staging callback URL,
+and `coyote-staging-oidc-client-secret` must contain its client secret before
+deployment. `coyote-staging-session-secret` must contain an independent,
+high-entropy random value. OIDC is required even for private, port-forward-only
+validation so in-namespace untrusted workloads cannot impersonate an
+administrator through the ClusterIP Service.
 
 `gke-control-plane-smoke` uses temporary `kubectl port-forward` processes only.
 It checks the migration Job, rollout state, digest-pinned images, in-cluster

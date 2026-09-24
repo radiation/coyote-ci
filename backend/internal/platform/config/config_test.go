@@ -155,9 +155,11 @@ func TestLoad(t *testing.T) {
 				"OIDC_ISSUER_URL":                                    "https://issuer.example.com",
 				"OIDC_CLIENT_ID":                                     "coyote",
 				"OIDC_CLIENT_SECRET":                                 "secret",
+				"OIDC_CLIENT_SECRET_FILE":                            "/run/secrets/coyote/oidc-client-secret",
 				"OIDC_REDIRECT_URL":                                  "http://localhost:8080/auth/callback",
 				"OIDC_SCOPES":                                        "openid email",
 				"SESSION_SECRET":                                     "session-secret",
+				"SESSION_SECRET_FILE":                                "/run/secrets/coyote/session-secret",
 				"SESSION_COOKIE_NAME":                                "custom_session",
 				"SESSION_COOKIE_SECURE":                              "false",
 				"SESSION_COOKIE_SAME_SITE":                           "strict",
@@ -209,9 +211,11 @@ func TestLoad(t *testing.T) {
 				OIDCIssuerURL:                          "https://issuer.example.com",
 				OIDCClientID:                           "coyote",
 				OIDCClientSecret:                       "secret",
+				OIDCClientSecretFile:                   "/run/secrets/coyote/oidc-client-secret",
 				OIDCRedirectURL:                        "http://localhost:8080/auth/callback",
 				OIDCScopes:                             "openid email",
 				SessionSecret:                          "session-secret",
+				SessionSecretFile:                      "/run/secrets/coyote/session-secret",
 				SessionCookieName:                      "custom_session",
 				SessionCookieSecure:                    false,
 				SessionCookieSameSite:                  "strict",
@@ -451,6 +455,7 @@ func TestLoad(t *testing.T) {
 		"NOTIFICATION_RECOVERY_INTERVAL",
 		"OIDC_CLIENT_ID",
 		"OIDC_CLIENT_SECRET",
+		"OIDC_CLIENT_SECRET_FILE",
 		"OIDC_ISSUER_URL",
 		"OIDC_REDIRECT_URL",
 		"OIDC_SCOPES",
@@ -461,6 +466,7 @@ func TestLoad(t *testing.T) {
 		"SESSION_COOKIE_SAME_SITE",
 		"SESSION_COOKIE_SECURE",
 		"SESSION_SECRET",
+		"SESSION_SECRET_FILE",
 		"SMTP_FROM_ADDRESS",
 		"SMTP_HOST",
 		"SMTP_PASSWORD",
@@ -595,6 +601,48 @@ func TestWorkspaceHelperCapabilitySecretValuePrefersFile(t *testing.T) {
 	secret, secretErr = (Config{WorkspaceHelperCapabilitySecret: "environment-secret"}).WorkspaceHelperCapabilitySecretValue()
 	if secretErr != nil || secret != "environment-secret" {
 		t.Fatalf("environment secret=%q err=%v", secret, secretErr)
+	}
+}
+
+func TestOIDCAndSessionSecretValuesPreferFiles(t *testing.T) {
+	oidcSecretFile := filepath.Join(t.TempDir(), "oidc-client-secret")
+	if writeErr := os.WriteFile(oidcSecretFile, []byte("oidc-file-secret\n"), 0o600); writeErr != nil {
+		t.Fatalf("write OIDC secret file: %v", writeErr)
+	}
+	sessionSecretFile := filepath.Join(t.TempDir(), "session-secret")
+	if writeErr := os.WriteFile(sessionSecretFile, []byte("session-file-secret\n"), 0o600); writeErr != nil {
+		t.Fatalf("write session secret file: %v", writeErr)
+	}
+
+	cfg := Config{
+		OIDCClientSecret:     "environment-oidc-secret",
+		OIDCClientSecretFile: oidcSecretFile,
+		SessionSecret:        "environment-session-secret",
+		SessionSecretFile:    sessionSecretFile,
+	}
+	oidcSecret, oidcSecretErr := cfg.OIDCClientSecretValue()
+	if oidcSecretErr != nil || oidcSecret != "oidc-file-secret" {
+		t.Fatalf("OIDC secret=%q err=%v", oidcSecret, oidcSecretErr)
+	}
+	sessionSecret, sessionSecretErr := cfg.SessionSecretValue()
+	if sessionSecretErr != nil || sessionSecret != "session-file-secret" {
+		t.Fatalf("session secret=%q err=%v", sessionSecret, sessionSecretErr)
+	}
+
+	if _, missingErr := (Config{OIDCClientSecretFile: filepath.Join(t.TempDir(), "missing")}).OIDCClientSecretValue(); missingErr == nil {
+		t.Fatal("expected unreadable OIDC secret file error")
+	}
+	if _, missingErr := (Config{SessionSecretFile: filepath.Join(t.TempDir(), "missing")}).SessionSecretValue(); missingErr == nil {
+		t.Fatal("expected unreadable session secret file error")
+	}
+
+	oidcSecret, oidcSecretErr = (Config{OIDCClientSecret: "environment-oidc-secret"}).OIDCClientSecretValue()
+	if oidcSecretErr != nil || oidcSecret != "environment-oidc-secret" {
+		t.Fatalf("environment OIDC secret=%q err=%v", oidcSecret, oidcSecretErr)
+	}
+	sessionSecret, sessionSecretErr = (Config{SessionSecret: "environment-session-secret"}).SessionSecretValue()
+	if sessionSecretErr != nil || sessionSecret != "environment-session-secret" {
+		t.Fatalf("environment session secret=%q err=%v", sessionSecret, sessionSecretErr)
 	}
 }
 
