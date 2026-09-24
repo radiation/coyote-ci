@@ -1,4 +1,4 @@
-.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix kind-up kind-load kind-smoke kind-workspace-smoke kind-reliability-smoke kind-down gke-image-build gke-deploy gke-smoke
+.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix kind-up kind-load kind-smoke kind-workspace-smoke kind-reliability-smoke kind-down gke-image-build gke-deploy gke-smoke gke-control-plane-image-build gke-control-plane-deploy gke-control-plane-smoke
 
 CLI_VERSION ?= dev
 CLI_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -83,6 +83,15 @@ gke-deploy:
 
 gke-smoke:
 	bash ./scripts/gke-smoke.sh
+
+gke-control-plane-image-build:
+	bash ./scripts/gke-control-plane-image-build.sh
+
+gke-control-plane-deploy:
+	bash ./scripts/gke-control-plane-deploy.sh
+
+gke-control-plane-smoke:
+	bash ./scripts/gke-control-plane-smoke.sh
 
 cli-validate-release-matrix:
 	bash ./scripts/validate_cli_snapshot.sh .

@@ -25,8 +25,7 @@ func WorkspaceRevisionIDForExecutionJob(executionJobID string) string {
 }
 
 // WorkspaceRevision records the durable publication state for one execution
-// job's logical workspace result. It does not describe the writable workspace
-// or the storage provider that holds future revision bytes.
+// job's logical workspace result. It does not describe the writable workspace.
 type WorkspaceRevision struct {
 	ID                      string
 	ProducingExecutionJobID string
@@ -37,6 +36,7 @@ type WorkspaceRevision struct {
 	Status                  WorkspaceRevisionStatus
 	ContentDigest           *string
 	StorageKey              *string
+	StorageProvider         *StorageProvider
 	SizeBytes               *int64
 	CreatedAt               time.Time
 	PublishedAt             *time.Time
@@ -44,16 +44,17 @@ type WorkspaceRevision struct {
 }
 
 type WorkspaceRevisionPublication struct {
-	ContentDigest string
-	StorageKey    string
-	SizeBytes     *int64
+	ContentDigest   string
+	StorageKey      string
+	StorageProvider StorageProvider
+	SizeBytes       *int64
 }
 
 func (r WorkspaceRevision) ValidateForCreate() error {
 	if strings.TrimSpace(r.ID) == "" || strings.TrimSpace(r.ProducingExecutionJobID) == "" || strings.TrimSpace(r.BuildID) == "" || strings.TrimSpace(r.NodeID) == "" || r.AttemptNumber < 1 || r.CreatedAt.IsZero() {
 		return ErrInvalidWorkspaceRevision
 	}
-	if r.Status != WorkspaceRevisionStatusPublishing || r.ContentDigest != nil || r.StorageKey != nil || r.SizeBytes != nil || r.PublishedAt != nil || r.DeletedAt != nil {
+	if r.Status != WorkspaceRevisionStatusPublishing || r.ContentDigest != nil || r.StorageKey != nil || r.StorageProvider != nil || r.SizeBytes != nil || r.PublishedAt != nil || r.DeletedAt != nil {
 		return ErrInvalidWorkspaceRevision
 	}
 	return nil
@@ -61,6 +62,9 @@ func (r WorkspaceRevision) ValidateForCreate() error {
 
 func (p WorkspaceRevisionPublication) Validate() error {
 	if strings.TrimSpace(p.ContentDigest) == "" || strings.TrimSpace(p.StorageKey) == "" {
+		return ErrInvalidWorkspaceRevision
+	}
+	if p.StorageProvider != StorageProviderFilesystem && p.StorageProvider != StorageProviderGCS {
 		return ErrInvalidWorkspaceRevision
 	}
 	if p.SizeBytes != nil && *p.SizeBytes < 0 {

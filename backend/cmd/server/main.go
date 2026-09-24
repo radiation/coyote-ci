@@ -334,12 +334,20 @@ func main() {
 	var sessionManager *auth.CookieSessionManager
 	var authHandler *handler.AuthHandler
 	if authMode == auth.ModeOIDC {
+		sessionSecret, sessionSecretErr := cfg.SessionSecretValue()
+		if sessionSecretErr != nil {
+			log.Fatalf("failed to resolve session secret: %v", sessionSecretErr)
+		}
+		oidcClientSecret, oidcClientSecretErr := cfg.OIDCClientSecretValue()
+		if oidcClientSecretErr != nil {
+			log.Fatalf("failed to resolve OIDC client secret: %v", oidcClientSecretErr)
+		}
 		sameSite, sameSiteErr := auth.ParseSameSite(cfg.SessionCookieSameSite)
 		if sameSiteErr != nil {
 			log.Fatalf("invalid session cookie same-site setting: %v", sameSiteErr)
 		}
 		createdSessionManager, sessionErr := auth.NewCookieSessionManager(auth.CookieSessionConfig{
-			Secret:     cfg.SessionSecret,
+			Secret:     sessionSecret,
 			CookieName: cfg.SessionCookieName,
 			Secure:     cfg.SessionCookieSecure,
 			SameSite:   sameSite,
@@ -352,7 +360,7 @@ func main() {
 		oidcAuthenticator, oidcErr := auth.NewOIDCAuthenticator(context.Background(), auth.OIDCConfig{
 			IssuerURL:    cfg.OIDCIssuerURL,
 			ClientID:     cfg.OIDCClientID,
-			ClientSecret: cfg.OIDCClientSecret,
+			ClientSecret: oidcClientSecret,
 			RedirectURL:  cfg.OIDCRedirectURL,
 			Scopes:       auth.ParseOIDCScopes(cfg.OIDCScopes),
 		})
@@ -445,11 +453,20 @@ func newWorkspaceHelperHandler(cfg config.Config, executionJobs repository.Execu
 	})
 }
 
-func workspaceRevisionStoreFromConfig(cfg config.Config) workspacepkg.WorkspaceRevisionStore {
-	if strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) == "" {
-		return nil
+func workspaceRevisionStoreFromConfig(cfg config.Config) (workspacepkg.WorkspaceRevisionStore, error) {
+	provider := strings.ToLower(strings.TrimSpace(cfg.WorkspaceRevisionStorageProvider))
+	if provider == "" || provider == string(domain.StorageProviderFilesystem) {
+		if strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) == "" {
+			return nil, nil
+		}
 	}
-	return workspacepkg.NewFilesystemWorkspaceRevisionStore(cfg.WorkspaceRevisionStorageRoot)
+	return workspacepkg.ResolveWorkspaceRevisionStore(workspacepkg.WorkspaceRevisionStoreConfig{
+		Provider:    cfg.WorkspaceRevisionStorageProvider,
+		StorageRoot: cfg.WorkspaceRevisionStorageRoot,
+		GCSBucket:   cfg.WorkspaceRevisionGCSBucket,
+		GCSPrefix:   cfg.WorkspaceRevisionGCSPrefix,
+		Strict:      cfg.WorkspaceRevisionStorageStrict,
+	})
 }
 
 func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler *handler.WorkspaceHelperHandler, executionJobs repository.ExecutionJobRepository, builds repository.BuildRepository, revisions repository.WorkspaceRevisionRepository, checkoutResolver *buildsvc.RepositoryAwareCheckoutResolver, dependencies ...any) error {
@@ -472,7 +489,10 @@ func configureWorkspaceHelperServices(cfg config.Config, workspaceHelperHandler 
 		}
 		return nil
 	}
-	workspaceRevisionStore := workspaceRevisionStoreFromConfig(cfg)
+	workspaceRevisionStore, storeErr := workspaceRevisionStoreFromConfig(cfg)
+	if storeErr != nil {
+		return storeErr
+	}
 	archiveReader, archiveReaderOK := workspaceRevisionStore.(workspacepkg.WorkspaceRevisionArchiveReader)
 	if workspaceRevisionStore == nil || !archiveReaderOK {
 		return errors.New("workspace helper prepare requires workspace revision storage")
@@ -539,11 +559,15 @@ func newWorkspaceHelperHandlerWithVerifier(cfg config.Config, executionJobs repo
 	if !cfg.WorkspaceHelperCapabilityEnabled {
 		return nil, nil
 	}
+	capabilitySecret, err := cfg.WorkspaceHelperCapabilitySecretValue()
+	if err != nil {
+		return nil, err
+	}
 	verifier, err := newVerifier(cfg.WorkspaceHelperKubeconfig, cfg.WorkspaceHelperServiceAccount)
 	if err != nil {
 		return nil, err
 	}
-	capabilities, err := service.NewWorkspaceHelperCapabilityService(executionJobs, verifier, cfg.WorkspaceHelperCapabilitySecret)
+	capabilities, err := service.NewWorkspaceHelperCapabilityService(executionJobs, verifier, capabilitySecret)
 	if err != nil {
 		return nil, err
 	}

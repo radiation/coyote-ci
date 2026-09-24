@@ -31,7 +31,6 @@ import (
 	executionsvc "github.com/radiation/coyote-ci/backend/internal/service/execution"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
-	workspacepkg "github.com/radiation/coyote-ci/backend/internal/workspace"
 )
 
 type kubernetesfakeClient struct{}
@@ -347,19 +346,22 @@ func TestRunWorkspaceHelperCommandDispatch(t *testing.T) {
 }
 
 func TestWorkspaceRevisionStoreFromConfig(t *testing.T) {
-	if store := workspaceRevisionStoreFromConfig(config.Config{}); store != nil {
+	if store, storeErr := workspaceRevisionStoreFromConfig(config.Config{}); storeErr != nil || store != nil {
 		t.Fatalf("expected no revision store when storage root is unset, got %T", store)
 	}
-	if store := workspaceRevisionStoreFromConfig(config.Config{WorkspaceRevisionStorageRoot: " /tmp/coyote-revisions "}); store == nil {
+	if store, storeErr := workspaceRevisionStoreFromConfig(config.Config{WorkspaceRevisionStorageRoot: " /tmp/coyote-revisions "}); storeErr != nil || store == nil {
 		t.Fatal("expected revision store when storage root is configured")
-	} else if _, ok := store.(*workspacepkg.FilesystemWorkspaceRevisionStore); !ok {
+	} else if store.Provider() != domain.StorageProviderFilesystem {
 		t.Fatalf("expected filesystem revision store, got %T", store)
 	}
 }
 
 func TestNewWorkerBuildServiceConfig_WiresWorkspaceRevisionDependencies(t *testing.T) {
 	revisionRepo := repositorymemory.NewWorkspaceRevisionRepository(nil)
-	revisionStore := workspaceRevisionStoreFromConfig(config.Config{WorkspaceRevisionStorageRoot: "/tmp/coyote-revisions"})
+	revisionStore, storeErr := workspaceRevisionStoreFromConfig(config.Config{WorkspaceRevisionStorageRoot: "/tmp/coyote-revisions"})
+	if storeErr != nil {
+		t.Fatalf("workspace revision store: %v", storeErr)
+	}
 	serviceConfig := newWorkerBuildServiceConfig(config.Config{}, buildsvc.BuildServiceConfig{DefaultImage: "alpine:3.20"}, revisionRepo, revisionStore)
 
 	if serviceConfig.DefaultImage != "alpine:3.20" {

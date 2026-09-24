@@ -331,6 +331,10 @@ type workspacePublishStoreFake struct {
 	objectIDs    []string
 }
 
+func (*workspacePublishStoreFake) Provider() domain.StorageProvider {
+	return domain.StorageProviderFilesystem
+}
+
 func (f *workspacePublishStoreFake) Publish(_ context.Context, revisionID string, sourceRoot string) (domain.WorkspaceRevisionPublication, error) {
 	f.calls++
 	f.objectIDs = append(f.objectIDs, revisionID)
@@ -344,7 +348,7 @@ func (f *workspacePublishStoreFake) Publish(_ context.Context, revisionID string
 	if f.afterPublish != nil {
 		f.afterPublish()
 	}
-	return domain.WorkspaceRevisionPublication{ContentDigest: "sha256:test", StorageKey: "workspace-revisions/" + revisionID + ".tar.gz", SizeBytes: &size}, nil
+	return domain.WorkspaceRevisionPublication{ContentDigest: "sha256:test", StorageKey: "workspace-revisions/" + revisionID + ".tar.gz", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}, nil
 }
 
 func (f *workspacePublishStoreFake) Restore(context.Context, domain.WorkspaceRevisionPublication, string) error {

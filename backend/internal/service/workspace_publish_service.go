@@ -112,7 +112,7 @@ func (s *WorkspacePublishService) Publish(ctx context.Context, capabilityToken s
 	if openErr != nil {
 		return domain.WorkspaceRevision{}, openErr
 	}
-	publication := domain.WorkspaceRevisionPublication{ContentDigest: digest, StorageKey: "workspace-revisions/upload.tar.gz", SizeBytes: &observedBytes}
+	publication := domain.WorkspaceRevisionPublication{ContentDigest: digest, StorageKey: "workspace-revisions/upload.tar.gz", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &observedBytes}
 	restoreErr := workspace.RestoreArchiveWithLimits(ctx, archiveFile, publication, restoredRoot, workspace.WorkspaceRevisionRestoreLimits{MaxUncompressedBytes: s.maxUncompressedBytes, MaxEntries: s.maxArchiveEntries})
 	closeErr := archiveFile.Close()
 	if restoreErr != nil {

@@ -33,6 +33,22 @@ Compose one-shot migration runner:
 docker compose run --rm migrate
 ```
 
+## Immutable migration image
+
+The `migrate-runtime` target in [backend/Dockerfile](../../backend/Dockerfile)
+contains Goose `v3.24.1` and the tracked `backend/db/migrations` directory. It
+accepts `DATABASE_URL` or `DATABASE_URL_FILE`; the file value takes precedence,
+matching the application database configuration.
+
+Build it directly when preparing a release image:
+
+```bash
+docker build --target migrate-runtime -t coyote-migrate:local ./backend
+```
+
+The image runs `goose up` by default. Running it against an already-current
+database exits successfully.
+
 ## Canonical rollout rule (persistent environments)
 
 - Run migrations before app rollout.
@@ -58,3 +74,10 @@ docker compose run --rm migrate
 1. Run migrations once in a controlled deploy step.
 2. Verify migration status.
 3. Roll out backend and worker instances.
+
+### Kubernetes deployment contract
+
+The future Kubernetes migration Job must use the immutable `migrate-runtime`
+image, mount the database DSN as `DATABASE_URL_FILE`, and run alongside a Cloud
+SQL Auth Proxy sidecar that listens on the DSN's loopback host and port. A
+successful Job completion is required before the server Deployment rolls out.

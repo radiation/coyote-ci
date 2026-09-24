@@ -2,9 +2,15 @@
 
 `WorkspaceRevision` is control-plane metadata for an immutable workspace result.
 `WorkspaceRevisionStore` is the data-plane contract that publishes, restores, and
-deletes its durable bytes; it does not update revision repository state.
+deletes its durable bytes; it does not update revision repository state. Published
+metadata records the storage provider with the key, digest, and size so reads use
+the provider that created the revision.
 
-The first store implementation is filesystem-backed. It writes objects beneath
+Publishing revisions do not yet have archive metadata, so their
+`storage_provider` is `NULL`. Published and deleted revisions require an
+explicit `filesystem` or `gcs` provider, alongside their digest, key, and size.
+
+The filesystem store writes objects beneath
 its configured root at the provider-neutral key
 `workspace-revisions/<revision-id>.tar.gz`. The object is a streaming tar+gzip
 bundle. `content_digest` is `sha256:<hex>` over the exact stored `.tar.gz` bytes,
@@ -20,6 +26,10 @@ Archives contain directories and regular files only, with portable permission
 bits and executable bits preserved. Symlinks, hard links, devices, sockets, and
 FIFOs are rejected. Archive names must be relative, slash-separated paths confined
 under the restore root; absolute, traversal, and Windows-drive paths are rejected.
+
+The GCS store uses the same provider-neutral key and streams the archive through a
+conditional object creation. A concurrent publication can reuse an existing object
+only after the stored stream matches the calculated digest and size.
 
 Archive ordering, timestamps (Unix epoch), ownership fields, and permission bits
 are normalized for stable publication of unchanged source trees. No Coyote-owned

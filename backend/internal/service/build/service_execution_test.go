@@ -34,6 +34,10 @@ type recordingWorkspaceRevisionStore struct {
 	onPublish func()
 }
 
+func (*recordingWorkspaceRevisionStore) Provider() domain.StorageProvider {
+	return domain.StorageProviderFilesystem
+}
+
 func (s *recordingWorkspaceRevisionStore) Publish(_ context.Context, revisionID string, _ string) (domain.WorkspaceRevisionPublication, error) {
 	s.events = append(s.events, "publish")
 	if s.onPublish != nil {
@@ -43,7 +47,7 @@ func (s *recordingWorkspaceRevisionStore) Publish(_ context.Context, revisionID 
 		return domain.WorkspaceRevisionPublication{}, s.err
 	}
 	size := int64(1)
-	return domain.WorkspaceRevisionPublication{ContentDigest: "sha256:test", StorageKey: "workspace-revisions/" + revisionID + ".tar.gz", SizeBytes: &size}, nil
+	return domain.WorkspaceRevisionPublication{ContentDigest: "sha256:test", StorageKey: "workspace-revisions/" + revisionID + ".tar.gz", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}, nil
 }
 
 func (s *recordingWorkspaceRevisionStore) Restore(context.Context, domain.WorkspaceRevisionPublication, string) error {
@@ -460,7 +464,7 @@ func TestBuildService_RunStep_RecoversPublishedWorkspaceRevisionWithoutRerunning
 		t.Fatalf("create publishing revision: %v", err)
 	}
 	size := int64(1)
-	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:test", StorageKey: "workspace-revisions/" + revisionID + ".tar.gz", SizeBytes: &size}
+	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:test", StorageKey: "workspace-revisions/" + revisionID + ".tar.gz", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}
 	if _, err := revisionRepo.MarkPublishedIfClaimed(context.Background(), revisionID, initialClaim, publication, time.Now().UTC()); err != nil {
 		t.Fatalf("mark published revision: %v", err)
 	}

@@ -157,7 +157,10 @@ func main() {
 			log.Fatalf("failed to resolve cache store: %v", err)
 		}
 	}
-	workspaceRevisionStore := workspaceRevisionStoreFromConfig(cfg)
+	workspaceRevisionStore, workspaceRevisionStoreErr := workspaceRevisionStoreFromConfig(cfg)
+	if workspaceRevisionStoreErr != nil {
+		log.Fatalf("failed to configure workspace revision storage: %v", workspaceRevisionStoreErr)
+	}
 	stepRunner := resolveStepRunnerWithWorkspaceRevisions(cfg, workspaceRevisionRepo, workspaceRevisionStore)
 	logSink := logs.NewPostgresSink(db)
 	versionTagService := newWorkerVersionTagService(versionTagRepo, artifactLabelRepo)
@@ -364,11 +367,20 @@ func kubernetesWorkspaceHelperConfig(cfg config.Config) (kubernetesexec.Workspac
 	return helper, true, nil
 }
 
-func workspaceRevisionStoreFromConfig(cfg config.Config) workspacepkg.WorkspaceRevisionStore {
-	if strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) == "" {
-		return nil
+func workspaceRevisionStoreFromConfig(cfg config.Config) (workspacepkg.WorkspaceRevisionStore, error) {
+	provider := strings.ToLower(strings.TrimSpace(cfg.WorkspaceRevisionStorageProvider))
+	if provider == "" || provider == string(domain.StorageProviderFilesystem) {
+		if strings.TrimSpace(cfg.WorkspaceRevisionStorageRoot) == "" {
+			return nil, nil
+		}
 	}
-	return workspacepkg.NewFilesystemWorkspaceRevisionStore(cfg.WorkspaceRevisionStorageRoot)
+	return workspacepkg.ResolveWorkspaceRevisionStore(workspacepkg.WorkspaceRevisionStoreConfig{
+		Provider:    cfg.WorkspaceRevisionStorageProvider,
+		StorageRoot: cfg.WorkspaceRevisionStorageRoot,
+		GCSBucket:   cfg.WorkspaceRevisionGCSBucket,
+		GCSPrefix:   cfg.WorkspaceRevisionGCSPrefix,
+		Strict:      cfg.WorkspaceRevisionStorageStrict,
+	})
 }
 
 func newWorkerBuildServiceConfig(cfg config.Config, serviceConfig buildsvc.BuildServiceConfig, workspaceRevisionRepo repository.WorkspaceRevisionRepository, workspaceRevisionStore workspacepkg.WorkspaceRevisionStore) buildsvc.BuildServiceConfig {

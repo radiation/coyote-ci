@@ -106,6 +106,6 @@ func downloadAndRestoreWorkspace(ctx context.Context, apiURL string, capability 
 		return errors.New("workspace prepare response lacks integrity metadata")
 	}
 	size := response.ContentLength
-	publication := domain.WorkspaceRevisionPublication{StorageKey: "workspace-revisions/transport.tar.gz", ContentDigest: digest, SizeBytes: &size}
+	publication := domain.WorkspaceRevisionPublication{StorageKey: "workspace-revisions/transport.tar.gz", ContentDigest: digest, StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}
 	return workspacepkg.RestoreArchive(ctx, response.Body, publication, destination)
 }

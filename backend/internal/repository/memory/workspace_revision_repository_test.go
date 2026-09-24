@@ -32,7 +32,7 @@ func TestWorkspaceRevisionRepositoryPublicationLifecycle(t *testing.T) {
 	}
 
 	claimExecutionJob(t, executionJobs, "step-job-1", "claim-active", now)
-	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1"}
+	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1", StorageProvider: domain.StorageProviderFilesystem}
 	published, err := repo.MarkPublishedIfClaimed(context.Background(), revision.ID, "claim-active", publication, now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("publish active claim: %v", err)
@@ -43,10 +43,10 @@ func TestWorkspaceRevisionRepositoryPublicationLifecycle(t *testing.T) {
 	if _, idempotentPublishErr := repo.MarkPublishedIfClaimed(context.Background(), revision.ID, "claim-active", publication, now.Add(2*time.Minute)); idempotentPublishErr != nil {
 		t.Fatalf("idempotent publication: %v", idempotentPublishErr)
 	}
-	if _, conflictingDigestErr := repo.MarkPublishedIfClaimed(context.Background(), revision.ID, "claim-active", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:two", StorageKey: publication.StorageKey}, now.Add(2*time.Minute)); !errors.Is(conflictingDigestErr, repository.ErrWorkspaceRevisionConflict) {
+	if _, conflictingDigestErr := repo.MarkPublishedIfClaimed(context.Background(), revision.ID, "claim-active", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:two", StorageKey: publication.StorageKey, StorageProvider: domain.StorageProviderFilesystem}, now.Add(2*time.Minute)); !errors.Is(conflictingDigestErr, repository.ErrWorkspaceRevisionConflict) {
 		t.Fatalf("expected conflicting digest to be rejected, got %v", conflictingDigestErr)
 	}
-	if _, conflictingStorageKeyErr := repo.MarkPublishedIfClaimed(context.Background(), revision.ID, "claim-active", domain.WorkspaceRevisionPublication{ContentDigest: publication.ContentDigest, StorageKey: "revisions/other"}, now.Add(2*time.Minute)); !errors.Is(conflictingStorageKeyErr, repository.ErrWorkspaceRevisionConflict) {
+	if _, conflictingStorageKeyErr := repo.MarkPublishedIfClaimed(context.Background(), revision.ID, "claim-active", domain.WorkspaceRevisionPublication{ContentDigest: publication.ContentDigest, StorageKey: "revisions/other", StorageProvider: domain.StorageProviderFilesystem}, now.Add(2*time.Minute)); !errors.Is(conflictingStorageKeyErr, repository.ErrWorkspaceRevisionConflict) {
 		t.Fatalf("expected conflicting storage key to be rejected, got %v", conflictingStorageKeyErr)
 	}
 	completeExecutionJob(t, executionJobs, "job-1", "claim-active", now.Add(2*time.Minute))
@@ -79,7 +79,7 @@ func TestWorkspaceRevisionRepositoryRejectsStaleClaimAndSelectsLatestSuccessfulA
 			t.Fatalf("create %s: %v", revision.ID, err)
 		}
 	}
-	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/shared"}
+	publication := domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/shared", StorageProvider: domain.StorageProviderFilesystem}
 	if _, err := repo.MarkPublishedIfClaimed(context.Background(), oldRevision.ID, "wrong", publication, now); !errors.Is(err, repository.ErrWorkspaceRevisionStaleClaim) {
 		t.Fatalf("expected stale claim, got %v", err)
 	}
@@ -112,7 +112,7 @@ func TestWorkspaceRevisionRepositoryRejectsExpiredClaimAndMismatchedJobMetadata(
 		t.Fatalf("create revision: %v", err)
 	}
 	claimExecutionJob(t, executionJobs, "step-job-1", "claim-expired", now.Add(-2*time.Minute))
-	_, err := repo.MarkPublishedIfClaimed(context.Background(), revision.ID, "claim-expired", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1"}, now)
+	_, err := repo.MarkPublishedIfClaimed(context.Background(), revision.ID, "claim-expired", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/revision-1", StorageProvider: domain.StorageProviderFilesystem}, now)
 	if !errors.Is(err, repository.ErrWorkspaceRevisionStaleClaim) {
 		t.Fatalf("expected expired lease to reject publication, got %v", err)
 	}
@@ -129,7 +129,7 @@ func TestWorkspaceRevisionRepositoryHandlesMissingRevisionsAndCopiesPointers(t *
 	if _, err := repo.MarkDeleted(context.Background(), "missing", now); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
 		t.Fatalf("expected missing deletion, got %v", err)
 	}
-	if _, err := repo.MarkPublishedIfClaimed(context.Background(), "missing", "claim", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1"}, now); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
+	if _, err := repo.MarkPublishedIfClaimed(context.Background(), "missing", "claim", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1", StorageProvider: domain.StorageProviderFilesystem}, now); !errors.Is(err, repository.ErrWorkspaceRevisionNotFound) {
 		t.Fatalf("expected missing publication, got %v", err)
 	}
 
@@ -149,7 +149,7 @@ func TestWorkspaceRevisionRepositoryHandlesMissingRevisionsAndCopiesPointers(t *
 	}
 	claimExecutionJob(t, executionJobs, "step-job-1", "claim-1", now)
 	size := int64(10)
-	published, publishErr := repo.MarkPublishedIfClaimed(context.Background(), revision.ID, "claim-1", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1", SizeBytes: &size}, now)
+	published, publishErr := repo.MarkPublishedIfClaimed(context.Background(), revision.ID, "claim-1", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:one", StorageKey: "revisions/1", StorageProvider: domain.StorageProviderFilesystem, SizeBytes: &size}, now)
 	if publishErr != nil {
 		t.Fatalf("publish revision: %v", publishErr)
 	}

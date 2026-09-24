@@ -14,7 +14,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
-const workspaceRevisionColumns = `id, producing_execution_job_id, build_id, node_id, attempt_number, parent_revision_id, status, content_digest, storage_key, size_bytes, created_at, published_at, deleted_at`
+const workspaceRevisionColumns = `id, producing_execution_job_id, build_id, node_id, attempt_number, parent_revision_id, status, content_digest, storage_key, storage_provider, size_bytes, created_at, published_at, deleted_at`
 
 type WorkspaceRevisionRepository struct {
 	db *sql.DB
@@ -126,11 +126,11 @@ func (r *WorkspaceRevisionRepository) MarkPublishedIfClaimed(ctx context.Context
 
 	publishQuery := fmt.Sprintf(`
 		UPDATE workspace_revisions
-		SET status = 'published', content_digest = $2, storage_key = $3, size_bytes = $4, published_at = $5
+		SET status = 'published', content_digest = $2, storage_key = $3, storage_provider = $4, size_bytes = $5, published_at = $6
 		WHERE id = $1 AND status = 'publishing'
 		RETURNING %s`, workspaceRevisionColumns)
 	updated, updateErr := scanWorkspaceRevision(tx.QueryRowContext(ctx, publishQuery,
-		revisionID, publication.ContentDigest, publication.StorageKey, publication.SizeBytes, publishedAt.UTC()))
+		revisionID, publication.ContentDigest, publication.StorageKey, publication.StorageProvider, publication.SizeBytes, publishedAt.UTC()))
 	if updateErr != nil {
 		return domain.WorkspaceRevision{}, updateErr
 	}
@@ -206,11 +206,12 @@ func scanWorkspaceRevision(scanner rowScanner) (domain.WorkspaceRevision, error)
 	var parentRevisionID sql.NullString
 	var contentDigest sql.NullString
 	var storageKey sql.NullString
+	var storageProvider sql.NullString
 	var sizeBytes sql.NullInt64
 	var publishedAt sql.NullTime
 	var deletedAt sql.NullTime
 	var status string
-	err := scanner.Scan(&revision.ID, &revision.ProducingExecutionJobID, &revision.BuildID, &revision.NodeID, &revision.AttemptNumber, &parentRevisionID, &status, &contentDigest, &storageKey, &sizeBytes, &revision.CreatedAt, &publishedAt, &deletedAt)
+	err := scanner.Scan(&revision.ID, &revision.ProducingExecutionJobID, &revision.BuildID, &revision.NodeID, &revision.AttemptNumber, &parentRevisionID, &status, &contentDigest, &storageKey, &storageProvider, &sizeBytes, &revision.CreatedAt, &publishedAt, &deletedAt)
 	if err != nil {
 		return domain.WorkspaceRevision{}, err
 	}
@@ -223,6 +224,10 @@ func scanWorkspaceRevision(scanner rowScanner) (domain.WorkspaceRevision, error)
 	}
 	if storageKey.Valid {
 		revision.StorageKey = &storageKey.String
+	}
+	if storageProvider.Valid {
+		value := domain.StorageProvider(storageProvider.String)
+		revision.StorageProvider = &value
 	}
 	if sizeBytes.Valid {
 		value := sizeBytes.Int64
@@ -249,7 +254,14 @@ func isWorkspaceRevisionUniqueViolation(err error) bool {
 }
 
 func sameWorkspaceRevisionPublication(revision domain.WorkspaceRevision, publication domain.WorkspaceRevisionPublication) bool {
-	return nullableStringEqual(revision.ContentDigest, &publication.ContentDigest) && nullableStringEqual(revision.StorageKey, &publication.StorageKey) && nullableInt64Equal(revision.SizeBytes, publication.SizeBytes)
+	return nullableStringEqual(revision.ContentDigest, &publication.ContentDigest) && nullableStringEqual(revision.StorageKey, &publication.StorageKey) && nullableStorageProviderEqual(revision.StorageProvider, &publication.StorageProvider) && nullableInt64Equal(revision.SizeBytes, publication.SizeBytes)
+}
+
+func nullableStorageProviderEqual(left *domain.StorageProvider, right *domain.StorageProvider) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 func nullableStringEqual(left *string, right *string) bool {

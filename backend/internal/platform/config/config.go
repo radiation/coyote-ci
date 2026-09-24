@@ -40,6 +40,7 @@ type Config struct {
 	WorkspaceHelperKubeconfig              string
 	WorkspaceHelperServiceAccount          string
 	WorkspaceHelperCapabilitySecret        string
+	WorkspaceHelperCapabilitySecretFile    string
 	WorkspaceHelperMaxUploadSizeMB         int
 	WorkspaceRevisionMaxUploadSizeMB       int
 	WorkspaceRevisionMaxUncompressedSizeMB int
@@ -48,6 +49,10 @@ type Config struct {
 	CacheArchiveMaxUncompressedSizeMB      int
 	CacheArchiveMaxEntries                 int
 	WorkspaceRevisionStorageRoot           string
+	WorkspaceRevisionStorageProvider       string
+	WorkspaceRevisionGCSBucket             string
+	WorkspaceRevisionGCSPrefix             string
+	WorkspaceRevisionStorageStrict         bool
 	KubernetesCacheHelperEnabled           bool
 	KubernetesArtifactHelperEnabled        bool
 	WorkerCacheStorageProvider             string
@@ -78,9 +83,11 @@ type Config struct {
 	OIDCIssuerURL                          string
 	OIDCClientID                           string
 	OIDCClientSecret                       string
+	OIDCClientSecretFile                   string
 	OIDCRedirectURL                        string
 	OIDCScopes                             string
 	SessionSecret                          string
+	SessionSecretFile                      string
 	SessionCookieName                      string
 	SessionCookieSecure                    bool
 	SessionCookieSameSite                  string
@@ -132,6 +139,7 @@ func Load() Config {
 		WorkspaceHelperKubeconfig:              getEnv("COYOTE_WORKSPACE_HELPER_KUBECONFIG", ""),
 		WorkspaceHelperServiceAccount:          getEnv("COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT", "coyote-workspace-helper"),
 		WorkspaceHelperCapabilitySecret:        getEnv("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET", ""),
+		WorkspaceHelperCapabilitySecretFile:    getEnv("COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE", ""),
 		WorkspaceHelperMaxUploadSizeMB:         getEnvInt("COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB", 1024),
 		WorkspaceRevisionMaxUploadSizeMB:       getEnvInt("COYOTE_WORKSPACE_REVISION_MAX_UPLOAD_SIZE_MB", 2048),
 		WorkspaceRevisionMaxUncompressedSizeMB: getEnvIntFallback("COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB", "COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 4096),
@@ -140,6 +148,10 @@ func Load() Config {
 		CacheArchiveMaxUncompressedSizeMB:      getEnvIntFallback("COYOTE_WORKSPACE_HELPER_CACHE_MAX_UNCOMPRESSED_SIZE_MB", "COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB", 4096),
 		CacheArchiveMaxEntries:                 getEnvIntFallback("COYOTE_WORKSPACE_HELPER_CACHE_MAX_ARCHIVE_ENTRIES", "COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES", 100000),
 		WorkspaceRevisionStorageRoot:           getEnv("COYOTE_WORKSPACE_REVISION_STORAGE_ROOT", ""),
+		WorkspaceRevisionStorageProvider:       getEnv("WORKSPACE_REVISION_STORAGE_PROVIDER", ""),
+		WorkspaceRevisionGCSBucket:             getEnv("WORKSPACE_REVISION_GCS_BUCKET", ""),
+		WorkspaceRevisionGCSPrefix:             getEnv("WORKSPACE_REVISION_GCS_PREFIX", ""),
+		WorkspaceRevisionStorageStrict:         getEnvBool("WORKSPACE_REVISION_STORAGE_STRICT", false),
 		KubernetesCacheHelperEnabled:           getEnvBool("COYOTE_KUBERNETES_CACHE_HELPER_ENABLED", false),
 		KubernetesArtifactHelperEnabled:        getEnvBool("COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED", false),
 		WorkerCacheStorageProvider:             getEnv("WORKER_CACHE_STORAGE_PROVIDER", ""),
@@ -170,9 +182,11 @@ func Load() Config {
 		OIDCIssuerURL:                          getEnv("OIDC_ISSUER_URL", ""),
 		OIDCClientID:                           getEnv("OIDC_CLIENT_ID", ""),
 		OIDCClientSecret:                       getEnv("OIDC_CLIENT_SECRET", ""),
+		OIDCClientSecretFile:                   getEnv("OIDC_CLIENT_SECRET_FILE", ""),
 		OIDCRedirectURL:                        oidcRedirectURL,
 		OIDCScopes:                             getEnv("OIDC_SCOPES", "openid email profile"),
 		SessionSecret:                          getEnv("SESSION_SECRET", ""),
+		SessionSecretFile:                      getEnv("SESSION_SECRET_FILE", ""),
 		SessionCookieName:                      getEnv("SESSION_COOKIE_NAME", "coyote_session"),
 		SessionCookieSecure:                    getEnvBool("SESSION_COOKIE_SECURE", defaultSessionCookieSecure(oidcRedirectURL)),
 		SessionCookieSameSite:                  getEnv("SESSION_COOKIE_SAME_SITE", "lax"),
@@ -222,6 +236,32 @@ func (c Config) DatabaseURL() (string, error) {
 
 func (c Config) UsesDatabaseURL() bool {
 	return strings.TrimSpace(c.DatabaseURLFile) != "" || strings.TrimSpace(c.DatabaseURLValue) != ""
+}
+
+func (c Config) WorkspaceHelperCapabilitySecretValue() (string, error) {
+	return secretValue(c.WorkspaceHelperCapabilitySecret, c.WorkspaceHelperCapabilitySecretFile, "COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE")
+}
+
+func (c Config) OIDCClientSecretValue() (string, error) {
+	return secretValue(c.OIDCClientSecret, c.OIDCClientSecretFile, "OIDC_CLIENT_SECRET_FILE")
+}
+
+func (c Config) SessionSecretValue() (string, error) {
+	return secretValue(c.SessionSecret, c.SessionSecretFile, "SESSION_SECRET_FILE")
+}
+
+func secretValue(value string, file string, fileVariable string) (string, error) {
+	if secretFile := strings.TrimSpace(file); secretFile != "" {
+		contents, err := os.ReadFile(secretFile)
+		if err != nil {
+			return "", fmt.Errorf("read %s %q: %w", fileVariable, secretFile, err)
+		}
+		if secret := strings.TrimSpace(string(contents)); secret != "" {
+			return secret, nil
+		}
+		return "", fmt.Errorf("%s %q is empty", fileVariable, secretFile)
+	}
+	return strings.TrimSpace(value), nil
 }
 
 func (c Config) DatabaseConfigMode() string {

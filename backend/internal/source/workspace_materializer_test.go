@@ -217,7 +217,7 @@ func TestHostWorkspaceMaterializer_MaterializeMissingRevisionFails(t *testing.T)
 }
 
 func TestHostWorkspaceMaterializer_MaterializeRestoreFailureDoesNotCreateWorkspace(t *testing.T) {
-	revisionRepo := &workspaceRevisionRepositoryStub{revision: publishedWorkspaceRevision("build-1", "generate", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:abc", StorageKey: "workspace-revisions/revision-1.tar.gz"})}
+	revisionRepo := &workspaceRevisionRepositoryStub{revision: publishedWorkspaceRevision("build-1", "generate", domain.WorkspaceRevisionPublication{ContentDigest: "sha256:abc", StorageKey: "workspace-revisions/revision-1.tar.gz", StorageProvider: domain.StorageProviderFilesystem})}
 	materializer := NewHostWorkspaceMaterializerWithRevisionStore(t.TempDir(), revisionRepo, &workspaceRevisionStoreStub{restoreErr: errors.New("archive unavailable")})
 
 	_, materializeErr := materializer.Materialize(context.Background(), MaterializeWorkspaceRequest{
@@ -385,6 +385,10 @@ type workspaceRevisionStoreStub struct {
 	restoreCalls int
 }
 
+func (*workspaceRevisionStoreStub) Provider() domain.StorageProvider {
+	return domain.StorageProviderFilesystem
+}
+
 func (s *workspaceRevisionStoreStub) Publish(context.Context, string, string) (domain.WorkspaceRevisionPublication, error) {
 	return domain.WorkspaceRevisionPublication{}, errors.New("unexpected Publish call")
 }
@@ -400,11 +404,12 @@ func (s *workspaceRevisionStoreStub) Delete(context.Context, domain.WorkspaceRev
 
 func publishedWorkspaceRevision(buildID string, nodeID string, publication domain.WorkspaceRevisionPublication) domain.WorkspaceRevision {
 	return domain.WorkspaceRevision{
-		BuildID:       buildID,
-		NodeID:        nodeID,
-		Status:        domain.WorkspaceRevisionStatusPublished,
-		ContentDigest: &publication.ContentDigest,
-		StorageKey:    &publication.StorageKey,
-		SizeBytes:     publication.SizeBytes,
+		BuildID:         buildID,
+		NodeID:          nodeID,
+		Status:          domain.WorkspaceRevisionStatusPublished,
+		ContentDigest:   &publication.ContentDigest,
+		StorageKey:      &publication.StorageKey,
+		StorageProvider: &publication.StorageProvider,
+		SizeBytes:       publication.SizeBytes,
 	}
 }

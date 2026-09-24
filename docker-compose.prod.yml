@@ -1,17 +1,16 @@
 services:
   migrate:
-    image: golang:${GO_VERSION}
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: migrate-runtime
+      args:
+        GO_VERSION: ${GO_VERSION}
     container_name: coyote-ci-migrate
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      GOOSE_MIGRATION_DIR: /migrations
-    volumes:
-      - ./backend/db/migrations:/migrations:ro
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - 'go run github.com/pressly/goose/v3/cmd/goose@v3.24.1 -dir "$${GOOSE_MIGRATION_DIR}" postgres "$${DATABASE_URL}" up'
     restart: "no"
 
   server:

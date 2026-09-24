@@ -155,9 +155,11 @@ func TestLoad(t *testing.T) {
 				"OIDC_ISSUER_URL":                                    "https://issuer.example.com",
 				"OIDC_CLIENT_ID":                                     "coyote",
 				"OIDC_CLIENT_SECRET":                                 "secret",
+				"OIDC_CLIENT_SECRET_FILE":                            "/run/secrets/coyote/oidc-client-secret",
 				"OIDC_REDIRECT_URL":                                  "http://localhost:8080/auth/callback",
 				"OIDC_SCOPES":                                        "openid email",
 				"SESSION_SECRET":                                     "session-secret",
+				"SESSION_SECRET_FILE":                                "/run/secrets/coyote/session-secret",
 				"SESSION_COOKIE_NAME":                                "custom_session",
 				"SESSION_COOKIE_SECURE":                              "false",
 				"SESSION_COOKIE_SAME_SITE":                           "strict",
@@ -209,9 +211,11 @@ func TestLoad(t *testing.T) {
 				OIDCIssuerURL:                          "https://issuer.example.com",
 				OIDCClientID:                           "coyote",
 				OIDCClientSecret:                       "secret",
+				OIDCClientSecretFile:                   "/run/secrets/coyote/oidc-client-secret",
 				OIDCRedirectURL:                        "http://localhost:8080/auth/callback",
 				OIDCScopes:                             "openid email",
 				SessionSecret:                          "session-secret",
+				SessionSecretFile:                      "/run/secrets/coyote/session-secret",
 				SessionCookieName:                      "custom_session",
 				SessionCookieSecure:                    false,
 				SessionCookieSameSite:                  "strict",
@@ -392,50 +396,104 @@ func TestLoad(t *testing.T) {
 	}
 
 	managedEnvKeys := []string{
+		"APP_BASE_URL",
+		"APP_PORT",
+		"ARTIFACT_GCS_BUCKET",
+		"ARTIFACT_GCS_PREFIX",
+		"ARTIFACT_GCS_PROJECT",
+		"ARTIFACT_STORAGE_PROVIDER",
+		"ARTIFACT_STORAGE_ROOT",
+		"ARTIFACT_STORAGE_STRICT",
+		"AUTH_MODE",
+		"AUTH_POST_LOGIN_REDIRECT_URL",
+		"AUTH_POST_LOGOUT_REDIRECT_URL",
+		"BOOTSTRAP_ADMIN_EMAILS",
+		"CACHE_MAX_SIZE_MB",
+		"CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY",
+		"CLOUD_BUILD_LOCATION",
+		"CLOUD_BUILD_PROJECT",
+		"CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT",
+		"CLOUD_BUILD_SOURCE_BUCKET",
+		"CLOUD_BUILD_SOURCE_PREFIX",
+		"COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED",
+		"COYOTE_KUBERNETES_CACHE_HELPER_ENABLED",
+		"COYOTE_PUBLIC_URL",
+		"COYOTE_WORKSPACE_HELPER_CACHE_MAX_ARCHIVE_ENTRIES",
+		"COYOTE_WORKSPACE_HELPER_CACHE_MAX_UNCOMPRESSED_SIZE_MB",
+		"COYOTE_WORKSPACE_HELPER_CACHE_MAX_UPLOAD_SIZE_MB",
+		"COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET",
+		"COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET_FILE",
+		"COYOTE_WORKSPACE_HELPER_ENABLED",
+		"COYOTE_WORKSPACE_HELPER_KUBECONFIG",
+		"COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES",
+		"COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB",
+		"COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB",
+		"COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT",
+		"COYOTE_WORKSPACE_REVISION_MAX_ARCHIVE_ENTRIES",
+		"COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB",
+		"COYOTE_WORKSPACE_REVISION_MAX_UPLOAD_SIZE_MB",
+		"COYOTE_WORKSPACE_REVISION_STORAGE_ROOT",
+		"DATABASE_URL",
+		"DATABASE_URL_FILE",
+		"DB_CONN_MAX_IDLE_TIME",
+		"DB_CONN_MAX_LIFETIME",
+		"DB_HOST",
+		"DB_MAX_IDLE_CONNS",
+		"DB_MAX_OPEN_CONNS",
+		"DB_NAME",
+		"DB_PASSWORD",
+		"DB_PORT",
+		"DB_SSLMODE",
+		"DB_USER",
+		"EMAIL_NOTIFICATIONS_ENABLED",
+		"EMAIL_NOTIFICATION_RECIPIENTS",
+		"GITHUB_STATUS_TOKEN",
+		"GITHUB_WEBHOOK_SECRET",
+		"GOOGLE_CLOUD_PROJECT",
+		"KUBECONFIG",
+		"NOTIFICATION_RECOVERY_BATCH_SIZE",
+		"NOTIFICATION_RECOVERY_INTERVAL",
+		"OIDC_CLIENT_ID",
+		"OIDC_CLIENT_SECRET",
+		"OIDC_CLIENT_SECRET_FILE",
+		"OIDC_ISSUER_URL",
+		"OIDC_REDIRECT_URL",
+		"OIDC_SCOPES",
+		"PUSH_EVENT_SECRET",
+		"SCM_STATUS_RECOVERY_BATCH_SIZE",
+		"SCM_STATUS_RECOVERY_INTERVAL",
+		"SESSION_COOKIE_NAME",
+		"SESSION_COOKIE_SAME_SITE",
+		"SESSION_COOKIE_SECURE",
+		"SESSION_SECRET",
+		"SESSION_SECRET_FILE",
+		"SMTP_FROM_ADDRESS",
+		"SMTP_HOST",
+		"SMTP_PASSWORD",
+		"SMTP_PORT",
+		"SMTP_USERNAME",
+		"WORKER_CACHE_GCS_BUCKET",
+		"WORKER_CACHE_GCS_PREFIX",
+		"WORKER_CACHE_GCS_PROJECT",
+		"WORKER_CACHE_STORAGE_PROVIDER",
 		"WORKER_KUBERNETES_NAMESPACE",
 		"WORKER_KUBERNETES_KUBECONFIG",
 		"WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS",
 		"WORKER_KUBERNETES_TEST_STEP_NODES",
-		"KUBECONFIG",
-		"COYOTE_WORKSPACE_HELPER_ENABLED",
-		"COYOTE_WORKSPACE_HELPER_KUBECONFIG",
-		"COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT",
-		"COYOTE_WORKSPACE_HELPER_CAPABILITY_SECRET",
-		"COYOTE_WORKSPACE_HELPER_MAX_UPLOAD_SIZE_MB",
-		"COYOTE_WORKSPACE_REVISION_MAX_UPLOAD_SIZE_MB",
-		"COYOTE_WORKSPACE_REVISION_MAX_UNCOMPRESSED_SIZE_MB",
-		"COYOTE_WORKSPACE_REVISION_MAX_ARCHIVE_ENTRIES",
-		"COYOTE_WORKSPACE_HELPER_CACHE_MAX_UPLOAD_SIZE_MB",
-		"COYOTE_WORKSPACE_HELPER_MAX_UNCOMPRESSED_SIZE_MB",
-		"COYOTE_WORKSPACE_HELPER_MAX_ARCHIVE_ENTRIES",
-		"COYOTE_WORKSPACE_HELPER_CACHE_MAX_UNCOMPRESSED_SIZE_MB",
-		"COYOTE_WORKSPACE_HELPER_CACHE_MAX_ARCHIVE_ENTRIES",
-		"COYOTE_WORKSPACE_REVISION_STORAGE_ROOT",
-		"OIDC_ISSUER_URL",
-		"OIDC_CLIENT_ID",
-		"OIDC_CLIENT_SECRET",
-		"OIDC_REDIRECT_URL",
-		"OIDC_SCOPES",
-		"SESSION_SECRET",
-		"SESSION_COOKIE_NAME",
-		"SESSION_COOKIE_SECURE",
-		"SESSION_COOKIE_SAME_SITE",
-		"PUSH_EVENT_SECRET",
-		"GITHUB_WEBHOOK_SECRET",
-		"GITHUB_STATUS_TOKEN",
-		"AUTH_POST_LOGIN_REDIRECT_URL",
-		"AUTH_POST_LOGOUT_REDIRECT_URL",
-		"EMAIL_NOTIFICATIONS_ENABLED",
-		"EMAIL_NOTIFICATION_RECIPIENTS",
-		"SCM_STATUS_RECOVERY_INTERVAL",
-		"SCM_STATUS_RECOVERY_BATCH_SIZE",
-		"SMTP_HOST",
-		"SMTP_PORT",
-		"SMTP_USERNAME",
-		"SMTP_PASSWORD",
-		"SMTP_FROM_ADDRESS",
-		"CLOUD_BUILD_PROJECT",
-		"GOOGLE_CLOUD_PROJECT",
+		"WORKER_CACHE_STORAGE_ROOT",
+		"WORKER_CACHE_STORAGE_STRICT",
+		"WORKER_EXECUTION_BACKEND",
+		"WORKER_EXECUTION_DEFAULT_IMAGE",
+		"WORKER_EXECUTION_WORKSPACE_ROOT",
+		"WORKER_KUBERNETES_HELPER_IMAGE",
+		"WORKER_KUBERNETES_INTERNAL_API_URL",
+		"WORKER_MOUNT_DOCKER_SOCKET",
+		"WORKER_STATUS_ADDR",
+		"WORKER_STEP_LEASE_SECONDS",
+		"WORKSPACE_REVISION_GCS_BUCKET",
+		"WORKSPACE_REVISION_GCS_PREFIX",
+		"WORKSPACE_REVISION_STORAGE_PROVIDER",
+		"WORKSPACE_REVISION_STORAGE_STRICT",
 	}
 
 	for _, tc := range tests {
@@ -506,6 +564,7 @@ func TestLoadWorkspaceHelperCapabilityConfig(t *testing.T) {
 	if !cfg.WorkspaceHelperCapabilityEnabled {
 		t.Fatal("expected workspace helper capability exchange to be enabled")
 	}
+
 	if cfg.WorkspaceHelperKubeconfig != "/server/kubeconfig" {
 		t.Fatalf("kubeconfig=%q", cfg.WorkspaceHelperKubeconfig)
 	}
@@ -517,6 +576,73 @@ func TestLoadWorkspaceHelperCapabilityConfig(t *testing.T) {
 	}
 	if cfg.CacheArchiveMaxUncompressedSizeMB != 2048 || cfg.CacheArchiveMaxEntries != 20000 {
 		t.Fatalf("cache limits=%d MiB/%d entries", cfg.CacheArchiveMaxUncompressedSizeMB, cfg.CacheArchiveMaxEntries)
+	}
+}
+
+func TestWorkspaceHelperCapabilitySecretValuePrefersFile(t *testing.T) {
+	secretFile := filepath.Join(t.TempDir(), "workspace-helper-secret")
+	if writeErr := os.WriteFile(secretFile, []byte("file-secret\n"), 0o600); writeErr != nil {
+		t.Fatalf("write secret file: %v", writeErr)
+	}
+
+	cfg := Config{
+		WorkspaceHelperCapabilitySecret:     "environment-secret",
+		WorkspaceHelperCapabilitySecretFile: secretFile,
+	}
+	secret, secretErr := cfg.WorkspaceHelperCapabilitySecretValue()
+	if secretErr != nil || secret != "file-secret" {
+		t.Fatalf("secret=%q err=%v", secret, secretErr)
+	}
+
+	if _, missingErr := (Config{WorkspaceHelperCapabilitySecretFile: filepath.Join(t.TempDir(), "missing")}).WorkspaceHelperCapabilitySecretValue(); missingErr == nil {
+		t.Fatal("expected unreadable secret file error")
+	}
+
+	secret, secretErr = (Config{WorkspaceHelperCapabilitySecret: "environment-secret"}).WorkspaceHelperCapabilitySecretValue()
+	if secretErr != nil || secret != "environment-secret" {
+		t.Fatalf("environment secret=%q err=%v", secret, secretErr)
+	}
+}
+
+func TestOIDCAndSessionSecretValuesPreferFiles(t *testing.T) {
+	oidcSecretFile := filepath.Join(t.TempDir(), "oidc-client-secret")
+	if writeErr := os.WriteFile(oidcSecretFile, []byte("oidc-file-secret\n"), 0o600); writeErr != nil {
+		t.Fatalf("write OIDC secret file: %v", writeErr)
+	}
+	sessionSecretFile := filepath.Join(t.TempDir(), "session-secret")
+	if writeErr := os.WriteFile(sessionSecretFile, []byte("session-file-secret\n"), 0o600); writeErr != nil {
+		t.Fatalf("write session secret file: %v", writeErr)
+	}
+
+	cfg := Config{
+		OIDCClientSecret:     "environment-oidc-secret",
+		OIDCClientSecretFile: oidcSecretFile,
+		SessionSecret:        "environment-session-secret",
+		SessionSecretFile:    sessionSecretFile,
+	}
+	oidcSecret, oidcSecretErr := cfg.OIDCClientSecretValue()
+	if oidcSecretErr != nil || oidcSecret != "oidc-file-secret" {
+		t.Fatalf("OIDC secret=%q err=%v", oidcSecret, oidcSecretErr)
+	}
+	sessionSecret, sessionSecretErr := cfg.SessionSecretValue()
+	if sessionSecretErr != nil || sessionSecret != "session-file-secret" {
+		t.Fatalf("session secret=%q err=%v", sessionSecret, sessionSecretErr)
+	}
+
+	if _, missingErr := (Config{OIDCClientSecretFile: filepath.Join(t.TempDir(), "missing")}).OIDCClientSecretValue(); missingErr == nil {
+		t.Fatal("expected unreadable OIDC secret file error")
+	}
+	if _, missingErr := (Config{SessionSecretFile: filepath.Join(t.TempDir(), "missing")}).SessionSecretValue(); missingErr == nil {
+		t.Fatal("expected unreadable session secret file error")
+	}
+
+	oidcSecret, oidcSecretErr = (Config{OIDCClientSecret: "environment-oidc-secret"}).OIDCClientSecretValue()
+	if oidcSecretErr != nil || oidcSecret != "environment-oidc-secret" {
+		t.Fatalf("environment OIDC secret=%q err=%v", oidcSecret, oidcSecretErr)
+	}
+	sessionSecret, sessionSecretErr = (Config{SessionSecret: "environment-session-secret"}).SessionSecretValue()
+	if sessionSecretErr != nil || sessionSecret != "environment-session-secret" {
+		t.Fatalf("environment session secret=%q err=%v", sessionSecret, sessionSecretErr)
 	}
 }
 

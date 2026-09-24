@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -803,22 +802,31 @@ func TestWorkspaceHelperCacheServiceConcurrentReplacementLeavesOneReadyEntry(t *
 	harness := newWorkspaceHelperCacheServiceTestHarness(t)
 	harness.capabilities.expectedRole = domain.WorkspaceHelperRoleCacheSave
 	archives := []cacheServiceArchive{cacheArchive(t, "first", "one"), cacheArchive(t, "second", "two")}
-	var waitGroup sync.WaitGroup
-	errors := make(chan error, len(archives))
-	for _, archive := range archives {
-		waitGroup.Add(1)
-		go func(archive cacheServiceArchive) {
-			defer waitGroup.Done()
-			defer func() { _ = archive.archive.Close() }()
-			errors <- harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archive.archive, archive.publication)
-		}(archive)
-	}
-	waitGroup.Wait()
-	close(errors)
-	for err := range errors {
-		if err != nil {
-			t.Fatalf("concurrent save: %v", err)
+	defer func() {
+		for _, archive := range archives {
+			_ = archive.archive.Close()
 		}
+	}()
+
+	archiveStarted := make(chan struct{})
+	releaseArchive := make(chan struct{})
+	harness.store.archiveSaveHook = func() {
+		close(archiveStarted)
+		<-releaseArchive
+	}
+	firstSave := make(chan error, 1)
+	go func() {
+		firstSave <- harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archives[0].archive, archives[0].publication)
+	}()
+
+	<-archiveStarted
+	secondErr := harness.service.Save(context.Background(), "token", harness.job.ID, "pod-uid", "go", harness.cacheKey, archives[1].archive, archives[1].publication)
+	close(releaseArchive)
+	if firstErr := <-firstSave; firstErr != nil {
+		t.Fatalf("first concurrent save: %v", firstErr)
+	}
+	if secondErr != nil {
+		t.Fatalf("second concurrent save: %v", secondErr)
 	}
 	if harness.store.saveCalls != 0 || harness.store.archiveSaveCalls != 1 {
 		t.Fatalf("store saves=%d archive saves=%d, want 0 and 1", harness.store.saveCalls, harness.store.archiveSaveCalls)
