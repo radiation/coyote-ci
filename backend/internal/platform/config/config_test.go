@@ -591,6 +591,11 @@ func TestWorkspaceHelperCapabilitySecretValuePrefersFile(t *testing.T) {
 	if _, missingErr := (Config{WorkspaceHelperCapabilitySecretFile: filepath.Join(t.TempDir(), "missing")}).WorkspaceHelperCapabilitySecretValue(); missingErr == nil {
 		t.Fatal("expected unreadable secret file error")
 	}
+
+	secret, secretErr = (Config{WorkspaceHelperCapabilitySecret: "environment-secret"}).WorkspaceHelperCapabilitySecretValue()
+	if secretErr != nil || secret != "environment-secret" {
+		t.Fatalf("environment secret=%q err=%v", secret, secretErr)
+	}
 }
 
 func TestLoadWorkspaceRevisionLimitsFallBackToLegacySettings(t *testing.T) {
