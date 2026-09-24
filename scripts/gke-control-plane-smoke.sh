@@ -10,11 +10,52 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || { echo "$1 is required" >&2; exit 1; }
 }
 
-wait_for_http() {
-  local url="$1"
+print_port_forward_log() {
+  local name="$1"
+  local log_file="$2"
+  echo "${name} port-forward log:" >&2
+  if [[ -s "$log_file" ]]; then
+    cat "$log_file" >&2
+  else
+    echo "<no output captured>" >&2
+  fi
+}
+
+wait_for_port_forward() {
+  local name="$1"
+  local port="$2"
+  local pid="$3"
+  local log_file="$4"
   local deadline=$(( $(date +%s) + timeout_seconds ))
   while (( $(date +%s) < deadline )); do
-    if curl --fail --silent --show-error "$url" >/dev/null; then
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "${name} port-forward exited before listening on 127.0.0.1:${port}" >&2
+      print_port_forward_log "$name" "$log_file"
+      return 1
+    fi
+    if nc -z 127.0.0.1 "$port" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+  echo "timed out waiting for ${name} port-forward on 127.0.0.1:${port}" >&2
+  print_port_forward_log "$name" "$log_file"
+  return 1
+}
+
+wait_for_http() {
+  local name="$1"
+  local pid="$2"
+  local log_file="$3"
+  local url="$4"
+  local deadline=$(( $(date +%s) + timeout_seconds ))
+  while (( $(date +%s) < deadline )); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "${name} port-forward exited before ${url} became ready" >&2
+      print_port_forward_log "$name" "$log_file"
+      return 1
+    fi
+    if curl --fail --silent "$url" >/dev/null 2>&1; then
       return
     fi
     sleep 2
@@ -26,6 +67,7 @@ wait_for_http() {
 require_command kubectl
 require_command curl
 require_command jq
+require_command nc
 
 [[ "$namespace" == "coyote-ci" ]] || { echo "GKE_NAMESPACE must be coyote-ci" >&2; exit 1; }
 kubectl -n "$namespace" wait --for=condition=complete job/coyote-migrate --timeout="${timeout_seconds}s"
@@ -60,8 +102,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-wait_for_http "http://127.0.0.1:${server_port}/healthz"
-wait_for_http "http://127.0.0.1:${server_port}/readyz"
-wait_for_http "http://127.0.0.1:${frontend_port}/"
-wait_for_http "http://127.0.0.1:${frontend_port}/api/readyz"
+wait_for_port_forward server "$server_port" "$server_forward_pid" /tmp/coyote-server-port-forward.log
+wait_for_port_forward frontend "$frontend_port" "$frontend_forward_pid" /tmp/coyote-frontend-port-forward.log
+wait_for_http server "$server_forward_pid" /tmp/coyote-server-port-forward.log "http://127.0.0.1:${server_port}/healthz"
+wait_for_http server "$server_forward_pid" /tmp/coyote-server-port-forward.log "http://127.0.0.1:${server_port}/readyz"
+wait_for_http frontend "$frontend_forward_pid" /tmp/coyote-frontend-port-forward.log "http://127.0.0.1:${frontend_port}/"
+wait_for_http frontend "$frontend_forward_pid" /tmp/coyote-frontend-port-forward.log "http://127.0.0.1:${frontend_port}/api/readyz"
 echo "gke control-plane smoke passed"
