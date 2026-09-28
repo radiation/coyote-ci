@@ -1,0 +1,18 @@
+namespace: coyote-ci-staging
+controlPlaneNamespace: coyote-ci
+images:
+  worker: example.invalid/coyote-worker@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+serviceAccounts:
+  worker: {name: coyote-kubernetes-worker-staging, gsaEmail: coyote-gke-staging-worker@example-project.iam.gserviceaccount.com}
+cloudSql: {connectionName: "example-project:us-central1:coyote-postgres"}
+secrets: {project: example-project, databaseUrl: coyote-staging-database-url}
+storage:
+  project: example-project
+  artifacts: {bucket: coyote-artifacts, prefix: builds}
+cloudBuild:
+  project: example-project
+  location: us-central1
+  runtimeServiceAccount: coyote-cloud-build@example-project.iam.gserviceaccount.com
+  artifactRegistryRepository: us-central1-docker.pkg.dev/example-project/coyote-ci
+  source: {bucket: coyote-sources, prefix: coyote-sources}
+worker: {replicas: 1, maxInFlightJobs: 4, resources: {}}

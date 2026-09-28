@@ -1,0 +1,77 @@
+namespace: ""
+executionNamespace: ""
+
+gke:
+  enabled: true
+  secretManagerCSI:
+    enabled: true
+  workloadIdentity:
+    enabled: true
+
+images:
+  server: ""
+  frontend: ""
+  migrate: ""
+  cloudSqlProxy: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.4@sha256:88501f0a695a586988add1b8a206fdf3f29f9a1a3deeb9b45ef2b1481ea6be83
+
+serviceAccounts:
+  server:
+    name: coyote-server
+    gsaEmail: ""
+  migrate:
+    name: coyote-migrate
+    gsaEmail: ""
+  workspaceHelperName: coyote-workspace-helper
+
+cloudSql:
+  connectionName: ""
+  proxy:
+    address: 127.0.0.1
+    port: 5432
+    resources:
+      requests: {cpu: 250m, memory: 256Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+
+secrets:
+  project: ""
+  databaseUrl: ""
+  workspaceHelperCapability: ""
+  oidcClient: ""
+  session: ""
+
+storage:
+  project: ""
+  artifacts: {bucket: "", prefix: builds}
+  cache: {bucket: "", prefix: coyote-ci/cache}
+  workspaceRevisions: {bucket: "", prefix: workspace-revisions}
+
+auth:
+  mode: oidc
+  bootstrapAdminEmails: ""
+  oidc:
+    issuerURL: ""
+    clientID: ""
+    redirectURL: ""
+    scopes: openid email profile
+  publicURL: ""
+
+server:
+  replicas: 1
+  resources:
+    requests: {cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi}
+    limits: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+  tmpSizeLimit: 4Gi
+
+frontend:
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 128Mi}
+    limits: {cpu: 250m, memory: 256Mi, ephemeral-storage: 256Mi}
+
+gateway:
+  enabled: false
+  name: coyote-temporary-public
+  hostname: ""
+  addressName: ""
+  certificateMap: ""
+  className: gke-l7-global-external-managed

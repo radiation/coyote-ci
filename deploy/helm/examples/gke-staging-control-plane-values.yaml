@@ -1,0 +1,33 @@
+namespace: coyote-ci
+executionNamespace: coyote-ci-staging
+images:
+  server: example.invalid/coyote-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  frontend: example.invalid/coyote-frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  migrate: example.invalid/coyote-migrate@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+serviceAccounts:
+  server: {name: coyote-server, gsaEmail: coyote-gke-server@example-project.iam.gserviceaccount.com}
+  migrate: {name: coyote-migrate, gsaEmail: coyote-gke-migrate@example-project.iam.gserviceaccount.com}
+cloudSql: {connectionName: "example-project:us-central1:coyote-postgres"}
+secrets:
+  project: example-project
+  databaseUrl: coyote-staging-database-url
+  workspaceHelperCapability: coyote-workspace-helper-capability-secret
+  oidcClient: coyote-staging-oidc-client-secret
+  session: coyote-staging-session-secret
+storage:
+  project: example-project
+  artifacts: {bucket: coyote-artifacts, prefix: builds}
+  cache: {bucket: coyote-cache, prefix: coyote-ci/cache}
+  workspaceRevisions: {bucket: coyote-workspace-revisions, prefix: workspace-revisions}
+auth:
+  bootstrapAdminEmails: admin@example.invalid
+  oidc:
+    issuerURL: https://issuer.example.invalid
+    clientID: coyote-staging
+    redirectURL: https://staging.example.invalid/auth/callback
+  publicURL: https://staging.example.invalid
+gateway:
+  enabled: true
+  hostname: staging.example.invalid
+  addressName: coyote-staging-address
+  certificateMap: coyote-staging-map

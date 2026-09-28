@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccounts.server.name }}
+  namespace: {{ .Values.namespace }}
+  {{- if and .Values.gke.enabled .Values.gke.workloadIdentity.enabled }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ .Values.serviceAccounts.server.gsaEmail | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccounts.migrate.name }}
+  namespace: {{ .Values.namespace }}
+  {{- if and .Values.gke.enabled .Values.gke.workloadIdentity.enabled }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ .Values.serviceAccounts.migrate.gsaEmail | quote }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coyote-server-workspace-verifier
+  namespace: {{ .Values.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coyote-server-workspace-verifier
+  namespace: {{ .Values.namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccounts.server.name }}
+    namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coyote-server-workspace-verifier
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: coyote-server-tokenreview
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: coyote-server-tokenreview
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccounts.server.name }}
+    namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: coyote-server-tokenreview
