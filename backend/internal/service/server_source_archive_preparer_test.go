@@ -124,7 +124,7 @@ func TestServerSourceArchivePreparerUsesAuthenticatedCheckout(t *testing.T) {
 		t.Fatalf("prepare authenticated archive: %v", prepareErr)
 	}
 	defer func() { _ = payload.Archive.Close() }()
-	if resolver.repositoryURL != "https://github.com/acme/repository.git" || resolver.credential.Password != "installation-token" || resolver.unauthenticatedCloneCalls != 0 || payload.Publication.Validate() != nil {
+	if resolver.repositoryURL != "https://github.com/acme/repository.git" || resolver.credential.Password != "installation-token" || resolver.unauthenticatedCloneCalls != 0 || len(resolver.checkoutCredentials) != 1 || resolver.checkoutCredentials[0].Password != "installation-token" || payload.Publication.Validate() != nil {
 		t.Fatalf("resolver=%#v publication=%#v", resolver, payload.Publication)
 	}
 }
@@ -206,6 +206,7 @@ type authenticatedServerSourceResolverFake struct {
 	serverSourceResolverFake
 	credential          source.HTTPSCredential
 	credentials         []source.HTTPSCredential
+	checkoutCredentials []source.HTTPSCredential
 	credentialCloneErrs []error
 }
 
@@ -222,6 +223,11 @@ func (f *authenticatedServerSourceResolverFake) CloneIntoWorkspaceWithHTTPSCrede
 		return mkdirErr
 	}
 	return os.WriteFile(filepath.Join(workspacePath, "source.txt"), []byte("source"), 0o644)
+}
+
+func (f *authenticatedServerSourceResolverFake) CheckoutWorkspaceSourceWithHTTPSCredential(ctx context.Context, workspacePath string, spec source.WorkspaceSourceSpec, credential source.HTTPSCredential) (string, error) {
+	f.checkoutCredentials = append(f.checkoutCredentials, credential)
+	return f.CheckoutWorkspaceSource(ctx, workspacePath, spec)
 }
 
 var _ source.AuthenticatedWorkspaceSourceResolver = (*authenticatedServerSourceResolverFake)(nil)

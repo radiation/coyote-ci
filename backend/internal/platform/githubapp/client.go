@@ -97,6 +97,8 @@ type Client struct {
 	cache       map[string]cachedInstallationToken
 	wait        map[string]chan struct{}
 	refreshWait map[string]*inFlightTokenRefresh
+
+	freshRefreshWaitHook func()
 }
 
 type cachedInstallationToken struct {
@@ -137,7 +139,11 @@ func (c *Client) GetFreshInstallationToken(ctx context.Context, input Installati
 	for {
 		c.mu.Lock()
 		if refresh, ok := c.refreshWait[key]; ok {
+			waitHook := c.freshRefreshWaitHook
 			c.mu.Unlock()
+			if waitHook != nil {
+				waitHook()
+			}
 			select {
 			case <-ctx.Done():
 				return InstallationToken{}, ctx.Err()

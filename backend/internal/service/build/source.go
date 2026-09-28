@@ -140,15 +140,7 @@ func (s *BuildService) resolveBuildSourceInWorkspace(ctx context.Context, buildI
 	}
 
 	workspacePath := filepath.Join(workspaceRoot, strings.TrimSpace(buildID))
-	if err := s.cloneBuildSourceIntoWorkspace(ctx, workspacePath, sourceSpec); err != nil {
-		return "", err
-	}
-
-	resolvedCommit, err := s.sourceResolver.CheckoutWorkspaceSource(ctx, workspacePath, source.WorkspaceSourceSpec{
-		RepositoryURL: sourceSpec.RepositoryURL,
-		Ref:           sourceSpec.Ref,
-		CommitSHA:     sourceSpec.CommitSHA,
-	})
+	resolvedCommit, err := s.materializeBuildSourceInWorkspace(ctx, workspacePath, sourceSpec)
 	if err != nil {
 		return "", err
 	}
@@ -196,6 +188,46 @@ func (s *BuildService) cloneBuildSourceIntoWorkspace(ctx context.Context, worksp
 	return checkout.RunWithCredentialRetry(ctx, func(credential source.HTTPSCredential) error {
 		return authenticatedResolver.CloneIntoWorkspaceWithHTTPSCredential(ctx, workspacePath, checkout.RepositoryURL, credential)
 	})
+}
+
+func (s *BuildService) materializeBuildSourceInWorkspace(ctx context.Context, workspacePath string, sourceSpec execution.ResolvedBuildSourceSpec) (string, error) {
+	workspaceSpec := source.WorkspaceSourceSpec{
+		RepositoryURL: sourceSpec.RepositoryURL,
+		Ref:           sourceSpec.Ref,
+		CommitSHA:     sourceSpec.CommitSHA,
+	}
+	if sourceSpec.RepositoryIdentity == nil {
+		if cloneErr := s.cloneBuildSourceIntoWorkspace(ctx, workspacePath, sourceSpec); cloneErr != nil {
+			return "", cloneErr
+		}
+		return s.sourceResolver.CheckoutWorkspaceSource(ctx, workspacePath, workspaceSpec)
+	}
+	if s.repositoryCheckout == nil {
+		return "", ErrRepositoryCheckoutConnectionInvalid
+	}
+	checkout, checkoutErr := s.repositoryCheckout.Resolve(ctx, *sourceSpec.RepositoryIdentity)
+	if checkoutErr != nil {
+		return "", checkoutErr
+	}
+	authenticatedResolver, ok := s.sourceResolver.(source.AuthenticatedWorkspaceSourceResolver)
+	if !ok {
+		return "", ErrRepositoryCheckoutConnectionInvalid
+	}
+
+	var resolvedCommit string
+	credentialErr := checkout.RunWithCredentialRetry(ctx, func(credential source.HTTPSCredential) error {
+		cloneErr := authenticatedResolver.CloneIntoWorkspaceWithHTTPSCredential(ctx, workspacePath, checkout.RepositoryURL, credential)
+		if cloneErr != nil {
+			return cloneErr
+		}
+		var resolveErr error
+		resolvedCommit, resolveErr = authenticatedResolver.CheckoutWorkspaceSourceWithHTTPSCredential(ctx, workspacePath, workspaceSpec, credential)
+		return resolveErr
+	})
+	if credentialErr != nil {
+		return "", credentialErr
+	}
+	return resolvedCommit, nil
 }
 
 func (s *BuildService) currentWorkspaceRoot() string {

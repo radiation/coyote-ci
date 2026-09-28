@@ -41,6 +41,7 @@ type WorkspaceSourceResolver interface {
 type AuthenticatedWorkspaceSourceResolver interface {
 	WorkspaceSourceResolver
 	CloneIntoWorkspaceWithHTTPSCredential(ctx context.Context, workspacePath string, repositoryURL string, credential HTTPSCredential) error
+	CheckoutWorkspaceSourceWithHTTPSCredential(ctx context.Context, workspacePath string, spec WorkspaceSourceSpec, credential HTTPSCredential) (string, error)
 }
 
 // GitWorkspaceSourceResolver uses git CLI to populate and pin workspace source.
@@ -87,6 +88,14 @@ func (r *GitWorkspaceSourceResolver) cloneIntoWorkspace(ctx context.Context, wor
 }
 
 func (r *GitWorkspaceSourceResolver) CheckoutWorkspaceSource(ctx context.Context, workspacePath string, spec WorkspaceSourceSpec) (string, error) {
+	return r.checkoutWorkspaceSource(ctx, workspacePath, spec, nil)
+}
+
+func (r *GitWorkspaceSourceResolver) CheckoutWorkspaceSourceWithHTTPSCredential(ctx context.Context, workspacePath string, spec WorkspaceSourceSpec, credential HTTPSCredential) (string, error) {
+	return r.checkoutWorkspaceSource(ctx, workspacePath, spec, &credential)
+}
+
+func (r *GitWorkspaceSourceResolver) checkoutWorkspaceSource(ctx context.Context, workspacePath string, spec WorkspaceSourceSpec, credential *HTTPSCredential) (string, error) {
 	cleanWorkspacePath := filepath.Clean(strings.TrimSpace(workspacePath))
 	if !filepath.IsAbs(cleanWorkspacePath) {
 		return "", ErrWorkspacePathRequired
@@ -113,7 +122,7 @@ func (r *GitWorkspaceSourceResolver) CheckoutWorkspaceSource(ctx context.Context
 		return "", ErrCheckoutTargetRequired
 	}
 
-	resolvedRef, err := resolveRefCommit(ctx, cleanWorkspacePath, ref)
+	resolvedRef, err := resolveRefCommit(ctx, cleanWorkspacePath, ref, credential)
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", ErrRefNotFound, ref)
 	}

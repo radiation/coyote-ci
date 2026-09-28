@@ -65,10 +65,12 @@ type checkoutAuthenticatedFetcherFake struct {
 }
 
 type checkoutAuthenticatedWorkspaceResolverFake struct {
-	cloneCalls         int
-	authenticatedCalls int
-	credentials        []source.HTTPSCredential
-	firstErr           error
+	cloneCalls                 int
+	authenticatedCalls         int
+	authenticatedCheckoutCalls int
+	credentials                []source.HTTPSCredential
+	checkoutCredentials        []source.HTTPSCredential
+	firstErr                   error
 }
 
 func (f *checkoutAuthenticatedWorkspaceResolverFake) CloneIntoWorkspace(context.Context, string, string) error {
@@ -86,6 +88,12 @@ func (f *checkoutAuthenticatedWorkspaceResolverFake) CloneIntoWorkspaceWithHTTPS
 }
 
 func (f *checkoutAuthenticatedWorkspaceResolverFake) CheckoutWorkspaceSource(context.Context, string, source.WorkspaceSourceSpec) (string, error) {
+	return "commit", nil
+}
+
+func (f *checkoutAuthenticatedWorkspaceResolverFake) CheckoutWorkspaceSourceWithHTTPSCredential(_ context.Context, _ string, _ source.WorkspaceSourceSpec, credential source.HTTPSCredential) (string, error) {
+	f.authenticatedCheckoutCalls++
+	f.checkoutCredentials = append(f.checkoutCredentials, credential)
 	return "commit", nil
 }
 
@@ -438,6 +446,36 @@ func TestRepositoryAwareCheckoutResolver_MappedWorkspaceCloneUsesAuthenticatedRe
 	}
 	if workspace.cloneCalls != 0 || workspace.authenticatedCalls != 2 || github.freshTokenCalls != 1 || len(workspace.credentials) != 2 || workspace.credentials[1].Password != "fresh-secret-token" {
 		t.Fatalf("expected authenticated retry, legacy=%d authenticated=%d refreshes=%d credentials=%#v", workspace.cloneCalls, workspace.authenticatedCalls, github.freshTokenCalls, workspace.credentials)
+	}
+}
+
+func TestRepositoryAwareCheckoutResolver_MappedWorkspaceMaterializationUsesCredentialForCheckout(t *testing.T) {
+	registrations := &checkoutRegistrationFake{value: domain.SCMRepositoryRegistration{ID: "repository-a", ConnectionID: "connection-a", ProviderRepositoryID: "100"}}
+	github := &checkoutGitHubFake{repository: platformgithubapp.Repository{ID: "100", CloneURL: "https://github.com/acme/repository.git"}}
+	resolver, err := NewRepositoryAwareCheckoutResolver(RepositoryAwareCheckoutResolverConfig{Connections: &checkoutConnectionFake{value: checkoutDetail(true)}, Registrations: registrations, Secrets: &checkoutSecretFake{value: "private-key"}, GitHub: github})
+	if err != nil {
+		t.Fatalf("new resolver: %v", err)
+	}
+	workspace := &checkoutAuthenticatedWorkspaceResolverFake{}
+	service := NewBuildService(nil, nil, nil)
+	service.SetSourceResolver(workspace)
+	service.SetRepositoryAwareCheckoutResolver(resolver)
+
+	resolved, materializeErr := service.materializeBuildSourceInWorkspace(context.Background(), "/tmp/build", execution.ResolvedBuildSourceSpec{
+		RepositoryURL: "https://stale.example/repository.git",
+		Ref:           "feature/private",
+		HasSource:     true,
+		RepositoryIdentity: &domain.RepositoryIdentitySnapshot{
+			RegisteredRepositoryID: "repository-a",
+			SCMConnectionID:        "connection-a",
+			ProviderRepositoryID:   "100",
+		},
+	})
+	if materializeErr != nil || resolved != "commit" {
+		t.Fatalf("materialize workspace resolved=%q err=%v", resolved, materializeErr)
+	}
+	if workspace.authenticatedCalls != 1 || workspace.authenticatedCheckoutCalls != 1 || len(workspace.credentials) != 1 || len(workspace.checkoutCredentials) != 1 || workspace.credentials[0] != workspace.checkoutCredentials[0] {
+		t.Fatalf("expected the clone and checkout to share one credential, clone=%#v checkout=%#v", workspace.credentials, workspace.checkoutCredentials)
 	}
 }
 

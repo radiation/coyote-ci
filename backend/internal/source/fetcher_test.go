@@ -161,7 +161,7 @@ func TestResolveRefCommit_FetchesUnavailableRemoteRefs(t *testing.T) {
 
 	t.Run("non-default slash branch", func(t *testing.T) {
 		cloneDir := cloneSingleBranch(t, false)
-		resolved, err := resolveRefCommit(context.Background(), cloneDir, "feature/kubernetes-ingress-cutover")
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "feature/kubernetes-ingress-cutover", nil)
 		if err != nil {
 			t.Fatalf("resolve unavailable remote branch: %v", err)
 		}
@@ -172,7 +172,7 @@ func TestResolveRefCommit_FetchesUnavailableRemoteRefs(t *testing.T) {
 
 	t.Run("full branch ref", func(t *testing.T) {
 		cloneDir := cloneSingleBranch(t, false)
-		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/heads/feature/kubernetes-ingress-cutover")
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/heads/feature/kubernetes-ingress-cutover", nil)
 		if err != nil {
 			t.Fatalf("resolve full branch ref: %v", err)
 		}
@@ -183,7 +183,7 @@ func TestResolveRefCommit_FetchesUnavailableRemoteRefs(t *testing.T) {
 
 	t.Run("bare tag", func(t *testing.T) {
 		cloneDir := cloneSingleBranch(t, true)
-		resolved, err := resolveRefCommit(context.Background(), cloneDir, "v1.2.3")
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "v1.2.3", nil)
 		if err != nil {
 			t.Fatalf("resolve bare tag: %v", err)
 		}
@@ -194,7 +194,7 @@ func TestResolveRefCommit_FetchesUnavailableRemoteRefs(t *testing.T) {
 
 	t.Run("full tag ref", func(t *testing.T) {
 		cloneDir := cloneSingleBranch(t, true)
-		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/tags/v1.2.3")
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/tags/v1.2.3", nil)
 		if err != nil {
 			t.Fatalf("resolve full tag ref: %v", err)
 		}
@@ -205,7 +205,7 @@ func TestResolveRefCommit_FetchesUnavailableRemoteRefs(t *testing.T) {
 
 	t.Run("full commit SHA", func(t *testing.T) {
 		cloneDir := cloneSingleBranch(t, false)
-		resolved, err := resolveRefCommit(context.Background(), cloneDir, mainSHA)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, mainSHA, nil)
 		if err != nil {
 			t.Fatalf("resolve commit SHA: %v", err)
 		}
@@ -216,7 +216,7 @@ func TestResolveRefCommit_FetchesUnavailableRemoteRefs(t *testing.T) {
 
 	t.Run("arbitrary literal ref", func(t *testing.T) {
 		cloneDir := cloneSingleBranch(t, false)
-		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/coyote/test")
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/coyote/test", nil)
 		if err != nil {
 			t.Fatalf("resolve arbitrary ref: %v", err)
 		}
@@ -227,7 +227,7 @@ func TestResolveRefCommit_FetchesUnavailableRemoteRefs(t *testing.T) {
 
 	t.Run("missing ref reports local and remote failures", func(t *testing.T) {
 		cloneDir := cloneSingleBranch(t, false)
-		_, err := resolveRefCommit(context.Background(), cloneDir, "feature/missing")
+		_, err := resolveRefCommit(context.Background(), cloneDir, "feature/missing", nil)
 		if err == nil {
 			t.Fatal("expected missing ref error")
 		}
@@ -340,6 +340,35 @@ func TestGitCloneWithHTTPSCredential_CleansUniqueAskpassAndRedactsToken(t *testi
 		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 			t.Fatalf("expected askpass path %q to be removed, err=%v", path, statErr)
 		}
+	}
+}
+
+func TestGitFetchRefWithHTTPSCredential_DisablesPromptsAndRedactsToken(t *testing.T) {
+	binDir := t.TempDir()
+	markerPath := filepath.Join(t.TempDir(), "fetch-env")
+	gitPath := filepath.Join(binDir, "git")
+	script := "#!/bin/sh\nprintf '%s|%s\\n' \"$GIT_TERMINAL_PROMPT\" \"$GIT_ASKPASS\" > \"$ASKPASS_MARKER\"\nprintf 'fatal: Authentication failed for %s\\n' \"$COYOTE_GIT_ASKPASS_TOKEN\" >&2\nexit 1\n"
+	if writeErr := os.WriteFile(gitPath, []byte(script), 0o700); writeErr != nil {
+		t.Fatalf("write fake git: %v", writeErr)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ASKPASS_MARKER", markerPath)
+
+	token := "fetch-secret-token"
+	fetchErr := gitFetchRef(context.Background(), t.TempDir(), "feature/private", &HTTPSCredential{Username: "x-access-token", Password: token})
+	if fetchErr == nil || strings.Contains(fetchErr.Error(), token) || !IsAuthenticationFailure(fetchErr) {
+		t.Fatalf("expected sanitized authentication failure, err=%v", fetchErr)
+	}
+	marker, readErr := os.ReadFile(markerPath)
+	if readErr != nil {
+		t.Fatalf("read captured fetch environment: %v", readErr)
+	}
+	parts := strings.Split(strings.TrimSpace(string(marker)), "|")
+	if len(parts) != 2 || parts[0] != "0" || parts[1] == "" {
+		t.Fatalf("expected terminal prompting disabled with askpass configured, got %q", marker)
+	}
+	if _, statErr := os.Stat(parts[1]); !os.IsNotExist(statErr) {
+		t.Fatalf("expected askpass path %q to be removed, err=%v", parts[1], statErr)
 	}
 }
 

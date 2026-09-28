@@ -902,6 +902,10 @@ func TestClient_GetFreshInstallationToken_ConcurrentRequestsShareOneExchange(t *
 	defer server.Close()
 	client := NewClient(server.Client())
 	request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM, RepositoryIDs: []string{"1001"}}
+	waiterJoined := make(chan struct{})
+	client.freshRefreshWaitHook = func() {
+		close(waiterJoined)
+	}
 	results := make(chan InstallationToken, 2)
 	errs := make(chan error, 2)
 	for range 2 {
@@ -912,6 +916,7 @@ func TestClient_GetFreshInstallationToken_ConcurrentRequestsShareOneExchange(t *
 		}()
 	}
 	<-started
+	<-waiterJoined
 	close(release)
 	for range 2 {
 		if freshErr := <-errs; freshErr != nil {

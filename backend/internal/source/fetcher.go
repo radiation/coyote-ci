@@ -80,7 +80,7 @@ func (g *GitFetcher) fetch(ctx context.Context, repoURL string, ref string, cred
 		return "", "", fmt.Errorf("cloning repo %s: %w", repoURL, err)
 	}
 
-	resolvedRef, err := resolveRefCommit(ctx, tmpDir, ref)
+	resolvedRef, err := resolveRefCommit(ctx, tmpDir, ref, credential)
 	if err != nil {
 		return "", "", fmt.Errorf("resolving ref %q: %w", ref, err)
 	}
@@ -100,29 +100,39 @@ func (g *GitFetcher) fetch(ctx context.Context, repoURL string, ref string, cred
 }
 
 func gitCloneWithHTTPSCredential(ctx context.Context, repoURL string, dst string, credential HTTPSCredential) error {
-	username := strings.TrimSpace(credential.Username)
-	password := strings.TrimSpace(credential.Password)
-	if username == "" || password == "" {
-		return errors.New("https git credential is required")
-	}
-	askPassPath, err := createGitTokenAskPassScript()
+	env, cleanup, err := gitHTTPSCredentialEnv(credential)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(askPassPath) }()
+	defer cleanup()
 
 	cmd := exec.CommandContext(ctx, "git", "clone", "--", repoURL, dst)
-	cmd.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_ASKPASS="+askPassPath,
-		"COYOTE_GIT_ASKPASS_USERNAME="+username,
-		"COYOTE_GIT_ASKPASS_TOKEN="+password,
-	)
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, redactGitSecret(string(out), password))
+		return fmt.Errorf("%w: %s", err, redactGitSecret(string(out), credential.Password))
 	}
 	return nil
+}
+
+func gitHTTPSCredentialEnv(credential HTTPSCredential) ([]string, func(), error) {
+	username := strings.TrimSpace(credential.Username)
+	password := strings.TrimSpace(credential.Password)
+	if username == "" || password == "" {
+		return nil, nil, errors.New("https git credential is required")
+	}
+	askPassPath, err := createGitTokenAskPassScript()
+	if err != nil {
+		return nil, nil, err
+	}
+	return append(os.Environ(),
+			"GIT_TERMINAL_PROMPT=0",
+			"GIT_ASKPASS="+askPassPath,
+			"COYOTE_GIT_ASKPASS_USERNAME="+username,
+			"COYOTE_GIT_ASKPASS_TOKEN="+password,
+		), func() {
+			_ = os.Remove(askPassPath)
+		}, nil
 }
 
 func createGitTokenAskPassScript() (string, error) {
@@ -220,7 +230,7 @@ func gitRevParseHead(ctx context.Context, dir string) (string, error) {
 	return string(out), nil
 }
 
-func resolveRefCommit(ctx context.Context, dir string, ref string) (string, error) {
+func resolveRefCommit(ctx context.Context, dir string, ref string, credential *HTTPSCredential) (string, error) {
 	var lastErr error
 	for _, candidate := range localRefCandidates(ref) {
 		out, err := gitRevParseVerify(ctx, dir, candidate)
@@ -233,7 +243,7 @@ func resolveRefCommit(ctx context.Context, dir string, ref string) (string, erro
 	if lastErr == nil {
 		lastErr = errors.New("no local ref candidates")
 	}
-	if fetchErr := gitFetchRef(ctx, dir, ref); fetchErr != nil {
+	if fetchErr := gitFetchRef(ctx, dir, ref, credential); fetchErr != nil {
 		return "", fmt.Errorf("local resolution failed: %w; fetching ref from origin: %w", lastErr, fetchErr)
 	}
 
@@ -274,12 +284,28 @@ func localRefCandidates(ref string) []string {
 	return candidates
 }
 
-func gitFetchRef(ctx context.Context, dir string, ref string) error {
+func gitFetchRef(ctx context.Context, dir string, ref string, credential *HTTPSCredential) error {
 	cmd := exec.CommandContext(ctx, "git", "fetch", "origin", "--", ref)
 	if err := setGitDir(cmd, dir); err != nil {
 		return err
 	}
-	return cmd.Run()
+	var cleanup func()
+	var err error
+	if credential != nil {
+		cmd.Env, cleanup, err = gitHTTPSCredentialEnv(*credential)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if credential != nil {
+			return fmt.Errorf("%w: %s", err, redactGitSecret(string(out), credential.Password))
+		}
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func gitRevParseVerify(ctx context.Context, dir string, candidate string) (string, error) {
