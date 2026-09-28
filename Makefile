@@ -1,4 +1,4 @@
-.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix kind-up kind-load kind-smoke kind-workspace-smoke kind-reliability-smoke kind-down gke-image-build gke-deploy gke-smoke gke-control-plane-image-build gke-control-plane-deploy gke-control-plane-smoke gke-gateway-deploy gke-staging-worker-deploy gke-public-e2e-smoke
+.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix kind-up kind-load kind-smoke kind-workspace-smoke kind-reliability-smoke kind-down gke-image-build gke-deploy gke-smoke gke-control-plane-image-build gke-control-plane-deploy gke-control-plane-smoke gke-gateway-deploy gke-staging-worker-deploy gke-public-e2e-smoke helm-render-parity helm-schema-test helm-migration-parity gke-helm-rollout gke-helm-rollout-test
 
 CLI_VERSION ?= dev
 CLI_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -101,6 +101,21 @@ gke-staging-worker-deploy:
 
 gke-public-e2e-smoke:
 	bash ./scripts/gke-public-e2e-smoke.sh
+
+helm-render-parity:
+	bash ./scripts/helm-render-parity.sh
+
+helm-schema-test:
+	bash ./scripts/helm-schema-test.sh
+
+helm-migration-parity:
+	bash ./scripts/helm-migration-parity.sh
+
+gke-helm-rollout:
+	bash ./scripts/gke-helm-rollout.sh
+
+gke-helm-rollout-test:
+	bash ./scripts/test-gke-helm-rollout.sh
 
 cli-validate-release-matrix:
 	bash ./scripts/validate_cli_snapshot.sh .

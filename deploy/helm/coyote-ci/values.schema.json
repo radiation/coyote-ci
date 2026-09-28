@@ -22,6 +22,13 @@
     "auth": {"type": "object", "required": ["mode", "bootstrapAdminEmails", "oidc", "publicURL"], "properties": {"mode": {"type": "string", "enum": ["oidc"]}, "bootstrapAdminEmails": {"type": "string", "minLength": 1}, "publicURL": {"type": "string", "pattern": "^https://"}, "oidc": {"type": "object", "required": ["issuerURL", "clientID", "redirectURL"], "properties": {"issuerURL": {"type": "string", "pattern": "^https://"}, "clientID": {"type": "string", "minLength": 1}, "redirectURL": {"type": "string", "pattern": "^https://"}}}}},
     "server": {"type": "object", "properties": {"replicas": {"type": "integer", "minimum": 0}}},
     "frontend": {"type": "object", "properties": {"replicas": {"type": "integer", "minimum": 0}}},
+    "migration": {
+      "type": "object",
+      "properties": {
+        "render": {"type": "boolean"},
+        "runID": {"type": "string", "maxLength": 48, "pattern": "^(|[a-z0-9]([a-z0-9-]*[a-z0-9])?)$"}
+      }
+    },
     "gateway": {"type": "object", "properties": {"enabled": {"type": "boolean"}, "hostname": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"}}}
   },
   "allOf": [{"if": {"properties": {"gateway": {"properties": {"enabled": {"const": true}}}}}, "then": {"properties": {"gateway": {"required": ["hostname", "addressName", "certificateMap"], "properties": {"hostname": {"minLength": 1}, "addressName": {"minLength": 1}, "certificateMap": {"minLength": 1}}}}}}]
