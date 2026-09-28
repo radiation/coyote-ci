@@ -22,8 +22,32 @@ scripts/helm-schema-test.sh
 ```
 
 The raw manifests and deployment scripts remain the current deployment path.
-The migration Job is intentionally excluded from both normal chart renders;
-its explicit blocking rollout semantics are a later slice.
+The migration Job is excluded from ordinary chart renders and Helm release
+ownership. It is rendered explicitly for a unique rollout run and applied by
+[`scripts/gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh):
+
+```sh
+helm template coyote-ci deploy/helm/coyote-ci \
+  --namespace coyote-ci \
+  --values deploy/helm/examples/gke-staging-control-plane-values.yaml \
+  --show-only templates/migration-job.yaml \
+  --set migration.render=true \
+  --set migration.runID=example-20260928
+```
+
+The wrapper first scales Helm-managed control-plane and worker Deployments to
+zero, applies and waits for that exact migration Job, then restores the
+control plane before the worker and checks Gateway conditions. It never uses
+Helm hooks or attempts a database downgrade. Failed Jobs remain for diagnosis;
+a retry uses a different `HELM_ROLLOUT_ID`. Use
+`GKE_HELM_DRY_RUN=true scripts/gke-helm-rollout.sh` to inspect the mutation
+sequence after local chart rendering succeeds.
+
+Slice 3 must still adopt the existing raw-managed resources before this
+wrapper can be used against staging. It deliberately refuses to install or
+adopt releases, and existing applications must be stopped before migration
+because this repository does not assert that every Goose migration is
+backward-compatible.
 
 The charts preserve GKE Workload Identity, Secret Manager CSI, Gateway API,
 and GKE HealthCheckPolicy integration behind values switches. Disabling those
