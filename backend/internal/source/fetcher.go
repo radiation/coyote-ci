@@ -221,15 +221,8 @@ func gitRevParseHead(ctx context.Context, dir string) (string, error) {
 }
 
 func resolveRefCommit(ctx context.Context, dir string, ref string) (string, error) {
-	candidates := []string{
-		ref + "^{commit}",
-		"origin/" + ref + "^{commit}",
-		"refs/remotes/origin/" + ref + "^{commit}",
-		"refs/tags/" + ref + "^{commit}",
-	}
-
 	var lastErr error
-	for _, candidate := range candidates {
+	for _, candidate := range localRefCandidates(ref) {
 		out, err := gitRevParseVerify(ctx, dir, candidate)
 		if err == nil {
 			return strings.TrimSpace(out), nil
@@ -238,9 +231,55 @@ func resolveRefCommit(ctx context.Context, dir string, ref string) (string, erro
 	}
 
 	if lastErr == nil {
-		lastErr = errors.New("unable to resolve ref")
+		lastErr = errors.New("no local ref candidates")
 	}
-	return "", lastErr
+	if fetchErr := gitFetchRef(ctx, dir, ref); fetchErr != nil {
+		return "", fmt.Errorf("local resolution failed: %w; fetching ref from origin: %w", lastErr, fetchErr)
+	}
+
+	out, err := gitRevParseVerify(ctx, dir, "FETCH_HEAD^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("local resolution failed: %w; resolving fetched ref: %w", lastErr, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func localRefCandidates(ref string) []string {
+	appendCandidate := func(candidates []string, candidate string) []string {
+		candidate += "^{commit}"
+		for _, existing := range candidates {
+			if existing == candidate {
+				return candidates
+			}
+		}
+		return append(candidates, candidate)
+	}
+
+	candidates := []string{}
+	candidates = appendCandidate(candidates, ref)
+	switch {
+	case strings.HasPrefix(ref, "refs/heads/"):
+		branch := strings.TrimPrefix(ref, "refs/heads/")
+		candidates = appendCandidate(candidates, "origin/"+branch)
+		candidates = appendCandidate(candidates, "refs/remotes/origin/"+branch)
+	case strings.HasPrefix(ref, "refs/tags/"):
+		// The literal full tag ref is already the canonical local candidate.
+	case strings.HasPrefix(ref, "refs/"):
+		// Keep arbitrary refs literal; providers may expose their own namespaces.
+	default:
+		candidates = appendCandidate(candidates, "origin/"+ref)
+		candidates = appendCandidate(candidates, "refs/remotes/origin/"+ref)
+		candidates = appendCandidate(candidates, "refs/tags/"+ref)
+	}
+	return candidates
+}
+
+func gitFetchRef(ctx context.Context, dir string, ref string) error {
+	cmd := exec.CommandContext(ctx, "git", "fetch", "origin", "--", ref)
+	if err := setGitDir(cmd, dir); err != nil {
+		return err
+	}
+	return cmd.Run()
 }
 
 func gitRevParseVerify(ctx context.Context, dir string, candidate string) (string, error) {

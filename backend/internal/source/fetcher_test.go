@@ -117,6 +117,126 @@ func TestGitFetcher_Fetch(t *testing.T) {
 	})
 }
 
+func TestResolveRefCommit_FetchesUnavailableRemoteRefs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+
+	remoteDir := t.TempDir()
+	mustRun(t, remoteDir, "git", "init", "--bare")
+
+	workDir := t.TempDir()
+	mustRun(t, workDir, "git", "clone", remoteDir, ".")
+	mustRun(t, workDir, "git", "config", "user.email", "test@test.com")
+	mustRun(t, workDir, "git", "config", "user.name", "Test")
+	mustRun(t, workDir, "git", "checkout", "-b", "main")
+	if writeErr := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("main"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	mustRun(t, workDir, "git", "add", "README.md")
+	mustRun(t, workDir, "git", "commit", "-m", "main")
+	mustRun(t, workDir, "git", "push", "origin", "main")
+	mainSHA := mustOutput(t, workDir, "git", "rev-parse", "HEAD")
+	mustRun(t, workDir, "git", "tag", "v1.2.3")
+	mustRun(t, workDir, "git", "push", "origin", "v1.2.3")
+
+	mustRun(t, workDir, "git", "checkout", "-b", "feature/kubernetes-ingress-cutover")
+	mustRun(t, workDir, "git", "commit", "--allow-empty", "-m", "feature")
+	mustRun(t, workDir, "git", "push", "origin", "feature/kubernetes-ingress-cutover")
+	featureSHA := mustOutput(t, workDir, "git", "rev-parse", "HEAD")
+	mustRun(t, workDir, "git", "push", "origin", "HEAD:refs/coyote/test")
+	mustRun(t, t.TempDir(), "git", "--git-dir="+remoteDir, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	cloneSingleBranch := func(t *testing.T, noTags bool) string {
+		t.Helper()
+		cloneDir := t.TempDir()
+		args := []string{"clone", "--single-branch", "--branch", "main"}
+		if noTags {
+			args = append(args, "--no-tags")
+		}
+		args = append(args, remoteDir, cloneDir)
+		mustRun(t, t.TempDir(), "git", args...)
+		return cloneDir
+	}
+
+	t.Run("non-default slash branch", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, false)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "feature/kubernetes-ingress-cutover")
+		if err != nil {
+			t.Fatalf("resolve unavailable remote branch: %v", err)
+		}
+		if resolved != featureSHA {
+			t.Fatalf("expected feature SHA %q, got %q", featureSHA, resolved)
+		}
+	})
+
+	t.Run("full branch ref", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, false)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/heads/feature/kubernetes-ingress-cutover")
+		if err != nil {
+			t.Fatalf("resolve full branch ref: %v", err)
+		}
+		if resolved != featureSHA {
+			t.Fatalf("expected feature SHA %q, got %q", featureSHA, resolved)
+		}
+	})
+
+	t.Run("bare tag", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, true)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "v1.2.3")
+		if err != nil {
+			t.Fatalf("resolve bare tag: %v", err)
+		}
+		if resolved != mainSHA {
+			t.Fatalf("expected tag SHA %q, got %q", mainSHA, resolved)
+		}
+	})
+
+	t.Run("full tag ref", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, true)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/tags/v1.2.3")
+		if err != nil {
+			t.Fatalf("resolve full tag ref: %v", err)
+		}
+		if resolved != mainSHA {
+			t.Fatalf("expected tag SHA %q, got %q", mainSHA, resolved)
+		}
+	})
+
+	t.Run("full commit SHA", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, false)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, mainSHA)
+		if err != nil {
+			t.Fatalf("resolve commit SHA: %v", err)
+		}
+		if resolved != mainSHA {
+			t.Fatalf("expected commit SHA %q, got %q", mainSHA, resolved)
+		}
+	})
+
+	t.Run("arbitrary literal ref", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, false)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/coyote/test")
+		if err != nil {
+			t.Fatalf("resolve arbitrary ref: %v", err)
+		}
+		if resolved != featureSHA {
+			t.Fatalf("expected arbitrary ref SHA %q, got %q", featureSHA, resolved)
+		}
+	})
+
+	t.Run("missing ref reports local and remote failures", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, false)
+		_, err := resolveRefCommit(context.Background(), cloneDir, "feature/missing")
+		if err == nil {
+			t.Fatal("expected missing ref error")
+		}
+		if !strings.Contains(err.Error(), "local resolution failed") || !strings.Contains(err.Error(), "fetching ref from origin") {
+			t.Fatalf("expected local and remote failure context, got %v", err)
+		}
+	})
+}
+
 func TestIsAuthenticationFailure_OnlyAcceptsExplicitCredentialRejection(t *testing.T) {
 	for _, testCase := range []struct {
 		message string
