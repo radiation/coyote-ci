@@ -23,6 +23,7 @@ oidc_issuer_url="${CONTROL_PLANE_OIDC_ISSUER_URL:-}"
 oidc_client_id="${CONTROL_PLANE_OIDC_CLIENT_ID:-}"
 oidc_client_secret_name="${CONTROL_PLANE_OIDC_CLIENT_SECRET_NAME:-coyote-staging-oidc-client-secret}"
 oidc_redirect_url="${CONTROL_PLANE_OIDC_REDIRECT_URL:-}"
+public_url="${CONTROL_PLANE_PUBLIC_URL:-}"
 oidc_scopes="${CONTROL_PLANE_OIDC_SCOPES:-openid email profile}"
 session_secret_name="${CONTROL_PLANE_SESSION_SECRET_NAME:-coyote-staging-session-secret}"
 timeout_seconds="${GKE_DEPLOY_TIMEOUT_SECONDS:-300}"
@@ -73,6 +74,7 @@ render_manifest() {
     -e "s|__OIDC_CLIENT_ID__|$(escape_sed "$oidc_client_id")|g" \
     -e "s|__OIDC_CLIENT_SECRET__|$(escape_sed "$oidc_client_secret_name")|g" \
     -e "s|__OIDC_REDIRECT_URL__|$(escape_sed "$oidc_redirect_url")|g" \
+    -e "s|__COYOTE_PUBLIC_URL__|$(escape_sed "$public_url")|g" \
     -e "s|__OIDC_SCOPES__|$(escape_sed "$oidc_scopes")|g" \
     -e "s|__SESSION_SECRET__|$(escape_sed "$session_secret_name")|g" \
     "$source" > "$destination"
@@ -85,9 +87,14 @@ require_command kubectl
 for setting in server_gsa migrate_gsa artifact_bucket cache_bucket revision_bucket; do
   [[ -n "${!setting}" ]] || { echo "$setting must not be empty" >&2; exit 1; }
 done
-for setting in bootstrap_admin_emails oidc_issuer_url oidc_client_id oidc_client_secret_name oidc_redirect_url session_secret_name; do
+for setting in bootstrap_admin_emails oidc_issuer_url oidc_client_id oidc_client_secret_name oidc_redirect_url public_url session_secret_name; do
   [[ -n "${!setting}" ]] || { echo "$setting must not be empty for OIDC control-plane deployment" >&2; exit 1; }
 done
+[[ "$public_url" == "https://"* ]] || { echo "CONTROL_PLANE_PUBLIC_URL must use https" >&2; exit 1; }
+[[ "$oidc_redirect_url" == "${public_url%/}/auth/callback" ]] || {
+  echo "CONTROL_PLANE_OIDC_REDIRECT_URL must equal CONTROL_PLANE_PUBLIC_URL/auth/callback" >&2
+  exit 1
+}
 require_digest_image COYOTE_SERVER_IMAGE "$server_image"
 require_digest_image COYOTE_FRONTEND_IMAGE "$frontend_image"
 require_digest_image COYOTE_MIGRATE_IMAGE "$migrate_image"
