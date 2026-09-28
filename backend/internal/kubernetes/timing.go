@@ -41,15 +41,16 @@ func executionTiming(job domain.ExecutionJob, kubernetesJob *batchv1.Job, pod *c
 			break
 		}
 	}
-	phases = append(phases, containerPhases(pod.Status.InitContainerStatuses)...)
-	phases = append(phases, containerPhases(pod.Status.ContainerStatuses)...)
+	phases = append(phases, containerPhases(pod.Status.InitContainerStatuses, nil)...)
+	buildFinishedAt := terminatedContainerFinishedAt(pod.Status.ContainerStatuses, "build")
+	phases = append(phases, containerPhases(pod.Status.ContainerStatuses, buildFinishedAt)...)
 	if jobCreatedAt != nil && jobCompletedAt != nil {
 		phases = append(phases, domain.ExecutionPhaseTiming{Name: "total_execution", StartedAt: jobCreatedAt, FinishedAt: jobCompletedAt})
 	}
 	return domain.ExecutionTiming{Phases: phases}
 }
 
-func containerPhases(statuses []corev1.ContainerStatus) []domain.ExecutionPhaseTiming {
+func containerPhases(statuses []corev1.ContainerStatus, buildFinishedAt *time.Time) []domain.ExecutionPhaseTiming {
 	phases := make([]domain.ExecutionPhaseTiming, 0, len(statuses))
 	for _, status := range statuses {
 		var startedAt, finishedAt *time.Time
@@ -63,9 +64,21 @@ func containerPhases(statuses []corev1.ContainerStatus) []domain.ExecutionPhaseT
 		if startedAt == nil && finishedAt == nil {
 			continue
 		}
+		if status.Name != "build" && buildFinishedAt != nil && startedAt != nil && finishedAt != nil && !buildFinishedAt.Before(*startedAt) && !buildFinishedAt.After(*finishedAt) {
+			startedAt = buildFinishedAt
+		}
 		phases = append(phases, domain.ExecutionPhaseTiming{Name: phaseNameForContainer(status.Name), StartedAt: startedAt, FinishedAt: finishedAt})
 	}
 	return phases
+}
+
+func terminatedContainerFinishedAt(statuses []corev1.ContainerStatus, name string) *time.Time {
+	for _, status := range statuses {
+		if status.Name == name && status.State.Terminated != nil {
+			return optionalTime(status.State.Terminated.FinishedAt.Time)
+		}
+	}
+	return nil
 }
 
 func phaseNameForContainer(name string) string {
