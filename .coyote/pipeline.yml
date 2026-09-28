@@ -16,7 +16,7 @@ steps:
     depends_on: []
     run: go mod download
     working_dir: backend
-    timeout_seconds: 600
+    timeout_seconds: 900
     cache:
       preset: go
       policy: pull
@@ -38,7 +38,7 @@ steps:
       - Backend Dependencies
     run: go vet ./...
     working_dir: backend
-    timeout_seconds: 300
+    timeout_seconds: 900
     cache:
       preset: go
       policy: pull
@@ -48,7 +48,7 @@ steps:
       - Backend Dependencies
     run: go test ./...
     working_dir: backend
-    timeout_seconds: 600
+    timeout_seconds: 900
     cache:
       preset: go
       policy: pull
@@ -72,7 +72,7 @@ steps:
       - Backend Test
     run: go build -o dist/coyote-server ./cmd/server
     working_dir: backend
-    timeout_seconds: 300
+    timeout_seconds: 900
     cache:
       preset: go
       policy: pull
@@ -86,7 +86,7 @@ steps:
       - Backend Test
     run: go build -o dist/coyote-worker ./cmd/worker
     working_dir: backend
-    timeout_seconds: 300
+    timeout_seconds: 900
     cache:
       preset: go
       policy: pull

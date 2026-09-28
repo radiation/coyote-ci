@@ -3,12 +3,18 @@ set -euo pipefail
 
 namespace="${GKE_STAGING_NAMESPACE:-coyote-ci-staging}"
 gcp_project="${GCP_PROJECT:-bryanchoate}"
+google_cloud_project="${GOOGLE_CLOUD_PROJECT:-$gcp_project}"
 cloud_sql_instance="${CLOUD_SQL_INSTANCE:-${gcp_project}:us-central1:bryanchoate-postgres}"
 worker_gsa="${COYOTE_STAGING_WORKER_GSA_EMAIL:-}"
 worker_image="${COYOTE_STAGING_WORKER_IMAGE:-}"
 database_url_secret="${COYOTE_STAGING_DATABASE_URL_SECRET:-coyote-staging-database-url}"
 artifact_bucket="${ARTIFACT_GCS_BUCKET:-}"
 artifact_prefix="${ARTIFACT_GCS_PREFIX:-builds}"
+cloud_build_location="${CLOUD_BUILD_LOCATION:-}"
+cloud_build_runtime_service_account="${CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT:-}"
+cloud_build_artifact_registry_repository="${CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY:-}"
+cloud_build_source_bucket="${CLOUD_BUILD_SOURCE_BUCKET:-}"
+cloud_build_source_prefix="${CLOUD_BUILD_SOURCE_PREFIX:-coyote-sources}"
 max_in_flight_jobs="${WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS:-1}"
 timeout_seconds="${GKE_DEPLOY_TIMEOUT_SECONDS:-300}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,17 +43,28 @@ require_command kubectl
 [[ -n "$worker_gsa" ]] || { echo "COYOTE_STAGING_WORKER_GSA_EMAIL must not be empty" >&2; exit 1; }
 [[ -n "$database_url_secret" ]] || { echo "COYOTE_STAGING_DATABASE_URL_SECRET must not be empty" >&2; exit 1; }
 [[ -n "$artifact_bucket" ]] || { echo "ARTIFACT_GCS_BUCKET must not be empty" >&2; exit 1; }
+[[ -n "$google_cloud_project" ]] || { echo "GOOGLE_CLOUD_PROJECT must not be empty for Cloud Build image execution" >&2; exit 1; }
+[[ -n "$cloud_build_location" ]] || { echo "CLOUD_BUILD_LOCATION must not be empty for Cloud Build image execution" >&2; exit 1; }
+[[ -n "$cloud_build_runtime_service_account" ]] || { echo "CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT must not be empty for Cloud Build image execution" >&2; exit 1; }
+[[ -n "$cloud_build_artifact_registry_repository" ]] || { echo "CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY must not be empty for Cloud Build image execution" >&2; exit 1; }
+[[ -n "$cloud_build_source_bucket" ]] || { echo "CLOUD_BUILD_SOURCE_BUCKET must not be empty for Cloud Build image execution" >&2; exit 1; }
 require_digest_image COYOTE_STAGING_WORKER_IMAGE "$worker_image"
 
 rendered_manifest="$render_dir/staging-worker.yaml"
 sed \
   -e "s|__GCP_PROJECT__|$(escape_sed "$gcp_project")|g" \
+  -e "s|__GOOGLE_CLOUD_PROJECT__|$(escape_sed "$google_cloud_project")|g" \
   -e "s|__CLOUD_SQL_INSTANCE__|$(escape_sed "$cloud_sql_instance")|g" \
   -e "s|__COYOTE_STAGING_WORKER_GSA__|$(escape_sed "$worker_gsa")|g" \
   -e "s|__COYOTE_STAGING_WORKER_IMAGE__|$(escape_sed "$worker_image")|g" \
   -e "s|__DATABASE_URL_SECRET__|$(escape_sed "$database_url_secret")|g" \
   -e "s|__ARTIFACT_GCS_BUCKET__|$(escape_sed "$artifact_bucket")|g" \
   -e "s|__ARTIFACT_GCS_PREFIX__|$(escape_sed "$artifact_prefix")|g" \
+  -e "s|__CLOUD_BUILD_LOCATION__|$(escape_sed "$cloud_build_location")|g" \
+  -e "s|__CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT__|$(escape_sed "$cloud_build_runtime_service_account")|g" \
+  -e "s|__CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY__|$(escape_sed "$cloud_build_artifact_registry_repository")|g" \
+  -e "s|__CLOUD_BUILD_SOURCE_BUCKET__|$(escape_sed "$cloud_build_source_bucket")|g" \
+  -e "s|__CLOUD_BUILD_SOURCE_PREFIX__|$(escape_sed "$cloud_build_source_prefix")|g" \
   -e "s|__WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS__|$(escape_sed "$max_in_flight_jobs")|g" \
   "$repo_root/deploy/kubernetes/gke/staging-worker.yaml" > "$rendered_manifest"
 
