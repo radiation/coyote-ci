@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coyote-control-plane
+  namespace: {{ .Values.namespace }}
+data:
+  APP_PORT: "8080"
+  AUTH_MODE: {{ .Values.auth.mode | quote }}
+  BOOTSTRAP_ADMIN_EMAILS: {{ .Values.auth.bootstrapAdminEmails | quote }}
+  OIDC_ISSUER_URL: {{ .Values.auth.oidc.issuerURL | quote }}
+  OIDC_CLIENT_ID: {{ .Values.auth.oidc.clientID | quote }}
+  OIDC_REDIRECT_URL: {{ .Values.auth.oidc.redirectURL | quote }}
+  OIDC_SCOPES: {{ .Values.auth.oidc.scopes | quote }}
+  SESSION_COOKIE_NAME: coyote_session
+  SESSION_COOKIE_SECURE: "true"
+  SESSION_COOKIE_SAME_SITE: lax
+  COYOTE_PUBLIC_URL: {{ .Values.auth.publicURL | quote }}
+  COYOTE_WORKSPACE_HELPER_ENABLED: "true"
+  COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT: {{ .Values.serviceAccounts.workspaceHelperName | quote }}
+  COYOTE_KUBERNETES_CACHE_HELPER_ENABLED: "true"
+  COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED: "true"
+  ARTIFACT_STORAGE_PROVIDER: gcs
+  ARTIFACT_STORAGE_STRICT: "true"
+  ARTIFACT_GCS_BUCKET: {{ .Values.storage.artifacts.bucket | quote }}
+  ARTIFACT_GCS_PREFIX: {{ .Values.storage.artifacts.prefix | quote }}
+  ARTIFACT_GCS_PROJECT: {{ .Values.storage.project | quote }}
+  WORKER_CACHE_STORAGE_PROVIDER: gcs
+  WORKER_CACHE_STORAGE_STRICT: "true"
+  WORKER_CACHE_GCS_BUCKET: {{ .Values.storage.cache.bucket | quote }}
+  WORKER_CACHE_GCS_PREFIX: {{ .Values.storage.cache.prefix | quote }}
+  WORKER_CACHE_GCS_PROJECT: {{ .Values.storage.project | quote }}
+  WORKSPACE_REVISION_STORAGE_PROVIDER: gcs
+  WORKSPACE_REVISION_STORAGE_STRICT: "true"
+  WORKSPACE_REVISION_GCS_BUCKET: {{ .Values.storage.workspaceRevisions.bucket | quote }}
+  WORKSPACE_REVISION_GCS_PREFIX: {{ .Values.storage.workspaceRevisions.prefix | quote }}
+  EMAIL_NOTIFICATIONS_ENABLED: "false"

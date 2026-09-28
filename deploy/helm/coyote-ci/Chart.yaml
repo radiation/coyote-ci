@@ -1,0 +1,6 @@
+apiVersion: v2
+name: coyote-ci
+description: Coyote CI GKE control-plane resources
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

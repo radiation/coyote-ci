@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["namespace", "controlPlaneNamespace", "images", "serviceAccounts", "cloudSql", "secrets", "storage", "cloudBuild", "worker"],
+  "properties": {
+    "namespace": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+    "controlPlaneNamespace": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+    "images": {"type": "object", "required": ["worker", "cloudSqlProxy"], "properties": {"worker": {"type": "string", "pattern": ".+@sha256:[a-f0-9]{64}$"}, "cloudSqlProxy": {"type": "string", "minLength": 1}}},
+    "serviceAccounts": {"type": "object", "required": ["worker", "helper", "server"], "properties": {"worker": {"type": "object", "required": ["name", "gsaEmail"], "properties": {"name": {"type": "string", "minLength": 1}, "gsaEmail": {"type": "string", "minLength": 1}}}, "helper": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}}}, "server": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}}}}},
+    "cloudSql": {"type": "object", "required": ["connectionName"], "properties": {"connectionName": {"type": "string", "minLength": 1}}},
+    "secrets": {"type": "object", "required": ["project", "databaseUrl"], "properties": {"project": {"type": "string", "minLength": 1}, "databaseUrl": {"type": "string", "minLength": 1}}},
+    "storage": {"type": "object", "required": ["project", "artifacts"], "properties": {"project": {"type": "string", "minLength": 1}, "artifacts": {"type": "object", "required": ["bucket"], "properties": {"bucket": {"type": "string", "minLength": 1}}}}},
+    "cloudBuild": {"type": "object", "required": ["project", "location", "runtimeServiceAccount", "artifactRegistryRepository", "source"], "properties": {"project": {"type": "string", "minLength": 1}, "location": {"type": "string", "minLength": 1}, "runtimeServiceAccount": {"type": "string", "minLength": 1}, "artifactRegistryRepository": {"type": "string", "minLength": 1}, "source": {"type": "object", "required": ["bucket"], "properties": {"bucket": {"type": "string", "minLength": 1}}}}},
+    "worker": {"type": "object", "required": ["replicas", "maxInFlightJobs"], "properties": {"replicas": {"type": "integer", "minimum": 0}, "maxInFlightJobs": {"type": "integer", "minimum": 1}}}
+  }
+}

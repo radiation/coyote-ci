@@ -1,0 +1,35 @@
+namespace: ""
+controlPlaneNamespace: ""
+gke:
+  enabled: true
+  secretManagerCSI: {enabled: true}
+  workloadIdentity: {enabled: true}
+images:
+  worker: ""
+  cloudSqlProxy: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.4@sha256:88501f0a695a586988add1b8a206fdf3f29f9a1a3deeb9b45ef2b1481ea6be83
+serviceAccounts:
+  worker: {name: coyote-kubernetes-worker-staging, gsaEmail: ""}
+  helper: {name: coyote-workspace-helper}
+  server: {name: coyote-server}
+cloudSql:
+  connectionName: ""
+  proxy:
+    address: 127.0.0.1
+    port: 5432
+    resources:
+      requests: {cpu: 250m, memory: 256Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+secrets: {project: "", databaseUrl: ""}
+storage:
+  project: ""
+  artifacts: {bucket: "", prefix: builds}
+cloudBuild:
+  project: ""
+  location: ""
+  runtimeServiceAccount: ""
+  artifactRegistryRepository: ""
+  source: {bucket: "", prefix: coyote-sources}
+worker:
+  replicas: 1
+  maxInFlightJobs: 1
+  resources: {}

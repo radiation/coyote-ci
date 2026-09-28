@@ -1,0 +1,50 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Values.gateway.name }}
+  namespace: {{ .Values.namespace }}
+  annotations: {networking.gke.io/certmap: {{ .Values.gateway.certificateMap | quote }}}
+spec:
+  gatewayClassName: {{ .Values.gateway.className }}
+  addresses: [{type: NamedAddress, value: {{ .Values.gateway.addressName | quote }} }]
+  listeners:
+    - {name: http, protocol: HTTP, port: 80, hostname: {{ .Values.gateway.hostname | quote }}, allowedRoutes: {namespaces: {from: Same}}}
+    - {name: https, protocol: HTTPS, port: 443, hostname: {{ .Values.gateway.hostname | quote }}, allowedRoutes: {namespaces: {from: Same}}}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: coyote-temporary-http-redirect, namespace: {{ .Values.namespace }}}
+spec:
+  parentRefs: [{name: {{ .Values.gateway.name }}, sectionName: http}]
+  hostnames: [{{ .Values.gateway.hostname | quote }}]
+  rules: [{filters: [{type: RequestRedirect, requestRedirect: {scheme: https, statusCode: 301}}]}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: coyote-temporary-public, namespace: {{ .Values.namespace }}}
+spec:
+  parentRefs: [{name: {{ .Values.gateway.name }}, sectionName: https}]
+  hostnames: [{{ .Values.gateway.hostname | quote }}]
+  rules:
+    - {matches: [{path: {type: PathPrefix, value: /api}}], backendRefs: [{name: coyote-server, port: 8080}]}
+    - {matches: [{path: {type: PathPrefix, value: /auth}}], backendRefs: [{name: coyote-server, port: 8080}]}
+    - {matches: [{path: {type: Exact, value: /healthz}}], backendRefs: [{name: coyote-server, port: 8080}]}
+    - {matches: [{path: {type: Exact, value: /readyz}}], backendRefs: [{name: coyote-server, port: 8080}]}
+    - {matches: [{path: {type: PathPrefix, value: /swagger}}], backendRefs: [{name: coyote-server, port: 8080}]}
+    - {backendRefs: [{name: coyote-frontend, port: 3000}]}
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata: {name: coyote-server-public, namespace: {{ .Values.namespace }}}
+spec:
+  default: {checkIntervalSec: 5, timeoutSec: 5, healthyThreshold: 2, unhealthyThreshold: 2, config: {type: HTTP, httpHealthCheck: {portSpecification: USE_SERVING_PORT, requestPath: /readyz}}}
+  targetRef: {group: "", kind: Service, name: coyote-server}
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata: {name: coyote-frontend-public, namespace: {{ .Values.namespace }}}
+spec:
+  default: {checkIntervalSec: 5, timeoutSec: 5, healthyThreshold: 2, unhealthyThreshold: 2, config: {type: HTTP, httpHealthCheck: {portSpecification: USE_SERVING_PORT, requestPath: /}}}
+  targetRef: {group: "", kind: Service, name: coyote-frontend}
+{{- end }}
