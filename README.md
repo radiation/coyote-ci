@@ -37,6 +37,9 @@ See [backend/docs/state-machine.md](backend/docs/state-machine.md) for the full 
 
 For external/managed Postgres runtime configuration and Cloud SQL deployment guidance, see [deploy/docs/gcp-cloud-sql-postgres.md](deploy/docs/gcp-cloud-sql-postgres.md).
 
+For the current pre-Helm GKE/GCP control-plane and isolated staging-worker
+deployment path, see [deploy/docs/gke-gcp-deployment.md](deploy/docs/gke-gcp-deployment.md).
+
 ## Identity, sessions, and RBAC V1
 
 Coyote CI has an internal user and project membership model for OIDC/SAML/directory integrations over time. The current implementation supports local development identity, trusted-header identity, native OIDC login, and a code-owned RBAC V1 capability model. It intentionally does not add password login, SAML, directory group sync, API tokens, service accounts, a dynamic policy engine, permissions UI, or per-artifact ACLs.

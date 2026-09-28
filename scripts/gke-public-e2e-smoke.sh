@@ -63,15 +63,23 @@ on_error() {
 }
 
 gateway_ready() {
-  kubectl -n "$control_namespace" get gateway coyote-temporary-public -o json | jq -e \
-    '[.status.conditions[]? | select(.type == "Accepted" and .status == "True")] | length > 0 and
-     [.status.conditions[]? | select(.type == "Programmed" and .status == "True")] | length > 0' >/dev/null
+  kubectl -n "$control_namespace" get gateway coyote-temporary-public -o json | jq -e '
+    def condition_true($type):
+      any(.status.conditions[]?; .type == $type and .status == "True");
+    condition_true("Accepted") and condition_true("Programmed")
+  ' >/dev/null
 }
 
 http_route_ready() {
   local route_name="$1"
-  kubectl -n "$control_namespace" get httproute "$route_name" -o json | jq -e \
-    '[.status.parents[]?.conditions[]? | select(.type == "Accepted" and .status == "True")] | length > 0' >/dev/null
+  kubectl -n "$control_namespace" get httproute "$route_name" -o json | jq -e '
+    def condition_true($type):
+      any(.conditions[]?; .type == $type and .status == "True");
+    any(
+      .status.parents[]?;
+      condition_true("Accepted") and condition_true("ResolvedRefs")
+    )
+  ' >/dev/null
 }
 
 wait_for_build_success() {

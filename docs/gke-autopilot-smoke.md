@@ -1,5 +1,11 @@
 # GKE Autopilot Smoke
 
+> This document describes the older VM-server/GKE-worker bridge. The canonical
+> current public GKE control-plane and isolated staging-worker path is
+> [GKE on GCP Deployment (Pre-Helm)](../deploy/docs/gke-gcp-deployment.md).
+> Do not use this legacy worker path to validate the isolated staging control
+> plane.
+
 This is the smallest cloud deployment path for the Kubernetes execution controller. It assumes the existing `coyote-ci-autopilot` cluster in `us-central1`, namespace `coyote-ci`, and the temporary bootstrap image `us-central1-docker.pkg.dev/bryanchoate/coyote-ci/coyote-worker:gke-smoke`. The image may later be replaced by Coyote-managed publication and deployment.
 
 Build and push the bootstrap image as a portable OCI image index before deployment:
