@@ -64,3 +64,101 @@ func TestExecutionTimingPreservesClaimWithoutKubernetesJob(t *testing.T) {
 		t.Fatalf("phases=%+v", timing.Phases)
 	}
 }
+
+func TestExecutionTimingClampsPostBuildHelperPhasesToBuildCompletion(t *testing.T) {
+	buildStartedAt := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC)
+	buildFinishedAt := buildStartedAt.Add(4*time.Minute + 8*time.Second)
+	helperFinishedAt := buildFinishedAt.Add(time.Second)
+	for _, helperName := range []string{"artifact-collect", "cache-save", "workspace-publish"} {
+		t.Run(helperName, func(t *testing.T) {
+			timing := executionTiming(domain.ExecutionJob{}, nil, &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(buildStartedAt), FinishedAt: metav1.NewTime(buildFinishedAt)}}},
+				{Name: helperName, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(buildStartedAt), FinishedAt: metav1.NewTime(helperFinishedAt)}}},
+			}}})
+
+			buildPhase := executionTimingPhase(t, timing, "command")
+			if buildPhase.StartedAt == nil || buildPhase.FinishedAt == nil || !buildPhase.StartedAt.Equal(buildStartedAt) || !buildPhase.FinishedAt.Equal(buildFinishedAt) {
+				t.Fatalf("build phase=%+v", buildPhase)
+			}
+			helperPhase := executionTimingPhase(t, timing, phaseNameForContainer(helperName))
+			if helperPhase.StartedAt == nil || helperPhase.FinishedAt == nil || !helperPhase.StartedAt.Equal(buildFinishedAt) || !helperPhase.FinishedAt.Equal(helperFinishedAt) {
+				t.Fatalf("helper phase=%+v", helperPhase)
+			}
+			if helperPhase.FinishedAt.Sub(*helperPhase.StartedAt) != time.Second {
+				t.Fatalf("helper duration=%s", helperPhase.FinishedAt.Sub(*helperPhase.StartedAt))
+			}
+		})
+	}
+}
+
+func TestExecutionTimingPreservesContainerTimestampsWhenBuildCompletionCannotSafelyClamp(t *testing.T) {
+	startedAt := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC)
+	finishedAt := startedAt.Add(time.Minute)
+	beforeHelperFinishedAt := startedAt.Add(2 * time.Minute)
+	tests := []struct {
+		name              string
+		containerStatuses []corev1.ContainerStatus
+	}{
+		{
+			name: "build still running",
+			containerStatuses: []corev1.ContainerStatus{
+				{Name: "build", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt)}}},
+				{Name: "artifact-collect", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(startedAt), FinishedAt: metav1.NewTime(finishedAt)}}},
+			},
+		},
+		{
+			name: "helper finishes before build",
+			containerStatuses: []corev1.ContainerStatus{
+				{Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(startedAt), FinishedAt: metav1.NewTime(beforeHelperFinishedAt)}}},
+				{Name: "artifact-collect", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(startedAt), FinishedAt: metav1.NewTime(finishedAt)}}},
+			},
+		},
+		{
+			name: "build status absent",
+			containerStatuses: []corev1.ContainerStatus{
+				{Name: "artifact-collect", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(startedAt), FinishedAt: metav1.NewTime(finishedAt)}}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			timing := executionTiming(domain.ExecutionJob{}, nil, &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: test.containerStatuses}})
+			helperPhase := executionTimingPhase(t, timing, "artifact_collect")
+			if helperPhase.StartedAt == nil || helperPhase.FinishedAt == nil || !helperPhase.StartedAt.Equal(startedAt) || !helperPhase.FinishedAt.Equal(finishedAt) {
+				t.Fatalf("helper phase=%+v", helperPhase)
+			}
+		})
+	}
+}
+
+func TestExecutionTimingPreservesInitContainerTimestamps(t *testing.T) {
+	initStartedAt := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC)
+	initFinishedAt := initStartedAt.Add(time.Minute)
+	buildFinishedAt := initFinishedAt.Add(4 * time.Minute)
+	timing := executionTiming(domain.ExecutionJob{}, nil, &corev1.Pod{Status: corev1.PodStatus{
+		InitContainerStatuses: []corev1.ContainerStatus{
+			{Name: "workspace-prepare", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(initStartedAt), FinishedAt: metav1.NewTime(initFinishedAt)}}},
+			{Name: "cache-restore", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(initStartedAt), FinishedAt: metav1.NewTime(initFinishedAt)}}},
+		},
+		ContainerStatuses: []corev1.ContainerStatus{
+			{Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(initFinishedAt), FinishedAt: metav1.NewTime(buildFinishedAt)}}},
+		},
+	}})
+	for _, phaseName := range []string{"workspace_prepare", "cache_restore"} {
+		phase := executionTimingPhase(t, timing, phaseName)
+		if phase.StartedAt == nil || phase.FinishedAt == nil || !phase.StartedAt.Equal(initStartedAt) || !phase.FinishedAt.Equal(initFinishedAt) {
+			t.Fatalf("%s phase=%+v", phaseName, phase)
+		}
+	}
+}
+
+func executionTimingPhase(t *testing.T, timing domain.ExecutionTiming, name string) domain.ExecutionPhaseTiming {
+	t.Helper()
+	for _, phase := range timing.Phases {
+		if phase.Name == name {
+			return phase
+		}
+	}
+	t.Fatalf("phase %q not found in %+v", name, timing.Phases)
+	return domain.ExecutionPhaseTiming{}
+}
