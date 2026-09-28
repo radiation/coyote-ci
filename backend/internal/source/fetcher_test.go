@@ -117,6 +117,126 @@ func TestGitFetcher_Fetch(t *testing.T) {
 	})
 }
 
+func TestResolveRefCommit_FetchesUnavailableRemoteRefs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+
+	remoteDir := t.TempDir()
+	mustRun(t, remoteDir, "git", "init", "--bare")
+
+	workDir := t.TempDir()
+	mustRun(t, workDir, "git", "clone", remoteDir, ".")
+	mustRun(t, workDir, "git", "config", "user.email", "test@test.com")
+	mustRun(t, workDir, "git", "config", "user.name", "Test")
+	mustRun(t, workDir, "git", "checkout", "-b", "main")
+	if writeErr := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("main"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	mustRun(t, workDir, "git", "add", "README.md")
+	mustRun(t, workDir, "git", "commit", "-m", "main")
+	mustRun(t, workDir, "git", "push", "origin", "main")
+	mainSHA := mustOutput(t, workDir, "git", "rev-parse", "HEAD")
+	mustRun(t, workDir, "git", "tag", "v1.2.3")
+	mustRun(t, workDir, "git", "push", "origin", "v1.2.3")
+
+	mustRun(t, workDir, "git", "checkout", "-b", "feature/kubernetes-ingress-cutover")
+	mustRun(t, workDir, "git", "commit", "--allow-empty", "-m", "feature")
+	mustRun(t, workDir, "git", "push", "origin", "feature/kubernetes-ingress-cutover")
+	featureSHA := mustOutput(t, workDir, "git", "rev-parse", "HEAD")
+	mustRun(t, workDir, "git", "push", "origin", "HEAD:refs/coyote/test")
+	mustRun(t, t.TempDir(), "git", "--git-dir="+remoteDir, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	cloneSingleBranch := func(t *testing.T, noTags bool) string {
+		t.Helper()
+		cloneDir := t.TempDir()
+		args := []string{"clone", "--single-branch", "--branch", "main"}
+		if noTags {
+			args = append(args, "--no-tags")
+		}
+		args = append(args, remoteDir, cloneDir)
+		mustRun(t, t.TempDir(), "git", args...)
+		return cloneDir
+	}
+
+	t.Run("non-default slash branch", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, false)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "feature/kubernetes-ingress-cutover", nil)
+		if err != nil {
+			t.Fatalf("resolve unavailable remote branch: %v", err)
+		}
+		if resolved != featureSHA {
+			t.Fatalf("expected feature SHA %q, got %q", featureSHA, resolved)
+		}
+	})
+
+	t.Run("full branch ref", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, false)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/heads/feature/kubernetes-ingress-cutover", nil)
+		if err != nil {
+			t.Fatalf("resolve full branch ref: %v", err)
+		}
+		if resolved != featureSHA {
+			t.Fatalf("expected feature SHA %q, got %q", featureSHA, resolved)
+		}
+	})
+
+	t.Run("bare tag", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, true)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "v1.2.3", nil)
+		if err != nil {
+			t.Fatalf("resolve bare tag: %v", err)
+		}
+		if resolved != mainSHA {
+			t.Fatalf("expected tag SHA %q, got %q", mainSHA, resolved)
+		}
+	})
+
+	t.Run("full tag ref", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, true)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/tags/v1.2.3", nil)
+		if err != nil {
+			t.Fatalf("resolve full tag ref: %v", err)
+		}
+		if resolved != mainSHA {
+			t.Fatalf("expected tag SHA %q, got %q", mainSHA, resolved)
+		}
+	})
+
+	t.Run("full commit SHA", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, false)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, mainSHA, nil)
+		if err != nil {
+			t.Fatalf("resolve commit SHA: %v", err)
+		}
+		if resolved != mainSHA {
+			t.Fatalf("expected commit SHA %q, got %q", mainSHA, resolved)
+		}
+	})
+
+	t.Run("arbitrary literal ref", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, false)
+		resolved, err := resolveRefCommit(context.Background(), cloneDir, "refs/coyote/test", nil)
+		if err != nil {
+			t.Fatalf("resolve arbitrary ref: %v", err)
+		}
+		if resolved != featureSHA {
+			t.Fatalf("expected arbitrary ref SHA %q, got %q", featureSHA, resolved)
+		}
+	})
+
+	t.Run("missing ref reports local and remote failures", func(t *testing.T) {
+		cloneDir := cloneSingleBranch(t, false)
+		_, err := resolveRefCommit(context.Background(), cloneDir, "feature/missing", nil)
+		if err == nil {
+			t.Fatal("expected missing ref error")
+		}
+		if !strings.Contains(err.Error(), "local resolution failed") || !strings.Contains(err.Error(), "fetching ref from origin") {
+			t.Fatalf("expected local and remote failure context, got %v", err)
+		}
+	})
+}
+
 func TestIsAuthenticationFailure_OnlyAcceptsExplicitCredentialRejection(t *testing.T) {
 	for _, testCase := range []struct {
 		message string
@@ -220,6 +340,35 @@ func TestGitCloneWithHTTPSCredential_CleansUniqueAskpassAndRedactsToken(t *testi
 		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 			t.Fatalf("expected askpass path %q to be removed, err=%v", path, statErr)
 		}
+	}
+}
+
+func TestGitFetchRefWithHTTPSCredential_DisablesPromptsAndRedactsToken(t *testing.T) {
+	binDir := t.TempDir()
+	markerPath := filepath.Join(t.TempDir(), "fetch-env")
+	gitPath := filepath.Join(binDir, "git")
+	script := "#!/bin/sh\nprintf '%s|%s\\n' \"$GIT_TERMINAL_PROMPT\" \"$GIT_ASKPASS\" > \"$ASKPASS_MARKER\"\nprintf 'fatal: Authentication failed for %s\\n' \"$COYOTE_GIT_ASKPASS_TOKEN\" >&2\nexit 1\n"
+	if writeErr := os.WriteFile(gitPath, []byte(script), 0o700); writeErr != nil {
+		t.Fatalf("write fake git: %v", writeErr)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ASKPASS_MARKER", markerPath)
+
+	token := "fetch-secret-token"
+	fetchErr := gitFetchRef(context.Background(), t.TempDir(), "feature/private", &HTTPSCredential{Username: "x-access-token", Password: token})
+	if fetchErr == nil || strings.Contains(fetchErr.Error(), token) || !IsAuthenticationFailure(fetchErr) {
+		t.Fatalf("expected sanitized authentication failure, err=%v", fetchErr)
+	}
+	marker, readErr := os.ReadFile(markerPath)
+	if readErr != nil {
+		t.Fatalf("read captured fetch environment: %v", readErr)
+	}
+	parts := strings.Split(strings.TrimSpace(string(marker)), "|")
+	if len(parts) != 2 || parts[0] != "0" || parts[1] == "" {
+		t.Fatalf("expected terminal prompting disabled with askpass configured, got %q", marker)
+	}
+	if _, statErr := os.Stat(parts[1]); !os.IsNotExist(statErr) {
+		t.Fatalf("expected askpass path %q to be removed, err=%v", parts[1], statErr)
 	}
 }
 

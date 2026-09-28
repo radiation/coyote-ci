@@ -47,6 +47,8 @@ func (p *ServerSourceArchivePreparer) OpenSourceArchive(ctx context.Context, bui
 		}
 		return WorkspacePreparePayload{Archive: archive, Publication: publication}, nil
 	}
+	workspaceSpec := source.WorkspaceSourceSpec{RepositoryURL: repositoryURL, Ref: optionalSourceRef(spec.Source, job.Source), CommitSHA: optionalSourceCommit(spec.Source, job.Source)}
+	var resolvedCommit string
 	if build.RegisteredRepositoryID != nil && build.SCMConnectionID != nil && build.ProviderRepositoryID != nil {
 		if p.checkout == nil {
 			return WorkspacePreparePayload{}, buildsvc.ErrRepositoryCheckoutConnectionInvalid
@@ -59,18 +61,26 @@ func (p *ServerSourceArchivePreparer) OpenSourceArchive(ctx context.Context, bui
 		if !ok {
 			return WorkspacePreparePayload{}, buildsvc.ErrRepositoryCheckoutConnectionInvalid
 		}
-		cloneErr := checkout.RunWithCredentialRetry(ctx, func(credential source.HTTPSCredential) error {
-			return authenticatedResolver.CloneIntoWorkspaceWithHTTPSCredential(ctx, workspacePath, checkout.RepositoryURL, credential)
+		credentialErr := checkout.RunWithCredentialRetry(ctx, func(credential source.HTTPSCredential) error {
+			cloneErr := authenticatedResolver.CloneIntoWorkspaceWithHTTPSCredential(ctx, workspacePath, checkout.RepositoryURL, credential)
+			if cloneErr != nil {
+				return cloneErr
+			}
+			var checkoutErr error
+			resolvedCommit, checkoutErr = authenticatedResolver.CheckoutWorkspaceSourceWithHTTPSCredential(ctx, workspacePath, workspaceSpec, credential)
+			return checkoutErr
 		})
-		if cloneErr != nil {
-			return WorkspacePreparePayload{}, cloneErr
+		if credentialErr != nil {
+			return WorkspacePreparePayload{}, credentialErr
 		}
 	} else if cloneErr := p.resolver.CloneIntoWorkspace(ctx, workspacePath, repositoryURL); cloneErr != nil {
 		return WorkspacePreparePayload{}, cloneErr
-	}
-	resolvedCommit, checkoutErr := p.resolver.CheckoutWorkspaceSource(ctx, workspacePath, source.WorkspaceSourceSpec{RepositoryURL: repositoryURL, Ref: optionalSourceRef(spec.Source, job.Source), CommitSHA: optionalSourceCommit(spec.Source, job.Source)})
-	if checkoutErr != nil {
-		return WorkspacePreparePayload{}, checkoutErr
+	} else {
+		checkoutCommit, checkoutErr := p.resolver.CheckoutWorkspaceSource(ctx, workspacePath, workspaceSpec)
+		if checkoutErr != nil {
+			return WorkspacePreparePayload{}, checkoutErr
+		}
+		resolvedCommit = checkoutCommit
 	}
 	if expected := optionalSourceCommit(spec.Source, job.Source); expected != "" && strings.TrimSpace(resolvedCommit) != expected {
 		return WorkspacePreparePayload{}, fmt.Errorf("%w: pinned commit mismatch", ErrWorkspacePrepareInvalidInput)

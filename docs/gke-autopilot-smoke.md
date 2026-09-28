@@ -1,5 +1,11 @@
 # GKE Autopilot Smoke
 
+> This document describes the older VM-server/GKE-worker bridge. The canonical
+> current public GKE control-plane and isolated staging-worker path is
+> [GKE on GCP Deployment (Pre-Helm)](../deploy/docs/gke-gcp-deployment.md).
+> Do not use this legacy worker path to validate the isolated staging control
+> plane.
+
 This is the smallest cloud deployment path for the Kubernetes execution controller. It assumes the existing `coyote-ci-autopilot` cluster in `us-central1`, namespace `coyote-ci`, and the temporary bootstrap image `us-central1-docker.pkg.dev/bryanchoate/coyote-ci/coyote-worker:gke-smoke`. The image may later be replaced by Coyote-managed publication and deployment.
 
 Build and push the bootstrap image as a portable OCI image index before deployment:
@@ -81,5 +87,31 @@ Inspect admission/defaulted requests after a run instead of overriding Autopilot
 kubectl -n coyote-ci get pod -o wide
 kubectl -n coyote-ci describe pod <worker-or-execution-pod>
 ```
+
+## Public staging E2E smoke
+
+`make gke-smoke` remains the existing production-worker-oriented smoke. It
+uses the active `coyote-kubernetes-worker` and must not be repointed while the
+VM serves production.
+
+Slice D adds an independent public staging path:
+
+```sh
+export GKE_TEMPORARY_HOSTNAME=k8s.coyote-ci.bryanchoate.com
+export COYOTE_STAGING_SMOKE_API_TOKEN=<staging-token>
+make gke-public-e2e-smoke
+```
+
+The public smoke requires the Gateway, Certificate Manager certificate map,
+DNS record, OIDC callback, staging control plane, and
+`coyote-kubernetes-worker-staging` deployment to be ready first. It verifies
+public TLS/routing and sends builds only to the staging database; execution
+Jobs must appear only in `coyote-ci-staging`. It validates sequential workspace
+handoff, cache save/restore, artifact upload/download, logs, and terminal
+build status without touching the production worker or VM.
+
+Browser OIDC login is intentionally a manual companion validation. Complete it
+at the temporary hostname and confirm the frontend can call `/api/me` with the
+secure session cookie before minting the staging API token used by the script.
 
 On failure the smoke prints nodes, Pods, Jobs, events, controller logs, relevant Pod details, Coyote build state, step state, and persisted logs. To clean up application workloads only, delete the deployment and Coyote-managed Jobs; do not delete the cluster.

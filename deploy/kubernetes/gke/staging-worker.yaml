@@ -1,0 +1,220 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: coyote-ci-staging
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coyote-kubernetes-worker-staging
+  namespace: coyote-ci-staging
+  annotations:
+    iam.gke.io/gcp-service-account: __COYOTE_STAGING_WORKER_GSA__
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coyote-workspace-helper
+  namespace: coyote-ci-staging
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coyote-kubernetes-worker-staging
+  namespace: coyote-ci-staging
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coyote-workspace-helper
+  namespace: coyote-ci-staging
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coyote-server-workspace-verifier
+  namespace: coyote-ci-staging
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coyote-kubernetes-worker-staging
+  namespace: coyote-ci-staging
+subjects:
+  - kind: ServiceAccount
+    name: coyote-kubernetes-worker-staging
+    namespace: coyote-ci-staging
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coyote-kubernetes-worker-staging
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coyote-workspace-helper
+  namespace: coyote-ci-staging
+subjects:
+  - kind: ServiceAccount
+    name: coyote-workspace-helper
+    namespace: coyote-ci-staging
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coyote-workspace-helper
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coyote-server-workspace-verifier
+  namespace: coyote-ci-staging
+subjects:
+  - kind: ServiceAccount
+    name: coyote-server
+    namespace: coyote-ci
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coyote-server-workspace-verifier
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: coyote-staging-worker-database-secrets
+  namespace: coyote-ci-staging
+spec:
+  provider: gke
+  parameters:
+    secrets: |
+      - resourceName: "projects/__GCP_PROJECT__/secrets/__DATABASE_URL_SECRET__/versions/latest"
+        path: "database-url"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coyote-gke-staging-worker
+  namespace: coyote-ci-staging
+data:
+  WORKER_KUBERNETES_INTERNAL_API_URL: "http://coyote-server.coyote-ci.svc.cluster.local:8080"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coyote-kubernetes-worker-staging
+  namespace: coyote-ci-staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coyote-kubernetes-worker-staging
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coyote-kubernetes-worker-staging
+    spec:
+      serviceAccountName: coyote-kubernetes-worker-staging
+      containers:
+        - name: worker
+          image: __COYOTE_STAGING_WORKER_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: ["/app/worker"]
+          env:
+            - name: DATABASE_URL_FILE
+              value: /var/run/secrets/coyote/database-url
+            - name: WORKER_EXECUTION_BACKEND
+              value: kubernetes
+            - name: WORKER_KUBERNETES_NAMESPACE
+              value: coyote-ci-staging
+            - name: GOOGLE_CLOUD_PROJECT
+              value: "__GOOGLE_CLOUD_PROJECT__"
+            - name: CLOUD_BUILD_LOCATION
+              value: "__CLOUD_BUILD_LOCATION__"
+            - name: CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT
+              value: "__CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT__"
+            - name: CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY
+              value: "__CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY__"
+            - name: CLOUD_BUILD_SOURCE_BUCKET
+              value: "__CLOUD_BUILD_SOURCE_BUCKET__"
+            - name: CLOUD_BUILD_SOURCE_PREFIX
+              value: "__CLOUD_BUILD_SOURCE_PREFIX__"
+            - name: WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS
+              value: "__WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS__"
+            - name: WORKER_KUBERNETES_HELPER_IMAGE
+              value: "__COYOTE_STAGING_WORKER_IMAGE__"
+            - name: WORKER_KUBERNETES_INTERNAL_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: coyote-gke-staging-worker
+                  key: WORKER_KUBERNETES_INTERNAL_API_URL
+            - name: COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT
+              value: coyote-workspace-helper
+            - name: COYOTE_KUBERNETES_CACHE_HELPER_ENABLED
+              value: "true"
+            - name: COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED
+              value: "true"
+            - name: WORKER_STEP_LEASE_SECONDS
+              value: "45"
+            - name: ARTIFACT_STORAGE_PROVIDER
+              value: gcs
+            - name: ARTIFACT_STORAGE_STRICT
+              value: "true"
+            - name: ARTIFACT_GCS_BUCKET
+              value: "__ARTIFACT_GCS_BUCKET__"
+            - name: ARTIFACT_GCS_PREFIX
+              value: "__ARTIFACT_GCS_PREFIX__"
+            - name: ARTIFACT_GCS_PROJECT
+              value: "__GCP_PROJECT__"
+            - name: EMAIL_NOTIFICATIONS_ENABLED
+              value: "false"
+          volumeMounts:
+            - name: database-url
+              mountPath: /var/run/secrets/coyote
+              readOnly: true
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.4@sha256:88501f0a695a586988add1b8a206fdf3f29f9a1a3deeb9b45ef2b1481ea6be83
+          args:
+            - --address=127.0.0.1
+            - --port=5432
+            - __CLOUD_SQL_INSTANCE__
+          ports:
+            - name: postgres
+              containerPort: 5432
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: database-url
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: coyote-staging-worker-database-secrets

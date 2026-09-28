@@ -59,6 +59,21 @@ func TestGitWorkspaceSourceResolver_CloneAndCheckout(t *testing.T) {
 		}
 	})
 
+	t.Run("ref checkout fetches unavailable remote branch", func(t *testing.T) {
+		if err := resolver.CloneIntoWorkspace(context.Background(), workspacePath, remoteDir); err != nil {
+			t.Fatalf("clone failed: %v", err)
+		}
+		mustRun(t, workspacePath, "git", "update-ref", "-d", "refs/remotes/origin/feature/source-phase")
+
+		resolved, err := resolver.CheckoutWorkspaceSource(context.Background(), workspacePath, WorkspaceSourceSpec{RepositoryURL: remoteDir, Ref: "feature/source-phase"})
+		if err != nil {
+			t.Fatalf("checkout unavailable remote branch: %v", err)
+		}
+		if resolved != featureSHA {
+			t.Fatalf("expected feature sha %q, got %q", featureSHA, resolved)
+		}
+	})
+
 	t.Run("commit takes precedence", func(t *testing.T) {
 		if err := resolver.CloneIntoWorkspace(context.Background(), workspacePath, remoteDir); err != nil {
 			t.Fatalf("clone failed: %v", err)

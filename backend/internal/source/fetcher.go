@@ -80,7 +80,7 @@ func (g *GitFetcher) fetch(ctx context.Context, repoURL string, ref string, cred
 		return "", "", fmt.Errorf("cloning repo %s: %w", repoURL, err)
 	}
 
-	resolvedRef, err := resolveRefCommit(ctx, tmpDir, ref)
+	resolvedRef, err := resolveRefCommit(ctx, tmpDir, ref, credential)
 	if err != nil {
 		return "", "", fmt.Errorf("resolving ref %q: %w", ref, err)
 	}
@@ -100,29 +100,39 @@ func (g *GitFetcher) fetch(ctx context.Context, repoURL string, ref string, cred
 }
 
 func gitCloneWithHTTPSCredential(ctx context.Context, repoURL string, dst string, credential HTTPSCredential) error {
-	username := strings.TrimSpace(credential.Username)
-	password := strings.TrimSpace(credential.Password)
-	if username == "" || password == "" {
-		return errors.New("https git credential is required")
-	}
-	askPassPath, err := createGitTokenAskPassScript()
+	env, cleanup, err := gitHTTPSCredentialEnv(credential)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(askPassPath) }()
+	defer cleanup()
 
 	cmd := exec.CommandContext(ctx, "git", "clone", "--", repoURL, dst)
-	cmd.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_ASKPASS="+askPassPath,
-		"COYOTE_GIT_ASKPASS_USERNAME="+username,
-		"COYOTE_GIT_ASKPASS_TOKEN="+password,
-	)
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, redactGitSecret(string(out), password))
+		return fmt.Errorf("%w: %s", err, redactGitSecret(string(out), credential.Password))
 	}
 	return nil
+}
+
+func gitHTTPSCredentialEnv(credential HTTPSCredential) ([]string, func(), error) {
+	username := strings.TrimSpace(credential.Username)
+	password := strings.TrimSpace(credential.Password)
+	if username == "" || password == "" {
+		return nil, nil, errors.New("https git credential is required")
+	}
+	askPassPath, err := createGitTokenAskPassScript()
+	if err != nil {
+		return nil, nil, err
+	}
+	return append(os.Environ(),
+			"GIT_TERMINAL_PROMPT=0",
+			"GIT_ASKPASS="+askPassPath,
+			"COYOTE_GIT_ASKPASS_USERNAME="+username,
+			"COYOTE_GIT_ASKPASS_TOKEN="+password,
+		), func() {
+			_ = os.Remove(askPassPath)
+		}, nil
 }
 
 func createGitTokenAskPassScript() (string, error) {
@@ -220,16 +230,9 @@ func gitRevParseHead(ctx context.Context, dir string) (string, error) {
 	return string(out), nil
 }
 
-func resolveRefCommit(ctx context.Context, dir string, ref string) (string, error) {
-	candidates := []string{
-		ref + "^{commit}",
-		"origin/" + ref + "^{commit}",
-		"refs/remotes/origin/" + ref + "^{commit}",
-		"refs/tags/" + ref + "^{commit}",
-	}
-
+func resolveRefCommit(ctx context.Context, dir string, ref string, credential *HTTPSCredential) (string, error) {
 	var lastErr error
-	for _, candidate := range candidates {
+	for _, candidate := range localRefCandidates(ref) {
 		out, err := gitRevParseVerify(ctx, dir, candidate)
 		if err == nil {
 			return strings.TrimSpace(out), nil
@@ -238,9 +241,71 @@ func resolveRefCommit(ctx context.Context, dir string, ref string) (string, erro
 	}
 
 	if lastErr == nil {
-		lastErr = errors.New("unable to resolve ref")
+		lastErr = errors.New("no local ref candidates")
 	}
-	return "", lastErr
+	if fetchErr := gitFetchRef(ctx, dir, ref, credential); fetchErr != nil {
+		return "", fmt.Errorf("local resolution failed: %w; fetching ref from origin: %w", lastErr, fetchErr)
+	}
+
+	out, err := gitRevParseVerify(ctx, dir, "FETCH_HEAD^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("local resolution failed: %w; resolving fetched ref: %w", lastErr, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func localRefCandidates(ref string) []string {
+	appendCandidate := func(candidates []string, candidate string) []string {
+		candidate += "^{commit}"
+		for _, existing := range candidates {
+			if existing == candidate {
+				return candidates
+			}
+		}
+		return append(candidates, candidate)
+	}
+
+	candidates := []string{}
+	candidates = appendCandidate(candidates, ref)
+	switch {
+	case strings.HasPrefix(ref, "refs/heads/"):
+		branch := strings.TrimPrefix(ref, "refs/heads/")
+		candidates = appendCandidate(candidates, "origin/"+branch)
+		candidates = appendCandidate(candidates, "refs/remotes/origin/"+branch)
+	case strings.HasPrefix(ref, "refs/tags/"):
+		// The literal full tag ref is already the canonical local candidate.
+	case strings.HasPrefix(ref, "refs/"):
+		// Keep arbitrary refs literal; providers may expose their own namespaces.
+	default:
+		candidates = appendCandidate(candidates, "origin/"+ref)
+		candidates = appendCandidate(candidates, "refs/remotes/origin/"+ref)
+		candidates = appendCandidate(candidates, "refs/tags/"+ref)
+	}
+	return candidates
+}
+
+func gitFetchRef(ctx context.Context, dir string, ref string, credential *HTTPSCredential) error {
+	cmd := exec.CommandContext(ctx, "git", "fetch", "origin", "--", ref)
+	if err := setGitDir(cmd, dir); err != nil {
+		return err
+	}
+	var cleanup func()
+	var err error
+	if credential != nil {
+		cmd.Env, cleanup, err = gitHTTPSCredentialEnv(*credential)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if credential != nil {
+			return fmt.Errorf("%w: %s", err, redactGitSecret(string(out), credential.Password))
+		}
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func gitRevParseVerify(ctx context.Context, dir string, candidate string) (string, error) {
