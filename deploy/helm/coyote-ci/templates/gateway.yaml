@@ -29,10 +29,8 @@ spec:
   rules:
     - {matches: [{path: {type: PathPrefix, value: /api}}], backendRefs: [{name: coyote-server, port: 8080}]}
     - {matches: [{path: {type: PathPrefix, value: /auth}}], backendRefs: [{name: coyote-server, port: 8080}]}
-    - {matches: [{path: {type: Exact, value: /healthz}}], backendRefs: [{name: coyote-server, port: 8080}]}
-    - {matches: [{path: {type: Exact, value: /readyz}}], backendRefs: [{name: coyote-server, port: 8080}]}
-    - {matches: [{path: {type: PathPrefix, value: /swagger}}], backendRefs: [{name: coyote-server, port: 8080}]}
-    - {backendRefs: [{name: coyote-frontend, port: 3000}]}
+    - {matches: [{path: {type: Exact, value: /healthz}}, {path: {type: Exact, value: /readyz}}, {path: {type: PathPrefix, value: /swagger}}], backendRefs: [{name: coyote-server, port: 8080}]}
+    - {matches: [{path: {type: PathPrefix, value: /}}], backendRefs: [{name: coyote-frontend, port: 3000}]}
 ---
 apiVersion: networking.gke.io/v1
 kind: HealthCheckPolicy

@@ -30,6 +30,8 @@ PATH="$temp_dir/bin:$PATH" \
 COMMAND_LOG="$log" \
 HELM_ROLLOUT_ID=test-run \
 GKE_HELM_DRY_RUN=false \
+GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
+GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
 "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
 
 line_number() {
@@ -48,6 +50,11 @@ worker_restore="$(grep -n 'helm upgrade coyote-ci-worker ' "$log" | tail -n1 | c
   cat "$log" >&2
   exit 1
 }
+! grep -q -- '--force-conflicts' "$log" || {
+  echo "normal Helm rollout must not use adoption-only server-side conflict transfer" >&2
+  cat "$log" >&2
+  exit 1
+}
 
 failure_log="$temp_dir/failure-commands.log"
 if PATH="$temp_dir/bin:$PATH" \
@@ -55,6 +62,8 @@ if PATH="$temp_dir/bin:$PATH" \
   HELM_ROLLOUT_ID=test-failure \
   KUBECTL_FAIL_WAIT=true \
   GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
+  GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
   "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>&1; then
   echo "migration wait failure must stop the rollout" >&2
   exit 1

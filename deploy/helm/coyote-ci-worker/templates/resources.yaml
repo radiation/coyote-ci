@@ -86,6 +86,9 @@ spec:
           image: {{ .Values.images.worker }}
           imagePullPolicy: IfNotPresent
           command: ["/app/worker"]
+          {{- with .Values.worker.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             - {name: DATABASE_URL_FILE, value: /var/run/secrets/coyote/database-url}
             - {name: WORKER_EXECUTION_BACKEND, value: kubernetes}

@@ -4,8 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 control_chart="$repo_root/deploy/helm/coyote-ci"
 worker_chart="$repo_root/deploy/helm/coyote-ci-worker"
-control_values="${GKE_HELM_CONTROL_PLANE_VALUES:-$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml}"
-worker_values="${GKE_HELM_WORKER_VALUES:-$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml}"
+control_values="${GKE_HELM_CONTROL_PLANE_VALUES:-$repo_root/.local/helm/gke-staging-control-plane-values.yaml}"
+worker_values="${GKE_HELM_WORKER_VALUES:-$repo_root/.local/helm/gke-staging-worker-values.yaml}"
 control_namespace="${GKE_HELM_CONTROL_PLANE_NAMESPACE:-coyote-ci}"
 worker_namespace="${GKE_HELM_WORKER_NAMESPACE:-coyote-ci-staging}"
 control_release="${GKE_HELM_CONTROL_PLANE_RELEASE:-coyote-ci}"
@@ -48,16 +48,14 @@ gateway_manifest="$(helm template "$control_release" "$control_chart" --namespac
 migration_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" --show-only templates/migration-job.yaml --set migration.render=true --set "migration.runID=$rollout_id")"
 [[ -n "$migration_manifest" ]] || { echo "migration render did not produce a Job" >&2; exit 1; }
 
-if [[ "$dry_run" != "true" ]]; then
-  helm status "$control_release" --namespace "$control_namespace" >/dev/null || {
-    echo "control-plane Helm release is not installed; Slice 3 adoption must complete before Helm rollout" >&2
-    exit 1
-  }
-  helm status "$worker_release" --namespace "$worker_namespace" >/dev/null || {
-    echo "worker Helm release is not installed; Slice 3 adoption must complete before Helm rollout" >&2
-    exit 1
-  }
-fi
+helm status "$control_release" --namespace "$control_namespace" >/dev/null || {
+  echo "control-plane Helm release is not installed; Slice 3 adoption must complete before Helm rollout" >&2
+  exit 1
+}
+helm status "$worker_release" --namespace "$worker_namespace" >/dev/null || {
+  echo "worker Helm release is not installed; Slice 3 adoption must complete before Helm rollout" >&2
+  exit 1
+}
 
 echo "Phase A: scale all Helm-managed database consumers to zero before migration"
 run helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" --set server.replicas=0 --set frontend.replicas=0 --wait --timeout "${timeout_seconds}s"

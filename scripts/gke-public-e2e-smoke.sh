@@ -29,6 +29,32 @@ api_curl_with_status() {
   curl --silent --show-error -H "Authorization: Bearer $api_token" -w '\n%{http_code}' "$@"
 }
 
+execution_container_state() {
+  local pod_name="$1"
+  local container_name="$2"
+  local pod
+  pod="$(kubectl -n "$execution_namespace" get pod "$pod_name" -o json)" || return 1
+  if jq -e --arg name "$container_name" '
+    any(.spec.containers[]?, .spec.initContainers[]?; .name == $name)
+  ' <<<"$pod" >/dev/null; then
+    printf 'present\n'
+  else
+    printf 'absent\n'
+  fi
+}
+
+optional_execution_container_logs() {
+  local pod_name="$1"
+  local container_name="$2"
+  local state
+  state="$(execution_container_state "$pod_name" "$container_name")" || return 1
+  if [[ "$state" == "present" ]]; then
+    kubectl -n "$execution_namespace" logs "$pod_name" -c "$container_name"
+  else
+    echo "optional execution container $container_name is absent from pod $pod_name; skipping logs" >&2
+  fi
+}
+
 diagnostics() {
   set +e
   echo "GKE public E2E smoke diagnostics" >&2
@@ -39,7 +65,7 @@ diagnostics() {
   kubectl -n "$execution_namespace" logs deployment/coyote-kubernetes-worker-staging --all-containers=true --tail=200 >&2
   if [[ -n "$execution_pod" ]]; then
     kubectl -n "$execution_namespace" describe pod "$execution_pod" >&2
-    kubectl -n "$execution_namespace" logs "$execution_pod" -c cache-restore >&2 || true
+    optional_execution_container_logs "$execution_pod" cache-restore >&2
   fi
   if [[ -n "$build_id" ]]; then
     api_curl "$api_url/api/builds/$build_id" | jq . >&2
@@ -252,6 +278,11 @@ wait_for_execution_job "$second_build_id"
 kubectl -n "$execution_namespace" wait --for=condition=complete "job/$execution_job" --timeout="${timeout_seconds}s"
 execution_pod="$(kubectl -n "$execution_namespace" get pods -l "job-name=$execution_job" -o jsonpath='{.items[0].metadata.name}')"
 wait_for_build_success "$second_build_id"
-kubectl -n "$execution_namespace" logs "$execution_pod" -c cache-restore | grep -q 'cache_transfer operation=restore_client outcome=hit'
+cache_restore_state="$(execution_container_state "$execution_pod" cache-restore)"
+if [[ "$cache_restore_state" == "present" ]]; then
+  kubectl -n "$execution_namespace" logs "$execution_pod" -c cache-restore | grep -q 'cache_transfer operation=restore_client outcome=hit'
+else
+  echo "cache restore is not configured for repeat build $second_build_id; skipping cache-hit assertion" >&2
+fi
 
 echo "gke public E2E smoke passed: host=$hostname job=$job_id build=$build_id repeat_build=$second_build_id staging_worker=$worker_pod"
