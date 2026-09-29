@@ -44,5 +44,8 @@ frontend/node_modules/
 # Local scratch/build temp directories (any depth)
 **/tmp/
 
+# Operator-maintained Helm values generated from a live deployment.
+.local/
+
 # Misc
 *.diff

@@ -30,6 +30,8 @@ PATH="$temp_dir/bin:$PATH" \
 COMMAND_LOG="$log" \
 HELM_ROLLOUT_ID=test-run \
 GKE_HELM_DRY_RUN=false \
+GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
+GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
 "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
 
 line_number() {
@@ -55,6 +57,8 @@ if PATH="$temp_dir/bin:$PATH" \
   HELM_ROLLOUT_ID=test-failure \
   KUBECTL_FAIL_WAIT=true \
   GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
+  GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
   "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>&1; then
   echo "migration wait failure must stop the rollout" >&2
   exit 1
