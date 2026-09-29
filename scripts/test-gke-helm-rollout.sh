@@ -50,6 +50,11 @@ worker_restore="$(grep -n 'helm upgrade coyote-ci-worker ' "$log" | tail -n1 | c
   cat "$log" >&2
   exit 1
 }
+! grep -q -- '--force-conflicts' "$log" || {
+  echo "normal Helm rollout must not use adoption-only server-side conflict transfer" >&2
+  cat "$log" >&2
+  exit 1
+}
 
 failure_log="$temp_dir/failure-commands.log"
 if PATH="$temp_dir/bin:$PATH" \

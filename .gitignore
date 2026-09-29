@@ -46,6 +46,7 @@ frontend/node_modules/
 
 # Operator-maintained Helm values generated from a live deployment.
 .local/
+.gke-helm-adoption-state/
 
 # Misc
 *.diff

@@ -109,15 +109,66 @@ make gke-helm-adopt
 ```
 
 The Namespace and migration Job are intentionally excluded. The script writes
-pre-adoption metadata snapshots under `.gke-helm-adoption-state/`. If patching
-or release establishment fails, it restores only the metadata changed by the
-attempt and never runs `helm uninstall` or deletes workloads. To explicitly
-restore a retained snapshot, use:
+separate control-plane and worker metadata snapshots under
+`.gke-helm-adoption-state/`. Each release is transactional: a worker failure
+restores only worker metadata and leaves an established control-plane release
+untouched. If patching or release establishment fails, it restores only the
+metadata changed by that release attempt and never runs `helm uninstall` or
+deletes workloads. To explicitly restore a retained snapshot, use:
 
 ```sh
 GKE_HELM_ADOPT_ROLLBACK_STATE=.gke-helm-adoption-state/<timestamp> \
   scripts/gke-helm-adopt.sh
 ```
+
+### Failed adoption inspection and recovery
+
+Do not retry adoption, run `helm uninstall`, delete release storage, or remove
+ownership metadata until the failed attempt has been inspected:
+
+```sh
+helm status coyote-ci -n coyote-ci
+helm status coyote-ci-worker -n coyote-ci-staging
+helm list -n coyote-ci
+helm list -n coyote-ci-staging
+kubectl -n coyote-ci get secret,configmap -l owner=helm,name=coyote-ci -o name
+kubectl -n coyote-ci get httproute coyote-temporary-public \
+  -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}{"\t"}{.metadata.annotations.meta\.helm\.sh/release-name}{"\n"}'
+find .gke-helm-adoption-state -maxdepth 2 -type f -print
+```
+
+After a reviewed inspection, a retained snapshot can restore only the three
+Helm ownership metadata keys; it does not delete or recreate workloads:
+
+```sh
+GKE_HELM_ADOPT_ROLLBACK_STATE=.gke-helm-adoption-state/<timestamp> \
+  scripts/gke-helm-adopt.sh
+```
+
+Rollback is resumable. For each retained snapshot, the script restores metadata
+only when the live resource still has that adoption attempt's exact Helm
+ownership metadata. If an interrupted rollback has already restored a resource,
+the script reports it as already restored and makes no patch. If a snapshot is
+missing, it proceeds only when all three ownership fields are already absent;
+remaining adoption metadata with no snapshot fails closed because the original
+metadata cannot be reconstructed safely.
+
+Snapshot paths are canonicalized beneath the snapshot's `original/` directory.
+Traversal, sibling-prefix paths, and symlink escapes are rejected.
+
+If a failed Helm release record remains after metadata restoration, do not use
+`helm uninstall`: it can delete adopted resources. Instead, inspect the
+Helm-storage Secret or ConfigMap shown above and, only after review, remove
+that release-storage object directly. This removes Helm's failed history
+record, not the live application resources.
+
+Helm 4 establishes adopted releases with server-side apply. The adoption
+script uses `--server-side=true --force-conflicts` only for the one-time
+release establishment after structural parity, exact inventory, and ownership
+checks pass. It never uses `--force-replace`, `--force`, or
+`--take-ownership`; manual metadata snapshots retain deterministic preflight
+and metadata-only rollback. Normal rollout upgrades intentionally do not use
+the conflict-transfer flag.
 
 Verify a completed adoption without mutation:
 
