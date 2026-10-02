@@ -170,6 +170,49 @@ checks pass. It never uses `--force-replace`, `--force`, or
 and metadata-only rollback. Normal rollout upgrades intentionally do not use
 the conflict-transfer flag.
 
+### One-time replica ownership normalization
+
+Historical `kubectl scale` operations can retain `.spec.replicas` ownership
+after adoption. GKE staging instead treats replicas as operational state:
+`replicasManagedExternally: true` omits `spec.replicas` from the server,
+frontend, and worker Deployment manifests. The desired steady-state values
+remain in the staging values files and
+[`gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh) manages the scale
+subresource with ordinary merge patches under the `coyote-rollout` field
+manager. Normal Helm upgrades therefore do not modify replicas or use
+`--force-conflicts`.
+
+After both releases are deployed and verified, first inspect the reviewed
+one-time normalization without mutating the cluster:
+
+```sh
+make gke-helm-normalize-ownership-dry-run
+```
+
+The normalization verifies that both releases are deployed and that strict
+render/live adoption parity holds. It reads the configured desired counts,
+patches the server, frontend, and worker `/scale` subresources with
+`coyote-rollout`, then performs ordinary Helm upgrades whose rendered
+Deployments omit `spec.replicas`. This makes Helm relinquish the field without
+deleting or replacing any Deployment. It verifies that Helm and the obsolete
+`helm-replica-handoff` manager do not own replicas, `coyote-rollout` owns the
+scale-subresource field, and all three Deployments are healthy.
+
+Run the mutating command only after reviewing a successful dry run:
+
+```sh
+make gke-helm-normalize-ownership
+```
+
+This is a one-time migration operation, not a normal rollout. The normal
+[`gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh) sequence explicitly
+scales all database consumers to zero before migration and restores the
+configured counts afterward using the same `coyote-rollout` field manager.y. This is not a normal
+rollout operation; normal
+[`gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh) continues to use
+Helm values overrides for migration scaling and never uses
+`--force-conflicts`.
+
 Verify a completed adoption without mutation:
 
 ```sh

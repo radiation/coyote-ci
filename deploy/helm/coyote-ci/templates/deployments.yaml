@@ -4,7 +4,9 @@ metadata:
   name: coyote-server
   namespace: {{ .Values.namespace }}
 spec:
+  {{- if not .Values.server.replicasManagedExternally }}
   replicas: {{ .Values.server.replicas }}
+  {{- end }}
   strategy:
     type: RollingUpdate
     rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
@@ -62,7 +64,9 @@ metadata:
   name: coyote-frontend
   namespace: {{ .Values.namespace }}
 spec:
+  {{- if not .Values.frontend.replicasManagedExternally }}
   replicas: {{ .Values.frontend.replicas }}
+  {{- end }}
   selector:
     matchLabels: {app.kubernetes.io/name: coyote-frontend}
   template:

@@ -57,6 +57,7 @@ auth:
 
 server:
   replicas: 1
+  replicasManagedExternally: false
   resources:
     requests: {cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi}
     limits: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
@@ -64,6 +65,7 @@ server:
 
 frontend:
   replicas: 1
+  replicasManagedExternally: false
   resources:
     requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 128Mi}
     limits: {cpu: 250m, memory: 256Mi, ephemeral-storage: 256Mi}

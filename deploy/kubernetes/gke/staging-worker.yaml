@@ -121,7 +121,6 @@ metadata:
   name: coyote-kubernetes-worker-staging
   namespace: coyote-ci-staging
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: coyote-kubernetes-worker-staging

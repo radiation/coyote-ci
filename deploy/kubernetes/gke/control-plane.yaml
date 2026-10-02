@@ -160,7 +160,6 @@ metadata:
   name: coyote-server
   namespace: coyote-ci
 spec:
-  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -280,7 +279,6 @@ metadata:
   name: coyote-frontend
   namespace: coyote-ci
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: coyote-frontend

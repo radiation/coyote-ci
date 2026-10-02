@@ -30,6 +30,7 @@ run() {
 
 require_command helm
 require_command kubectl
+require_command ruby
 [[ -f "$control_values" ]] || { echo "control-plane values file does not exist: $control_values" >&2; exit 1; }
 [[ -f "$worker_values" ]] || { echo "worker values file does not exist: $worker_values" >&2; exit 1; }
 [[ "$control_namespace" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "invalid control-plane namespace: $control_namespace" >&2; exit 1; }
@@ -40,6 +41,30 @@ require_command kubectl
   echo "HELM_ROLLOUT_ID must be a Kubernetes-safe lowercase identifier of at most 48 characters" >&2
   exit 1
 }
+
+external_replica_value() {
+  local values="$1"
+  local section="$2"
+  ruby -ryaml -e '
+    values = YAML.load_file(ARGV.fetch(0))
+    section = values.fetch(ARGV.fetch(1))
+    abort "#{ARGV.fetch(1)}.replicasManagedExternally must be true for GKE Helm rollout" unless section["replicasManagedExternally"] == true
+    replicas = section["replicas"]
+    abort "#{ARGV.fetch(1)}.replicas must be a non-negative integer" unless replicas.is_a?(Integer) && replicas >= 0
+    puts replicas
+  ' "$values" "$section"
+}
+
+scale_deployment() {
+  local namespace="$1"
+  local deployment="$2"
+  local replicas="$3"
+  run kubectl -n "$namespace" patch "deployment/$deployment" --subresource=scale --type merge --field-manager=coyote-rollout --patch "{\"spec\":{\"replicas\":$replicas}}"
+}
+
+server_replicas="$(external_replica_value "$control_values" server)"
+frontend_replicas="$(external_replica_value "$control_values" frontend)"
+worker_replicas="$(external_replica_value "$worker_values" worker)"
 
 # Rendering validates the supplied digest-pinned images and chart-required inputs before mutation.
 helm template "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" >/dev/null
@@ -58,8 +83,9 @@ helm status "$worker_release" --namespace "$worker_namespace" >/dev/null || {
 }
 
 echo "Phase A: scale all Helm-managed database consumers to zero before migration"
-run helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" --set server.replicas=0 --set frontend.replicas=0 --wait --timeout "${timeout_seconds}s"
-run helm upgrade "$worker_release" "$worker_chart" --namespace "$worker_namespace" --values "$worker_values" --set worker.replicas=0 --wait --timeout "${timeout_seconds}s"
+scale_deployment "$control_namespace" coyote-server 0
+scale_deployment "$control_namespace" coyote-frontend 0
+scale_deployment "$worker_namespace" coyote-kubernetes-worker-staging 0
 
 echo "Phase B: apply and wait for migration Job $migration_job"
 if [[ "$dry_run" == "true" ]]; then
@@ -80,11 +106,14 @@ fi
 
 echo "Phase C: restore the desired control-plane replicas"
 run helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" --wait --timeout "${timeout_seconds}s"
+scale_deployment "$control_namespace" coyote-server "$server_replicas"
+scale_deployment "$control_namespace" coyote-frontend "$frontend_replicas"
 run kubectl -n "$control_namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
 run kubectl -n "$control_namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
 
 echo "Phase D: restore the desired worker replicas"
 run helm upgrade "$worker_release" "$worker_chart" --namespace "$worker_namespace" --values "$worker_values" --wait --timeout "${timeout_seconds}s"
+scale_deployment "$worker_namespace" coyote-kubernetes-worker-staging "$worker_replicas"
 run kubectl -n "$worker_namespace" rollout status deployment/coyote-kubernetes-worker-staging --timeout="${timeout_seconds}s"
 
 if [[ -n "$gateway_manifest" ]]; then

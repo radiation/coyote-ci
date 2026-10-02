@@ -83,6 +83,11 @@ render_manifest() {
 require_command kubectl
 
 [[ "$namespace" == "coyote-ci" ]] || { echo "GKE_NAMESPACE must be coyote-ci" >&2; exit 1; }
+existing_manager="$(kubectl -n "$namespace" get deployment coyote-server -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)"
+[[ "$existing_manager" != "Helm" ]] || {
+  echo "coyote-server is Helm-managed; use scripts/gke-helm-rollout.sh instead of the raw deployment path" >&2
+  exit 1
+}
 [[ "$auth_mode" == "oidc" ]] || { echo "CONTROL_PLANE_AUTH_MODE must be oidc; disabled and header modes are not safe for this deployment" >&2; exit 1; }
 for setting in server_gsa migrate_gsa artifact_bucket cache_bucket revision_bucket; do
   [[ -n "${!setting}" ]] || { echo "$setting must not be empty" >&2; exit 1; }
@@ -115,9 +120,9 @@ if ! kubectl -n "$namespace" wait --for=condition=complete job/coyote-migrate --
   exit 1
 fi
 
-kubectl -n "$namespace" scale deployment/coyote-server --replicas=1
+kubectl apply --dry-run=server -f "$render_dir/control-plane.yaml"
+kubectl apply -f "$render_dir/control-plane.yaml"
 kubectl -n "$namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
-kubectl -n "$namespace" scale deployment/coyote-frontend --replicas=1
 kubectl -n "$namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
 
 for deployment in coyote-server coyote-frontend; do
