@@ -27,6 +27,8 @@ public_url="${CONTROL_PLANE_PUBLIC_URL:-}"
 oidc_scopes="${CONTROL_PLANE_OIDC_SCOPES:-openid email profile}"
 session_secret_name="${CONTROL_PLANE_SESSION_SECRET_NAME:-coyote-staging-session-secret}"
 timeout_seconds="${GKE_DEPLOY_TIMEOUT_SECONDS:-300}"
+server_replicas="${CONTROL_PLANE_SERVER_REPLICAS:-1}"
+frontend_replicas="${CONTROL_PLANE_FRONTEND_REPLICAS:-1}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 render_dir="$(mktemp -d)"
 
@@ -43,6 +45,31 @@ require_digest_image() {
   local name="$1"
   local image="$2"
   [[ "$image" == *@sha256:* ]] || { echo "$name must be an image@sha256 digest reference" >&2; exit 1; }
+}
+
+require_replica_count() {
+  local name="$1"
+  local replicas="$2"
+  [[ "$replicas" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "$name must be a non-negative integer without leading zeros" >&2; exit 1; }
+}
+
+scale_deployment() {
+  local deployment="$1"
+  local replicas="$2"
+  kubectl -n "$namespace" patch "deployment/$deployment" --subresource=scale --type merge --field-manager=coyote-raw-rollout --patch "{\"spec\":{\"replicas\":$replicas}}"
+}
+
+render_pre_migration_manifest() {
+  local source="$1"
+  local destination="$2"
+  ruby -ryaml -e '
+    documents = YAML.load_stream(File.read(ARGV.fetch(0))).compact
+    documents.each do |document|
+      next unless document["apiVersion"] == "apps/v1" && document["kind"] == "Deployment"
+      document.fetch("spec")["replicas"] = 0
+    end
+    File.write(ARGV.fetch(1), documents.map { |document| YAML.dump(document) }.join("---\n"))
+  ' "$source" "$destination"
 }
 
 escape_sed() {
@@ -81,8 +108,16 @@ render_manifest() {
 }
 
 require_command kubectl
+require_command ruby
 
 [[ "$namespace" == "coyote-ci" ]] || { echo "GKE_NAMESPACE must be coyote-ci" >&2; exit 1; }
+for deployment in coyote-server coyote-frontend; do
+  existing_manager="$(kubectl -n "$namespace" get deployment "$deployment" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)"
+  [[ "$existing_manager" != "Helm" ]] || {
+    echo "$deployment is Helm-managed; use scripts/gke-helm-rollout.sh instead of the raw deployment path" >&2
+    exit 1
+  }
+done
 [[ "$auth_mode" == "oidc" ]] || { echo "CONTROL_PLANE_AUTH_MODE must be oidc; disabled and header modes are not safe for this deployment" >&2; exit 1; }
 for setting in server_gsa migrate_gsa artifact_bucket cache_bucket revision_bucket; do
   [[ -n "${!setting}" ]] || { echo "$setting must not be empty" >&2; exit 1; }
@@ -98,10 +133,12 @@ done
 require_digest_image COYOTE_SERVER_IMAGE "$server_image"
 require_digest_image COYOTE_FRONTEND_IMAGE "$frontend_image"
 require_digest_image COYOTE_MIGRATE_IMAGE "$migrate_image"
+require_replica_count CONTROL_PLANE_SERVER_REPLICAS "$server_replicas"
+require_replica_count CONTROL_PLANE_FRONTEND_REPLICAS "$frontend_replicas"
 
 render_manifest "$repo_root/deploy/kubernetes/gke/control-plane.yaml" "$render_dir/control-plane.yaml"
 render_manifest "$repo_root/deploy/kubernetes/gke/control-plane-migration.yaml" "$render_dir/migration.yaml"
-sed 's/^  replicas: 1$/  replicas: 0/' "$render_dir/control-plane.yaml" > "$render_dir/control-plane-before-migration.yaml"
+render_pre_migration_manifest "$render_dir/control-plane.yaml" "$render_dir/control-plane-before-migration.yaml"
 
 kubectl apply --dry-run=server -f "$render_dir/control-plane-before-migration.yaml"
 kubectl apply -f "$render_dir/control-plane-before-migration.yaml"
@@ -115,9 +152,11 @@ if ! kubectl -n "$namespace" wait --for=condition=complete job/coyote-migrate --
   exit 1
 fi
 
-kubectl -n "$namespace" scale deployment/coyote-server --replicas=1
+kubectl apply --dry-run=server -f "$render_dir/control-plane.yaml"
+kubectl apply -f "$render_dir/control-plane.yaml"
+scale_deployment coyote-server "$server_replicas"
+scale_deployment coyote-frontend "$frontend_replicas"
 kubectl -n "$namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
-kubectl -n "$namespace" scale deployment/coyote-frontend --replicas=1
 kubectl -n "$namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
 
 for deployment in coyote-server coyote-frontend; do

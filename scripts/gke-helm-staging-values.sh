@@ -160,8 +160,8 @@ ruby -rjson -ryaml -e '
       },
       "publicURL" => required(control_config, "COYOTE_PUBLIC_URL")
     },
-    "server" => {"replicas" => server.dig("spec", "replicas"), "resources" => resources(server_container, "server")},
-    "frontend" => {"replicas" => frontend.dig("spec", "replicas"), "resources" => resources(frontend_container, "frontend")},
+    "server" => {"replicas" => server.dig("spec", "replicas"), "replicasManagedExternally" => true, "resources" => resources(server_container, "server")},
+    "frontend" => {"replicas" => frontend.dig("spec", "replicas"), "replicasManagedExternally" => true, "resources" => resources(frontend_container, "frontend")},
     "gateway" => {
       "enabled" => true,
       "name" => gateway.dig("metadata", "name"),
@@ -191,7 +191,7 @@ ruby -rjson -ryaml -e '
       "artifactRegistryRepository" => required(worker_env, "CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY"),
       "source" => {"bucket" => required(worker_env, "CLOUD_BUILD_SOURCE_BUCKET"), "prefix" => required(worker_env, "CLOUD_BUILD_SOURCE_PREFIX")}
     },
-    "worker" => {"replicas" => worker.dig("spec", "replicas"), "maxInFlightJobs" => Integer(required(worker_env, "WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS")), "resources" => resources(worker_container, "worker")}
+    "worker" => {"replicas" => worker.dig("spec", "replicas"), "replicasManagedExternally" => true, "maxInFlightJobs" => Integer(required(worker_env, "WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS")), "resources" => resources(worker_container, "worker")}
   }
   File.write(control_output, YAML.dump(control_values))
   File.write(worker_output, YAML.dump(worker_values))

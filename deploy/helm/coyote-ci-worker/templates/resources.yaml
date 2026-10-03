@@ -75,7 +75,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: {name: coyote-kubernetes-worker-staging, namespace: {{ .Values.namespace }}}
 spec:
+  {{- if not .Values.worker.replicasManagedExternally }}
   replicas: {{ .Values.worker.replicas }}
+  {{- end }}
   selector: {matchLabels: {app.kubernetes.io/name: coyote-kubernetes-worker-staging}}
   template:
     metadata: {labels: {app.kubernetes.io/name: coyote-kubernetes-worker-staging}}

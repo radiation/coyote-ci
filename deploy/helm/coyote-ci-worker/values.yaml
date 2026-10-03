@@ -31,5 +31,6 @@ cloudBuild:
   source: {bucket: "", prefix: coyote-sources}
 worker:
   replicas: 1
+  replicasManagedExternally: false
   maxInFlightJobs: 1
   resources: {}

@@ -11,6 +11,6 @@
     "secrets": {"type": "object", "required": ["project", "databaseUrl"], "properties": {"project": {"type": "string", "minLength": 1}, "databaseUrl": {"type": "string", "minLength": 1}}},
     "storage": {"type": "object", "required": ["project", "artifacts"], "properties": {"project": {"type": "string", "minLength": 1}, "artifacts": {"type": "object", "required": ["bucket"], "properties": {"bucket": {"type": "string", "minLength": 1}}}}},
     "cloudBuild": {"type": "object", "required": ["project", "location", "runtimeServiceAccount", "artifactRegistryRepository", "source"], "properties": {"project": {"type": "string", "minLength": 1}, "location": {"type": "string", "minLength": 1}, "runtimeServiceAccount": {"type": "string", "minLength": 1}, "artifactRegistryRepository": {"type": "string", "minLength": 1}, "source": {"type": "object", "required": ["bucket"], "properties": {"bucket": {"type": "string", "minLength": 1}}}}},
-    "worker": {"type": "object", "required": ["replicas", "maxInFlightJobs"], "properties": {"replicas": {"type": "integer", "minimum": 0}, "maxInFlightJobs": {"type": "integer", "minimum": 1}}}
+    "worker": {"type": "object", "required": ["replicas", "maxInFlightJobs"], "properties": {"replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}, "maxInFlightJobs": {"type": "integer", "minimum": 1}}}
   }
 }

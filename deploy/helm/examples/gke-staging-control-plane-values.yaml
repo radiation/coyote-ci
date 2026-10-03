@@ -26,6 +26,12 @@ auth:
     clientID: coyote-staging
     redirectURL: https://staging.example.invalid/auth/callback
   publicURL: https://staging.example.invalid
+server:
+  replicas: 1
+  replicasManagedExternally: true
+frontend:
+  replicas: 1
+  replicasManagedExternally: true
 gateway:
   enabled: true
   hostname: staging.example.invalid

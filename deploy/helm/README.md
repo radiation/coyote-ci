@@ -170,6 +170,51 @@ checks pass. It never uses `--force-replace`, `--force`, or
 and metadata-only rollback. Normal rollout upgrades intentionally do not use
 the conflict-transfer flag.
 
+### One-time replica ownership normalization
+
+Historical `kubectl scale` operations can retain `.spec.replicas` ownership
+after adoption. GKE staging instead treats replicas as operational state:
+`replicasManagedExternally: true` omits `spec.replicas` from the server,
+frontend, and worker Deployment manifests. The desired steady-state values
+remain in the staging values files and
+[`gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh) manages the scale
+subresource with ordinary merge patches under the `coyote-rollout` field
+manager. Normal Helm upgrades therefore do not modify replicas or use
+`--force-conflicts`.
+
+After both releases are deployed and verified, first inspect the reviewed
+one-time normalization without mutating the cluster:
+
+```sh
+make gke-helm-normalize-ownership-dry-run
+```
+
+The normalization verifies that both releases are deployed and that strict
+render/live adoption parity holds. It reads the configured desired counts,
+patches the server, frontend, and worker `/scale` subresources with
+`coyote-rollout`, then performs ordinary Helm upgrades whose rendered
+Deployments omit `spec.replicas`. This makes Helm relinquish the field without
+deleting or replacing any Deployment. It verifies that Helm does not own
+replicas on the main Deployment resource and that all three live replica
+counts match their configured desired values before checking Deployment health.
+Historical scale-subresource field managers are informational only: ordinary
+merge patches do not use SSA conflict semantics, so their presence does not
+block normalization.
+
+Run the mutating command only after reviewing a successful dry run:
+
+```sh
+make gke-helm-normalize-ownership
+```
+
+This is a one-time migration operation, not a normal rollout. The normal
+[`gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh) sequence uses
+`coyote-rollout` merge patches on the `/scale` subresource to scale all
+database consumers to zero, waits for each Deployment to finish scaling down,
+runs the migration Job, then restores the configured counts. Its Helm upgrades
+omit `spec.replicas`; it does not use Helm replica overrides or
+`--force-conflicts`.
+
 Verify a completed adoption without mutation:
 
 ```sh

@@ -15,4 +15,4 @@ cloudBuild:
   runtimeServiceAccount: coyote-cloud-build@example-project.iam.gserviceaccount.com
   artifactRegistryRepository: us-central1-docker.pkg.dev/example-project/coyote-ci
   source: {bucket: coyote-sources, prefix: coyote-sources}
-worker: {replicas: 1, maxInFlightJobs: 4, resources: {}}
+worker: {replicas: 1, replicasManagedExternally: true, maxInFlightJobs: 4, resources: {}}

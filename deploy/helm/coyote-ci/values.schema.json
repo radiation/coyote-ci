@@ -20,8 +20,8 @@
     "secrets": {"type": "object", "required": ["project", "databaseUrl", "workspaceHelperCapability", "oidcClient", "session"], "properties": {"project": {"type": "string", "minLength": 1}, "databaseUrl": {"type": "string", "minLength": 1}, "workspaceHelperCapability": {"type": "string", "minLength": 1}, "oidcClient": {"type": "string", "minLength": 1}, "session": {"type": "string", "minLength": 1}}},
     "storage": {"type": "object", "required": ["project", "artifacts", "cache", "workspaceRevisions"], "properties": {"project": {"type": "string", "minLength": 1}, "artifacts": {"type": "object", "required": ["bucket"], "properties": {"bucket": {"type": "string", "minLength": 1}}}, "cache": {"type": "object", "required": ["bucket"], "properties": {"bucket": {"type": "string", "minLength": 1}}}, "workspaceRevisions": {"type": "object", "required": ["bucket"], "properties": {"bucket": {"type": "string", "minLength": 1}}}}},
     "auth": {"type": "object", "required": ["mode", "bootstrapAdminEmails", "oidc", "publicURL"], "properties": {"mode": {"type": "string", "enum": ["oidc"]}, "bootstrapAdminEmails": {"type": "string", "minLength": 1}, "publicURL": {"type": "string", "pattern": "^https://"}, "oidc": {"type": "object", "required": ["issuerURL", "clientID", "redirectURL"], "properties": {"issuerURL": {"type": "string", "pattern": "^https://"}, "clientID": {"type": "string", "minLength": 1}, "redirectURL": {"type": "string", "pattern": "^https://"}}}}},
-    "server": {"type": "object", "properties": {"replicas": {"type": "integer", "minimum": 0}}},
-    "frontend": {"type": "object", "properties": {"replicas": {"type": "integer", "minimum": 0}}},
+    "server": {"type": "object", "properties": {"replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}}},
+    "frontend": {"type": "object", "properties": {"replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}}},
     "migration": {
       "type": "object",
       "properties": {
