@@ -174,6 +174,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	rootCmd.AddCommand(application.newProjectCommand())
 	rootCmd.AddCommand(application.newJobCommand())
 	rootCmd.AddCommand(application.newServerCommand())
+	rootCmd.AddCommand(application.newReleaseCommand())
 
 	return rootCmd
 }

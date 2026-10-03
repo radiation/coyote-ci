@@ -15,6 +15,7 @@
         "cloudSqlProxy": {"type": "string", "minLength": 1}
       }
     },
+    "release": {"type": "object", "properties": {"version": {"type": "string"}, "channel": {"type": "string", "enum": ["", "latest", "stable"]}, "manifestDigest": {"type": "string", "pattern": "^(|sha256:[a-f0-9]{64})$"}}},
     "serviceAccounts": {"type": "object", "required": ["server", "migrate"], "properties": {"server": {"type": "object", "required": ["gsaEmail"], "properties": {"gsaEmail": {"type": "string", "minLength": 1}}}, "migrate": {"type": "object", "required": ["gsaEmail"], "properties": {"gsaEmail": {"type": "string", "minLength": 1}}}}},
     "cloudSql": {"type": "object", "required": ["connectionName"], "properties": {"connectionName": {"type": "string", "minLength": 1}}},
     "secrets": {"type": "object", "required": ["project", "databaseUrl", "workspaceHelperCapability", "oidcClient", "session"], "properties": {"project": {"type": "string", "minLength": 1}, "databaseUrl": {"type": "string", "minLength": 1}, "workspaceHelperCapability": {"type": "string", "minLength": 1}, "oidcClient": {"type": "string", "minLength": 1}, "session": {"type": "string", "minLength": 1}}},

@@ -62,4 +62,18 @@ worker:
 EOF
 expect_template_failure coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" coyote-ci-staging "$worker_values" "$temp_dir/invalid-concurrency.yaml"
 
+cat >"$temp_dir/release-overlay.yaml" <<'EOF'
+release:
+  version: 2.5.1
+  channel: stable
+  manifestDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+images:
+  server: example.invalid/coyote-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  frontend: example.invalid/coyote-frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  worker: example.invalid/coyote-worker@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  migrate: example.invalid/coyote-migrate@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+EOF
+helm template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci --values "$control_values" --values "$temp_dir/release-overlay.yaml" >/dev/null
+helm template coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" --namespace coyote-ci-staging --values "$worker_values" --values "$temp_dir/release-overlay.yaml" >/dev/null
+
 echo "Helm schema-negative tests passed"

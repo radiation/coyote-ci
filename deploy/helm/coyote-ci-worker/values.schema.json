@@ -6,6 +6,7 @@
     "namespace": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
     "controlPlaneNamespace": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
     "images": {"type": "object", "required": ["worker", "cloudSqlProxy"], "properties": {"worker": {"type": "string", "pattern": ".+@sha256:[a-f0-9]{64}$"}, "cloudSqlProxy": {"type": "string", "minLength": 1}}},
+    "release": {"type": "object", "properties": {"version": {"type": "string"}, "channel": {"type": "string", "enum": ["", "latest", "stable"]}, "manifestDigest": {"type": "string", "pattern": "^(|sha256:[a-f0-9]{64})$"}}},
     "serviceAccounts": {"type": "object", "required": ["worker", "helper", "server"], "properties": {"worker": {"type": "object", "required": ["name", "gsaEmail"], "properties": {"name": {"type": "string", "minLength": 1}, "gsaEmail": {"type": "string", "minLength": 1}}}, "helper": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}}}, "server": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}}}}},
     "cloudSql": {"type": "object", "required": ["connectionName"], "properties": {"connectionName": {"type": "string", "minLength": 1}}},
     "secrets": {"type": "object", "required": ["project", "databaseUrl"], "properties": {"project": {"type": "string", "minLength": 1}, "databaseUrl": {"type": "string", "minLength": 1}}},
