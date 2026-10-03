@@ -194,9 +194,12 @@ render/live adoption parity holds. It reads the configured desired counts,
 patches the server, frontend, and worker `/scale` subresources with
 `coyote-rollout`, then performs ordinary Helm upgrades whose rendered
 Deployments omit `spec.replicas`. This makes Helm relinquish the field without
-deleting or replacing any Deployment. It verifies that Helm and the obsolete
-`helm-replica-handoff` manager do not own replicas, `coyote-rollout` owns the
-scale-subresource field, and all three Deployments are healthy.
+deleting or replacing any Deployment. It verifies that Helm does not own
+replicas on the main Deployment resource and that all three live replica
+counts match their configured desired values before checking Deployment health.
+Historical scale-subresource field managers are informational only: ordinary
+merge patches do not use SSA conflict semantics, so their presence does not
+block normalization.
 
 Run the mutating command only after reviewing a successful dry run:
 

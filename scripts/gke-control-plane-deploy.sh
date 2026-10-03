@@ -27,6 +27,8 @@ public_url="${CONTROL_PLANE_PUBLIC_URL:-}"
 oidc_scopes="${CONTROL_PLANE_OIDC_SCOPES:-openid email profile}"
 session_secret_name="${CONTROL_PLANE_SESSION_SECRET_NAME:-coyote-staging-session-secret}"
 timeout_seconds="${GKE_DEPLOY_TIMEOUT_SECONDS:-300}"
+server_replicas="${CONTROL_PLANE_SERVER_REPLICAS:-1}"
+frontend_replicas="${CONTROL_PLANE_FRONTEND_REPLICAS:-1}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 render_dir="$(mktemp -d)"
 
@@ -43,6 +45,18 @@ require_digest_image() {
   local name="$1"
   local image="$2"
   [[ "$image" == *@sha256:* ]] || { echo "$name must be an image@sha256 digest reference" >&2; exit 1; }
+}
+
+require_replica_count() {
+  local name="$1"
+  local replicas="$2"
+  [[ "$replicas" =~ ^[0-9]+$ ]] || { echo "$name must be a non-negative integer" >&2; exit 1; }
+}
+
+scale_deployment() {
+  local deployment="$1"
+  local replicas="$2"
+  kubectl -n "$namespace" patch "deployment/$deployment" --subresource=scale --type merge --field-manager=coyote-raw-rollout --patch "{\"spec\":{\"replicas\":$replicas}}"
 }
 
 escape_sed() {
@@ -103,13 +117,16 @@ done
 require_digest_image COYOTE_SERVER_IMAGE "$server_image"
 require_digest_image COYOTE_FRONTEND_IMAGE "$frontend_image"
 require_digest_image COYOTE_MIGRATE_IMAGE "$migrate_image"
+require_replica_count CONTROL_PLANE_SERVER_REPLICAS "$server_replicas"
+require_replica_count CONTROL_PLANE_FRONTEND_REPLICAS "$frontend_replicas"
 
 render_manifest "$repo_root/deploy/kubernetes/gke/control-plane.yaml" "$render_dir/control-plane.yaml"
 render_manifest "$repo_root/deploy/kubernetes/gke/control-plane-migration.yaml" "$render_dir/migration.yaml"
-sed 's/^  replicas: 1$/  replicas: 0/' "$render_dir/control-plane.yaml" > "$render_dir/control-plane-before-migration.yaml"
 
-kubectl apply --dry-run=server -f "$render_dir/control-plane-before-migration.yaml"
-kubectl apply -f "$render_dir/control-plane-before-migration.yaml"
+kubectl apply --dry-run=server -f "$render_dir/control-plane.yaml"
+kubectl apply -f "$render_dir/control-plane.yaml"
+scale_deployment coyote-server 0
+scale_deployment coyote-frontend 0
 
 kubectl -n "$namespace" delete job/coyote-migrate --ignore-not-found --wait=true
 kubectl apply --dry-run=server -f "$render_dir/migration.yaml"
@@ -122,6 +139,8 @@ fi
 
 kubectl apply --dry-run=server -f "$render_dir/control-plane.yaml"
 kubectl apply -f "$render_dir/control-plane.yaml"
+scale_deployment coyote-server "$server_replicas"
+scale_deployment coyote-frontend "$frontend_replicas"
 kubectl -n "$namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
 kubectl -n "$namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
 

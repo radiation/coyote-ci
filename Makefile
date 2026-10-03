@@ -1,4 +1,4 @@
-.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix kind-up kind-load kind-smoke kind-workspace-smoke kind-reliability-smoke kind-down gke-image-build gke-deploy gke-smoke gke-control-plane-image-build gke-control-plane-deploy gke-control-plane-smoke gke-gateway-deploy gke-staging-worker-deploy gke-public-e2e-smoke helm-render-parity helm-schema-test helm-migration-parity gke-helm-rollout gke-helm-rollout-test gke-helm-adopt-dry-run gke-helm-adopt gke-helm-adopt-test gke-helm-staging-values gke-helm-normalize-ownership gke-helm-normalize-ownership-dry-run gke-helm-normalize-ownership-test
+.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix kind-up kind-load kind-smoke kind-workspace-smoke kind-reliability-smoke kind-down gke-image-build gke-deploy gke-smoke gke-control-plane-image-build gke-control-plane-deploy gke-control-plane-deploy-test gke-control-plane-smoke gke-gateway-deploy gke-staging-worker-deploy gke-public-e2e-smoke helm-render-parity helm-schema-test helm-migration-parity gke-helm-rollout gke-helm-rollout-test gke-helm-adopt-dry-run gke-helm-adopt gke-helm-adopt-test gke-helm-staging-values gke-helm-normalize-ownership gke-helm-normalize-ownership-dry-run gke-helm-normalize-ownership-test
 
 CLI_VERSION ?= dev
 CLI_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -89,6 +89,9 @@ gke-control-plane-image-build:
 
 gke-control-plane-deploy:
 	bash ./scripts/gke-control-plane-deploy.sh
+
+gke-control-plane-deploy-test:
+	bash ./scripts/test-gke-control-plane-deploy.sh
 
 gke-control-plane-smoke:
 	bash ./scripts/gke-control-plane-smoke.sh

@@ -55,22 +55,19 @@ scale_deployment() {
   run kubectl -n "$namespace" patch "deployment/$deployment" --subresource=scale --type merge --field-manager="$field_manager" --patch "{\"spec\":{\"replicas\":$replicas}}"
 }
 
-replica_ownership_is_external() {
+helm_has_relinquished_replicas() {
   local namespace="$1"
   local deployment="$2"
   local desired="$3"
-  kubectl -n "$namespace" get "deployment/$deployment" -o json |
+  kubectl -n "$namespace" get "deployment/$deployment" --show-managed-fields -o json |
     ruby -rjson -e '
       document = JSON.parse(STDIN.read)
       fields = document.fetch("metadata", {}).fetch("managedFields", [])
       owns = ->(entry) { entry.dig("fieldsV1", "f:spec", "f:replicas") }
       helm_owns = fields.any? { |entry| entry["manager"] == "helm" && entry["subresource"].to_s.empty? && owns.call(entry) }
-      handoff_owns = fields.any? { |entry| entry["manager"] == "helm-replica-handoff" && owns.call(entry) }
-      rollout_owns = fields.any? { |entry| entry["manager"] == ARGV.fetch(0) && entry["subresource"] == "scale" && owns.call(entry) }
-      kubectl_owns = fields.any? { |entry| entry["manager"] == "kubectl" && entry["subresource"] == "scale" && owns.call(entry) }
       replicas = document.dig("spec", "replicas")
-      exit(helm_owns || handoff_owns || kubectl_owns || !rollout_owns || replicas != Integer(ARGV.fetch(1)) ? 1 : 0)
-    ' "$field_manager" "$desired"
+      exit(helm_owns || replicas != Integer(ARGV.fetch(0)) ? 1 : 0)
+    ' "$desired"
 }
 
 require_command helm
@@ -92,7 +89,7 @@ server_replicas="$(external_replica_value "$control_values" server)"
 frontend_replicas="$(external_replica_value "$control_values" frontend)"
 worker_replicas="$(external_replica_value "$worker_values" worker)"
 
-echo "One-time external replica ownership normalization: coyote-rollout owns the scale subresource."
+echo "One-time Helm replica relinquishment normalization: replicas remain externally managed through the scale subresource."
 scale_deployment "$control_namespace" coyote-server "$server_replicas"
 scale_deployment "$control_namespace" coyote-frontend "$frontend_replicas"
 scale_deployment "$worker_namespace" coyote-kubernetes-worker-staging "$worker_replicas"
@@ -101,13 +98,13 @@ run helm upgrade "$control_release" "$control_chart" --namespace "$control_names
 run helm upgrade "$worker_release" "$worker_chart" --namespace "$worker_namespace" --values "$worker_values" --wait --timeout "${timeout_seconds}s"
 
 if [[ "$apply" == "true" ]]; then
-  replica_ownership_is_external "$control_namespace" coyote-server "$server_replicas" || { echo "external replica ownership verification failed for coyote-server" >&2; exit 1; }
-  replica_ownership_is_external "$control_namespace" coyote-frontend "$frontend_replicas" || { echo "external replica ownership verification failed for coyote-frontend" >&2; exit 1; }
-  replica_ownership_is_external "$worker_namespace" coyote-kubernetes-worker-staging "$worker_replicas" || { echo "external replica ownership verification failed for coyote-kubernetes-worker-staging" >&2; exit 1; }
+  helm_has_relinquished_replicas "$control_namespace" coyote-server "$server_replicas" || { echo "Helm replica relinquishment verification failed for coyote-server" >&2; exit 1; }
+  helm_has_relinquished_replicas "$control_namespace" coyote-frontend "$frontend_replicas" || { echo "Helm replica relinquishment verification failed for coyote-frontend" >&2; exit 1; }
+  helm_has_relinquished_replicas "$worker_namespace" coyote-kubernetes-worker-staging "$worker_replicas" || { echo "Helm replica relinquishment verification failed for coyote-kubernetes-worker-staging" >&2; exit 1; }
   kubectl -n "$control_namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
   kubectl -n "$control_namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
   kubectl -n "$worker_namespace" rollout status deployment/coyote-kubernetes-worker-staging --timeout="${timeout_seconds}s"
-  echo "External replica ownership normalization completed."
+  echo "Helm replica relinquishment normalization completed."
 else
   echo "Dry run only. Set GKE_HELM_NORMALIZE_APPLY=true for the reviewed one-time normalization."
 fi

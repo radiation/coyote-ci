@@ -72,6 +72,8 @@ case "${args[0]}" in
         document["metadata"]["annotations"]["meta.helm.sh/release-name"] = "other-release"
       when "drift"
         document.fetch("spec").delete("selector") if document["kind"] == "Deployment"
+      when "external-replica"
+        document.fetch("spec")["replicas"] = 1 if document["kind"] == "Deployment"
       end
       puts YAML.dump(document)
     ' "$reference" "$namespace" >"$state_file"
@@ -153,6 +155,10 @@ if run_adopter ADOPTION_SCENARIO=drift GKE_HELM_ADOPT_DRY_RUN=true bash "$repo_r
   echo "missing live field must fail" >&2
   exit 1
 fi
+
+: >"$log"
+reset_mock_state
+run_adopter ADOPTION_SCENARIO=external-replica GKE_HELM_ADOPT_DRY_RUN=true bash "$repo_root/scripts/gke-helm-adopt.sh" >/dev/null
 
 : >"$log"
 reset_mock_state

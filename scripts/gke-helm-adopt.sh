@@ -301,10 +301,11 @@ compare_resource() {
   local kind="$4"
   local name="$5"
   local namespace="$6"
+  local replicas_managed_externally="$7"
   ruby -ryaml -e '
     expected_documents = YAML.load_stream(File.read(ARGV.fetch(0))).compact
     live = YAML.load_file(ARGV.fetch(1))
-    api_version, kind, name, namespace = ARGV.drop(2)
+    api_version, kind, name, namespace, replicas_managed_externally = ARGV.drop(2)
     expected = expected_documents.find do |document|
       metadata = document.fetch("metadata", {})
       document["apiVersion"] == api_version && document["kind"] == kind &&
@@ -331,8 +332,25 @@ compare_resource() {
         abort "#{path}: rendered=#{expected.inspect} live=#{actual.inspect}" unless expected == actual
       end
     end
+    if kind == "Deployment" && !expected.fetch("spec", {}).key?("replicas") && live.fetch("spec", {}).key?("replicas")
+      abort "#{kind}/#{name}: rendered replicas are absent but external replica management is not enabled" unless replicas_managed_externally == "true"
+      live.fetch("spec").delete("replicas")
+    end
     compare(expected, live)
-  ' "$expected" "$live" "$api_version" "$kind" "$name" "$namespace"
+  ' "$expected" "$live" "$api_version" "$kind" "$name" "$namespace" "$replicas_managed_externally"
+}
+
+replicas_managed_externally() {
+  local release="$1"
+  local name="$2"
+  local values section
+  case "$release/$name" in
+    "$control_release/coyote-server") values="$control_values"; section="server" ;;
+    "$control_release/coyote-frontend") values="$control_values"; section="frontend" ;;
+    "$worker_release/coyote-kubernetes-worker-staging") values="$worker_values"; section="worker" ;;
+    *) printf 'false\n'; return ;;
+  esac
+  ruby -ryaml -e 'puts YAML.load_file(ARGV.fetch(0)).fetch(ARGV.fetch(1)).fetch("replicasManagedExternally", false) == true' "$values" "$section"
 }
 
 ownership_state() {
@@ -373,7 +391,8 @@ while IFS=$'\t' read -r release release_namespace namespace api_version kind nam
       exit 1
     }
   fi
-  compare_resource "$([[ "$release" == "$control_release" ]] && printf '%s' "$control_render" || printf '%s' "$worker_render")" "$live" "$api_version" "$kind" "$name" "$object_namespace" || {
+  external_replicas="$(replicas_managed_externally "$release" "$name")"
+  compare_resource "$([[ "$release" == "$control_release" ]] && printf '%s' "$control_render" || printf '%s' "$worker_render")" "$live" "$api_version" "$kind" "$name" "$object_namespace" "$external_replicas" || {
     echo "material drift found; refusing Helm adoption for $reference" >&2
     exit 1
   }

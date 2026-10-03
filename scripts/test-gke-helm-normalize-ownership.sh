@@ -20,8 +20,28 @@ EOF
 cat >"$temp_dir/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 printf 'kubectl %s\n' "$*" >>"$COMMAND_LOG"
-if [[ "$*" == *" -o json"* ]]; then
-  printf '%s\n' '{"spec":{"replicas":1},"metadata":{"managedFields":[{"manager":"coyote-rollout","operation":"Update","subresource":"scale","fieldsV1":{"f:spec":{"f:replicas":{}}}}]}}'
+if [[ "$*" == *" --show-managed-fields -o json"* ]]; then
+  case "${NORMALIZATION_STATE:-no-scale-owner}" in
+    kubectl-scale)
+      printf '%s\n' '{"spec":{"replicas":1},"metadata":{"managedFields":[{"manager":"kubectl","operation":"Update","subresource":"scale","fieldsV1":{"f:spec":{"f:replicas":{}}}}]}}'
+      ;;
+    helm-replica-handoff)
+      printf '%s\n' '{"spec":{"replicas":1},"metadata":{"managedFields":[{"manager":"helm-replica-handoff","operation":"Apply","subresource":"scale","fieldsV1":{"f:spec":{"f:replicas":{}}}}]}}'
+      ;;
+    helm-main)
+      printf '%s\n' '{"spec":{"replicas":1},"metadata":{"managedFields":[{"manager":"helm","operation":"Apply","fieldsV1":{"f:spec":{"f:replicas":{}}}}]}}'
+      ;;
+    replica-mismatch)
+      printf '%s\n' '{"spec":{"replicas":2},"metadata":{"managedFields":[]}}'
+      ;;
+    no-scale-owner)
+      printf '%s\n' '{"spec":{"replicas":1},"metadata":{"managedFields":[]}}'
+      ;;
+    *)
+      echo "unknown normalization mock state: ${NORMALIZATION_STATE}" >&2
+      exit 1
+      ;;
+  esac
 fi
 EOF
 cat >"$temp_dir/adoption-verifier" <<'EOF'
@@ -52,8 +72,13 @@ done
 ! grep -q '^helm upgrade ' "$log" || { echo "dry-run performed a Helm upgrade" >&2; exit 1; }
 
 : >"$log"
-run_normalizer GKE_HELM_NORMALIZE_APPLY=true bash "$repo_root/scripts/gke-helm-normalize-ownership.sh" >/dev/null
+run_normalizer NORMALIZATION_STATE=kubectl-scale GKE_HELM_NORMALIZE_APPLY=true bash "$repo_root/scripts/gke-helm-normalize-ownership.sh" >/dev/null
 grep -q '^adoption-verifier ' "$log" || { echo "normalization did not run structural parity verification" >&2; exit 1; }
+[[ "$(grep -c '^kubectl -n .* get deployment/.* --show-managed-fields -o json$' "$log")" -eq 3 ]] || {
+  echo "normalization must request managed fields for each ownership verification" >&2
+  cat "$log" >&2
+  exit 1
+}
 for deployment in coyote-server coyote-frontend coyote-kubernetes-worker-staging; do
   grep -q "patch deployment/$deployment --subresource=scale --type merge --field-manager=coyote-rollout --patch {\"spec\":{\"replicas\":1}}" "$log" || {
     echo "normalization did not use coyote-rollout scale patch for $deployment" >&2
@@ -69,11 +94,24 @@ done
   echo "normalization must run ordinary Helm upgrades to relinquish replica fields" >&2
   exit 1
 }
-! grep -q -- '--force-conflicts\|--force-replace\|helm-replica-handoff\|helm uninstall\|kubectl .* delete\|managedFields' "$log" || {
+! grep -q -- '--force-conflicts\|--force-replace\|helm uninstall\|kubectl .* delete\|managedFields' "$log" || {
   echo "normalization used an obsolete or destructive ownership operation" >&2
   cat "$log" >&2
   exit 1
 }
+
+for state in helm-replica-handoff no-scale-owner; do
+  : >"$log"
+  run_normalizer NORMALIZATION_STATE="$state" GKE_HELM_NORMALIZE_APPLY=true bash "$repo_root/scripts/gke-helm-normalize-ownership.sh" >/dev/null
+done
+
+for state in helm-main replica-mismatch; do
+  : >"$log"
+  if run_normalizer NORMALIZATION_STATE="$state" GKE_HELM_NORMALIZE_APPLY=true bash "$repo_root/scripts/gke-helm-normalize-ownership.sh" >/dev/null 2>&1; then
+    echo "normalization must reject $state managed-field state" >&2
+    exit 1
+  fi
+done
 
 render_dir="$temp_dir/render"
 mkdir "$render_dir"
