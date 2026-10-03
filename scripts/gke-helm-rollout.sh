@@ -86,6 +86,9 @@ echo "Phase A: scale all Helm-managed database consumers to zero before migratio
 scale_deployment "$control_namespace" coyote-server 0
 scale_deployment "$control_namespace" coyote-frontend 0
 scale_deployment "$worker_namespace" coyote-kubernetes-worker-staging 0
+run kubectl -n "$control_namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
+run kubectl -n "$control_namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
+run kubectl -n "$worker_namespace" rollout status deployment/coyote-kubernetes-worker-staging --timeout="${timeout_seconds}s"
 
 echo "Phase B: apply and wait for migration Job $migration_job"
 if [[ "$dry_run" == "true" ]]; then

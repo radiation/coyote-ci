@@ -41,6 +41,9 @@ line_number() {
 server_zero="$(line_number 'kubectl -n coyote-ci patch deployment/coyote-server .*--subresource=scale .*coyote-rollout .*replicas.:0')"
 frontend_zero="$(line_number 'kubectl -n coyote-ci patch deployment/coyote-frontend .*--subresource=scale .*coyote-rollout .*replicas.:0')"
 worker_zero="$(line_number 'kubectl -n coyote-ci-staging patch deployment/coyote-kubernetes-worker-staging .*--subresource=scale .*coyote-rollout .*replicas.:0')"
+server_zero_ready="$(line_number 'kubectl -n coyote-ci rollout status deployment/coyote-server --timeout=600s')"
+frontend_zero_ready="$(line_number 'kubectl -n coyote-ci rollout status deployment/coyote-frontend --timeout=600s')"
+worker_zero_ready="$(line_number 'kubectl -n coyote-ci-staging rollout status deployment/coyote-kubernetes-worker-staging --timeout=600s')"
 migration_apply="$(line_number 'kubectl -n coyote-ci apply -f -')"
 migration_wait="$(line_number 'kubectl -n coyote-ci wait --for=condition=complete job/coyote-migrate-test-run')"
 control_upgrade="$(grep -n 'helm upgrade coyote-ci ' "$log" | tail -n1 | cut -d: -f1)"
@@ -49,7 +52,7 @@ frontend_restore="$(line_number 'kubectl -n coyote-ci patch deployment/coyote-fr
 worker_upgrade="$(grep -n 'helm upgrade coyote-ci-worker ' "$log" | tail -n1 | cut -d: -f1)"
 worker_restore="$(line_number 'kubectl -n coyote-ci-staging patch deployment/coyote-kubernetes-worker-staging .*--subresource=scale .*coyote-rollout .*replicas.:1')"
 
-[[ "$server_zero" -lt "$frontend_zero" && "$frontend_zero" -lt "$worker_zero" && "$worker_zero" -lt "$migration_apply" && "$migration_apply" -lt "$migration_wait" && "$migration_wait" -lt "$control_upgrade" && "$control_upgrade" -lt "$server_restore" && "$server_restore" -lt "$frontend_restore" && "$frontend_restore" -lt "$worker_upgrade" && "$worker_upgrade" -lt "$worker_restore" ]] || {
+[[ "$server_zero" -lt "$frontend_zero" && "$frontend_zero" -lt "$worker_zero" && "$worker_zero" -lt "$server_zero_ready" && "$server_zero_ready" -lt "$frontend_zero_ready" && "$frontend_zero_ready" -lt "$worker_zero_ready" && "$worker_zero_ready" -lt "$migration_apply" && "$migration_apply" -lt "$migration_wait" && "$migration_wait" -lt "$control_upgrade" && "$control_upgrade" -lt "$server_restore" && "$server_restore" -lt "$frontend_restore" && "$frontend_restore" -lt "$worker_upgrade" && "$worker_upgrade" -lt "$worker_restore" ]] || {
   echo "unexpected Helm rollout command sequence" >&2
   cat "$log" >&2
   exit 1

@@ -208,12 +208,11 @@ make gke-helm-normalize-ownership
 ```
 
 This is a one-time migration operation, not a normal rollout. The normal
-[`gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh) sequence explicitly
-scales all database consumers to zero before migration and restores the
-configured counts afterward using the same `coyote-rollout` field manager.y. This is not a normal
-rollout operation; normal
-[`gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh) continues to use
-Helm values overrides for migration scaling and never uses
+[`gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh) sequence uses
+`coyote-rollout` merge patches on the `/scale` subresource to scale all
+database consumers to zero, waits for each Deployment to finish scaling down,
+runs the migration Job, then restores the configured counts. Its Helm upgrades
+omit `spec.replicas`; it does not use Helm replica overrides or
 `--force-conflicts`.
 
 Verify a completed adoption without mutation:

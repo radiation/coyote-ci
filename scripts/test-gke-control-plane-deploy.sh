@@ -12,8 +12,20 @@ cat >"$temp_dir/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'kubectl %s\n' "$*" >>"$COMMAND_LOG"
+if [[ "$*" == *"control-plane-before-migration.yaml"* ]]; then
+  manifest="${@: -1}"
+  ruby -ryaml -e '
+    YAML.load_stream(File.read(ARGV.fetch(0))).compact
+      .select { |document| document["kind"] == "Deployment" }
+      .each { |document| abort "pre-migration deployment is not scaled to zero" unless document.dig("spec", "replicas") == 0 }
+  ' "$manifest"
+fi
 if [[ "$*" == *"jsonpath={.metadata.labels.app"* ]]; then
-  printf '%s' "${MOCK_MANAGED_BY:-}"
+  if [[ "$*" == *"deployment coyote-server"* ]]; then
+    printf '%s' "${MOCK_SERVER_MANAGED_BY:-${MOCK_MANAGED_BY:-}}"
+  elif [[ "$*" == *"deployment coyote-frontend"* ]]; then
+    printf '%s' "${MOCK_FRONTEND_MANAGED_BY:-${MOCK_MANAGED_BY:-}}"
+  fi
 elif [[ "$*" == *"jsonpath={.spec.template.spec.containers[0].image}"* ]]; then
   printf '%s' "$MOCK_IMAGE"
 fi
@@ -45,15 +57,27 @@ run_deployer() {
 run_deployer bash "$repo_root/scripts/gke-control-plane-deploy.sh" >/dev/null
 
 for deployment in coyote-server coyote-frontend; do
-  grep -q "patch deployment/$deployment --subresource=scale --type merge --field-manager=coyote-raw-rollout --patch {\"spec\":{\"replicas\":0}}" "$log" || {
-    echo "raw deployment path did not scale $deployment to zero before migration" >&2
-    exit 1
-  }
   grep -q "patch deployment/$deployment --subresource=scale --type merge --field-manager=coyote-raw-rollout --patch {\"spec\":{\"replicas\":1}}" "$log" || {
     echo "raw deployment path did not explicitly restore $deployment replicas" >&2
     exit 1
   }
 done
+[[ "$(grep -c '^kubectl .*control-plane-before-migration.yaml$' "$log")" -eq 2 ]] || {
+  echo "raw deployment path did not dry-run and apply the explicit zero-replica manifest" >&2
+  cat "$log" >&2
+  exit 1
+}
+! grep -q 'patch deployment/.*replicas.:0' "$log" || {
+  echo "raw deployment path must create or update zero replicas with the pre-migration manifest" >&2
+  exit 1
+}
+pre_migration_apply="$(grep -n -m1 'kubectl apply -f .*/control-plane-before-migration\.yaml$' "$log" | cut -d: -f1)"
+migration_apply="$(grep -n -m1 'kubectl apply -f .*/migration\.yaml$' "$log" | cut -d: -f1)"
+[[ "$pre_migration_apply" -lt "$migration_apply" ]] || {
+  echo "raw deployment path applied the migration before the zero-replica manifest" >&2
+  cat "$log" >&2
+  exit 1
+}
 ! grep -q 'kubectl .* scale deployment/' "$log" || {
   echo "raw deployment path must use the scale subresource patch, not kubectl scale" >&2
   exit 1
@@ -76,6 +100,34 @@ grep -q 'coyote-server is Helm-managed' "$temp_dir/helm.err" || {
 }
 ! grep -q '^kubectl .* apply ' "$log" || {
   echo "raw deployment path mutated a Helm-managed control plane" >&2
+  exit 1
+}
+
+: >"$log"
+if run_deployer MOCK_FRONTEND_MANAGED_BY=Helm bash "$repo_root/scripts/gke-control-plane-deploy.sh" >/dev/null 2>"$temp_dir/frontend-helm.err"; then
+  echo "raw deployment path must refuse a Helm-managed frontend" >&2
+  exit 1
+fi
+grep -q 'coyote-frontend is Helm-managed' "$temp_dir/frontend-helm.err" || {
+  echo "raw deployment frontend Helm guard did not report a controlled error" >&2
+  exit 1
+}
+! grep -q '^kubectl .* apply ' "$log" || {
+  echo "raw deployment path mutated a Helm-managed frontend" >&2
+  exit 1
+}
+
+: >"$log"
+if run_deployer CONTROL_PLANE_SERVER_REPLICAS=01 bash "$repo_root/scripts/gke-control-plane-deploy.sh" >/dev/null 2>"$temp_dir/replicas.err"; then
+  echo "raw deployment path must reject non-canonical replica counts" >&2
+  exit 1
+fi
+grep -q 'CONTROL_PLANE_SERVER_REPLICAS must be a non-negative integer without leading zeros' "$temp_dir/replicas.err" || {
+  echo "non-canonical replica count did not produce a controlled error" >&2
+  exit 1
+}
+! grep -q '^kubectl .* apply ' "$log" || {
+  echo "raw deployment path applied resources after invalid replica count validation" >&2
   exit 1
 }
 
