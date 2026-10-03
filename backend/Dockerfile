@@ -29,8 +29,11 @@ RUN go mod download
 FROM base AS source-builder
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
-RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd/worker
+ARG COYOTE_VERSION=dev
+ARG COYOTE_COMMIT=unknown
+ARG COYOTE_BUILD_DATE=
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o worker ./cmd/worker
 
 FROM base AS migration-builder
 

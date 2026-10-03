@@ -7,6 +7,10 @@ gke:
 images:
   worker: ""
   cloudSqlProxy: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.4@sha256:88501f0a695a586988add1b8a206fdf3f29f9a1a3deeb9b45ef2b1481ea6be83
+release:
+  version: ""
+  channel: ""
+  manifestDigest: ""
 serviceAccounts:
   worker: {name: coyote-kubernetes-worker-staging, gsaEmail: ""}
   helper: {name: coyote-workspace-helper}
