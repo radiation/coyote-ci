@@ -32,6 +32,12 @@ func TestManifestValidation(t *testing.T) {
 		{"tagged digest image", func(m *Manifest) {
 			m.Images["server"] = "registry.example/coyote-server:2.5.1@sha256:" + strings.Repeat("a", 64)
 		}},
+		{"leading image whitespace", func(m *Manifest) {
+			m.Images["server"] = " registry.example/coyote-server@sha256:" + strings.Repeat("a", 64)
+		}},
+		{"trailing image whitespace", func(m *Manifest) {
+			m.Images["server"] = "registry.example/coyote-server@sha256:" + strings.Repeat("a", 64) + " "
+		}},
 		{"bad digest", func(m *Manifest) { m.Images["server"] = "registry.example/coyote-server@sha256:bad" }},
 		{"bad commit", func(m *Manifest) { m.Source.Commit = "abc123" }},
 		{"schema", func(m *Manifest) { m.SchemaVersion = 2 }},
@@ -171,6 +177,7 @@ func TestPublisherAndResolverInputFailures(t *testing.T) {
 	if publisherErr != nil {
 		t.Fatalf("publisher: %v", publisherErr)
 	}
+
 	manifest := validManifest()
 	digest, publishErr := publisher.PublishManifest(manifest)
 	if publishErr != nil {
@@ -197,5 +204,91 @@ func TestPublisherAndResolverInputFailures(t *testing.T) {
 	invalid := Resolved{Manifest: Manifest{SchemaVersion: 1}}
 	if overlayErr := WriteValuesOverlay(&output, invalid); overlayErr == nil {
 		t.Fatal("expected invalid overlay error")
+	}
+}
+
+func TestPromoteChannelPreservesConcurrentUpdates(t *testing.T) {
+	root := t.TempDir()
+	publisher, publisherErr := NewFilePublisher(root)
+	if publisherErr != nil {
+		t.Fatalf("publisher: %v", publisherErr)
+	}
+
+	latestDigest := "sha256:" + strings.Repeat("a", 64)
+	stableDigest := "sha256:" + strings.Repeat("b", 64)
+	promotionErrors := make(chan error, 2)
+	go func() {
+		promotionErrors <- publisher.PromoteChannel(context.Background(), "latest", "2.5.2", latestDigest)
+	}()
+	go func() {
+		promotionErrors <- publisher.PromoteChannel(context.Background(), "stable", "2.5.1", stableDigest)
+	}()
+	for range 2 {
+		if promotionErr := <-promotionErrors; promotionErr != nil {
+			t.Fatalf("promote channel: %v", promotionErr)
+		}
+	}
+	source, sourceErr := NewFileSource(root)
+	if sourceErr != nil {
+		t.Fatalf("source: %v", sourceErr)
+	}
+	index, indexErr := source.FetchChannelIndex(context.Background())
+	if indexErr != nil {
+		t.Fatalf("fetch channel index: %v", indexErr)
+	}
+	if index.Channels["latest"].ManifestDigest != latestDigest || index.Channels["stable"].ManifestDigest != stableDigest {
+		t.Fatalf("concurrent channel updates were not preserved: %+v", index.Channels)
+	}
+}
+
+func TestPublishManifestPreservesConcurrentImmutability(t *testing.T) {
+	root := t.TempDir()
+	firstPublisher, firstPublisherErr := NewFilePublisher(root)
+	if firstPublisherErr != nil {
+		t.Fatalf("first publisher: %v", firstPublisherErr)
+	}
+	secondPublisher, secondPublisherErr := NewFilePublisher(root)
+	if secondPublisherErr != nil {
+		t.Fatalf("second publisher: %v", secondPublisherErr)
+	}
+	firstManifest := validManifest()
+	secondManifest := validManifest()
+	secondManifest.Images["server"] = "registry.example/coyote-server@sha256:" + strings.Repeat("e", 64)
+	results := make(chan error, 2)
+	go func() {
+		_, publishErr := firstPublisher.PublishManifest(firstManifest)
+		results <- publishErr
+	}()
+	go func() {
+		_, publishErr := secondPublisher.PublishManifest(secondManifest)
+		results <- publishErr
+	}()
+	var successes, conflicts int
+	for range 2 {
+		publishErr := <-results
+		if publishErr == nil {
+			successes++
+			continue
+		}
+		if errors.Is(publishErr, ErrManifestConflict) {
+			conflicts++
+			continue
+		}
+		t.Fatalf("unexpected publish error: %v", publishErr)
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("expected one winner and one conflict, got %d successes and %d conflicts", successes, conflicts)
+	}
+	data, readErr := os.ReadFile(filepath.Join(root, "releases", "2.5.1.json"))
+	if readErr != nil {
+		t.Fatalf("read winning manifest: %v", readErr)
+	}
+	winningManifest, parseErr := ParseManifest(data)
+	if parseErr != nil {
+		t.Fatalf("parse winning manifest: %v", parseErr)
+	}
+	winningImage := winningManifest.Images["server"]
+	if winningImage != firstManifest.Images["server"] && winningImage != secondManifest.Images["server"] {
+		t.Fatalf("unexpected winning manifest image: %s", winningImage)
 	}
 }

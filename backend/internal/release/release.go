@@ -18,11 +18,12 @@ import (
 const SchemaVersion = 1
 
 var (
-	ErrNotFound         = errors.New("release document not found")
-	ErrManifestConflict = errors.New("release manifest already exists with different content")
-	semVerPattern       = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
-	commitPattern       = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
-	digestPattern       = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	ErrNotFound             = errors.New("release document not found")
+	ErrManifestConflict     = errors.New("release manifest already exists with different content")
+	ErrChannelPromotionBusy = errors.New("channel promotion is already in progress")
+	semVerPattern           = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+	commitPattern           = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
+	digestPattern           = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 )
 
 var requiredComponents = []string{"server", "frontend", "worker", "migrate"}
@@ -78,11 +79,11 @@ type Resolved struct {
 
 func ParseManifest(data []byte) (Manifest, error) {
 	var manifest Manifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return Manifest{}, fmt.Errorf("decode release manifest: %w", err)
+	if decodeErr := json.Unmarshal(data, &manifest); decodeErr != nil {
+		return Manifest{}, fmt.Errorf("decode release manifest: %w", decodeErr)
 	}
-	if err := manifest.Validate(); err != nil {
-		return Manifest{}, err
+	if validateErr := manifest.Validate(); validateErr != nil {
+		return Manifest{}, validateErr
 	}
 	return manifest, nil
 }
@@ -97,8 +98,8 @@ func (m Manifest) Validate() error {
 	if !commitPattern.MatchString(m.Source.Commit) {
 		return fmt.Errorf("source commit must be a full Git commit SHA: %q", m.Source.Commit)
 	}
-	if _, err := time.Parse(time.RFC3339, m.Source.CreatedAt); err != nil {
-		return fmt.Errorf("source created_at must be RFC3339: %w", err)
+	if _, timestampErr := time.Parse(time.RFC3339, m.Source.CreatedAt); timestampErr != nil {
+		return fmt.Errorf("source created_at must be RFC3339: %w", timestampErr)
 	}
 	if len(m.Images) != len(requiredComponents) {
 		return errors.New("manifest images must contain exactly server, frontend, worker, and migrate")
@@ -108,8 +109,8 @@ func (m Manifest) Validate() error {
 		if !ok {
 			return fmt.Errorf("manifest is missing %s image", component)
 		}
-		if err := ValidateImageReference(image); err != nil {
-			return fmt.Errorf("%s image: %w", component, err)
+		if imageErr := ValidateImageReference(image); imageErr != nil {
+			return fmt.Errorf("%s image: %w", component, imageErr)
 		}
 	}
 	for component := range m.Images {
@@ -136,8 +137,10 @@ func validateDeployment(deployment *Deployment) error {
 }
 
 func ValidateImageReference(reference string) error {
-	trimmed := strings.TrimSpace(reference)
-	parts := strings.Split(trimmed, "@")
+	if reference != strings.TrimSpace(reference) {
+		return fmt.Errorf("must not contain leading or trailing whitespace: %q", reference)
+	}
+	parts := strings.Split(reference, "@")
 	if len(parts) != 2 || !strings.Contains(parts[0], "/") || strings.Contains(strings.Split(parts[0], "/")[len(strings.Split(parts[0], "/"))-1], ":") || !digestPattern.MatchString(parts[1]) {
 		return fmt.Errorf("must be a digest-pinned registry image reference, got %q", reference)
 	}
@@ -174,8 +177,8 @@ func Resolve(ctx context.Context, source Source, releaseVersion, channel string)
 		if err != nil {
 			return Resolved{}, err
 		}
-		if err := index.Validate(); err != nil {
-			return Resolved{}, err
+		if validateErr := index.Validate(); validateErr != nil {
+			return Resolved{}, validateErr
 		}
 		entry, ok := index.Channels[channel]
 		if !ok {
@@ -253,8 +256,8 @@ func NewFilePublisher(location string) (*FilePublisher, error) {
 }
 
 func (p *FilePublisher) PublishManifest(manifest Manifest) (string, error) {
-	if err := manifest.Validate(); err != nil {
-		return "", err
+	if validateErr := manifest.Validate(); validateErr != nil {
+		return "", validateErr
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -262,6 +265,13 @@ func (p *FilePublisher) PublishManifest(manifest Manifest) (string, error) {
 	}
 	data = append(data, '\n')
 	path := filepath.Join(p.root, "releases", manifest.Release+".json")
+	releaseLock, lockErr := p.acquireLock(context.Background(), path+".lock")
+	if lockErr != nil {
+		return "", lockErr
+	}
+	defer func() {
+		_ = os.Remove(releaseLock)
+	}()
 	if existing, readErr := os.ReadFile(path); readErr == nil {
 		if string(existing) == string(data) {
 			return Digest(existing), nil
@@ -270,15 +280,15 @@ func (p *FilePublisher) PublishManifest(manifest Manifest) (string, error) {
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return "", readErr
 	}
-	if err := writeAtomic(path, data); err != nil {
-		return "", err
+	if writeErr := writeAtomic(path, data); writeErr != nil {
+		return "", writeErr
 	}
 	return Digest(data), nil
 }
 
 func (p *FilePublisher) PublishChannels(index ChannelIndex) error {
-	if err := index.Validate(); err != nil {
-		return err
+	if validateErr := index.Validate(); validateErr != nil {
+		return validateErr
 	}
 	data, err := json.MarshalIndent(index, "", "  ")
 	if err != nil {
@@ -287,9 +297,65 @@ func (p *FilePublisher) PublishChannels(index ChannelIndex) error {
 	return writeAtomic(filepath.Join(p.root, "channels.json"), append(data, '\n'))
 }
 
+func (p *FilePublisher) PromoteChannel(ctx context.Context, channel, releaseVersion, manifestDigest string) error {
+	if channel != "latest" && channel != "stable" {
+		return fmt.Errorf("unsupported release channel %q", channel)
+	}
+	if !semVerPattern.MatchString(releaseVersion) || !digestPattern.MatchString(manifestDigest) {
+		return errors.New("channel promotion requires an exact release and manifest digest")
+	}
+	releaseLock, lockErr := p.acquireLock(ctx, filepath.Join(p.root, ".channels.lock"))
+	if lockErr != nil {
+		return lockErr
+	}
+	defer func() {
+		_ = os.Remove(releaseLock)
+	}()
+
+	source, sourceErr := NewFileSource(p.root)
+	if sourceErr != nil {
+		return sourceErr
+	}
+	index, indexErr := source.FetchChannelIndex(ctx)
+	if errors.Is(indexErr, ErrNotFound) {
+		index = ChannelIndex{SchemaVersion: SchemaVersion, Channels: map[string]ChannelEntry{}}
+	} else if indexErr != nil {
+		return indexErr
+	}
+	if validateErr := index.Validate(); validateErr != nil {
+		return validateErr
+	}
+	index.Channels[channel] = ChannelEntry{Release: releaseVersion, ManifestDigest: manifestDigest}
+	return p.PublishChannels(index)
+}
+
+func (p *FilePublisher) acquireLock(ctx context.Context, lockPath string) (string, error) {
+	if mkdirErr := os.MkdirAll(filepath.Dir(lockPath), 0o755); mkdirErr != nil {
+		return "", mkdirErr
+	}
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	retry := time.NewTicker(25 * time.Millisecond)
+	defer retry.Stop()
+	for {
+		if mkdirErr := os.Mkdir(lockPath, 0o700); mkdirErr == nil {
+			return lockPath, nil
+		} else if !errors.Is(mkdirErr, os.ErrExist) {
+			return "", mkdirErr
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-deadline.C:
+			return "", ErrChannelPromotionBusy
+		case <-retry.C:
+		}
+	}
+}
+
 func writeAtomic(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	if mkdirErr := os.MkdirAll(filepath.Dir(path), 0o755); mkdirErr != nil {
+		return mkdirErr
 	}
 	file, err := os.CreateTemp(filepath.Dir(path), ".coyote-release-*")
 	if err != nil {
@@ -299,19 +365,19 @@ func writeAtomic(path string, data []byte) error {
 	defer func() {
 		_ = os.Remove(name)
 	}()
-	if _, err := file.Write(data); err != nil {
+	if _, writeErr := file.Write(data); writeErr != nil {
 		_ = file.Close()
-		return err
+		return writeErr
 	}
-	if err := file.Close(); err != nil {
-		return err
+	if closeErr := file.Close(); closeErr != nil {
+		return closeErr
 	}
 	return os.Rename(name, path)
 }
 
 func WriteValuesOverlay(w io.Writer, resolved Resolved) error {
-	if err := resolved.Manifest.Validate(); err != nil {
-		return err
+	if validateErr := resolved.Manifest.Validate(); validateErr != nil {
+		return validateErr
 	}
 	_, err := fmt.Fprintf(w, "release:\n  version: %s\n  channel: %s\n  manifestDigest: %s\nimages:\n  server: %s\n  frontend: %s\n  worker: %s\n  migrate: %s\n",
 		resolved.Manifest.Release, resolved.Channel, resolved.ManifestDigest,

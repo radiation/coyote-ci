@@ -47,6 +47,13 @@ for ((index = 1; index <= $#; index++)); do
   if [[ "${!index}" == "--manifest" ]]; then
     next=$((index + 1))
     cp "${!next}" "$TEST_MANIFEST"
+    if grep -q 'buildx build.*:2.5.1' "$TEST_DOCKER_LOG"; then
+      echo "semantic tag was used during image build" >&2
+      exit 1
+    fi
+    if [[ "${TEST_GO_PUBLISH_FAIL:-}" == "true" ]]; then
+      exit 1
+    fi
     exit 0
   fi
 done
@@ -73,6 +80,7 @@ if [[ "$manifest_contents" == *':2.5.1@sha256:'* ]]; then
 fi
 assert_contains "$(cat "$docker_log")" '--target source-runtime'
 assert_contains "$(cat "$docker_log")" '--target migrate-runtime'
+assert_contains "$(cat "$docker_log")" 'imagetools create --tag registry.example:5000/coyote/coyote-server:2.5.1'
 
 if PATH="$temp_dir:$PATH" TEST_GIT_STATUS='?? untracked-file' VERSION=2.5.1 RELEASE_REGISTRY=registry.example/coyote RELEASE_SOURCE="$temp_dir/release-store" bash "$repo_root/scripts/release-build.sh" >/dev/null 2>&1; then
   echo "expected untracked worktree rejection" >&2
@@ -80,6 +88,19 @@ if PATH="$temp_dir:$PATH" TEST_GIT_STATUS='?? untracked-file' VERSION=2.5.1 RELE
 fi
 if PATH="$temp_dir:$PATH" RELEASE_COMMIT="$(printf '%040d' 0 | tr '0' 'b')" VERSION=2.5.1 RELEASE_REGISTRY=registry.example/coyote RELEASE_SOURCE="$temp_dir/release-store" bash "$repo_root/scripts/release-build.sh" >/dev/null 2>&1; then
   echo "expected mismatched release commit rejection" >&2
+  exit 1
+fi
+if PATH="$temp_dir:$PATH" VERSION=2.5.1+build RELEASE_REGISTRY=registry.example/coyote RELEASE_SOURCE="$temp_dir/release-store" bash "$repo_root/scripts/release-build.sh" >/dev/null 2>&1; then
+  echo "expected build metadata rejection" >&2
+  exit 1
+fi
+failed_docker_log="$temp_dir/failed-docker.log"
+if PATH="$temp_dir:$PATH" TEST_MANIFEST="$temp_dir/failed-manifest.json" TEST_DOCKER_LOG="$failed_docker_log" TEST_GO_PUBLISH_FAIL=true VERSION=2.5.1 RELEASE_REGISTRY=registry.example/coyote RELEASE_SOURCE="$temp_dir/release-store" bash "$repo_root/scripts/release-build.sh" >/dev/null 2>&1; then
+  echo "expected publication failure" >&2
+  exit 1
+fi
+if grep -q 'imagetools create.*:2.5.1' "$failed_docker_log"; then
+  echo "semantic tags were promoted after publication failure" >&2
   exit 1
 fi
 

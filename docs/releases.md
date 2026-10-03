@@ -3,7 +3,9 @@
 A Coyote release is an immutable semantic version manifest containing digest-pinned
 server, frontend, worker, and migration images in `registry/repository@sha256:<digest>`
 form. Registries may retain semantic-version tags for discovery, but persisted manifests
-never include those tags. `latest` and `stable` are mutable
+never include those tags. The coordinated builder publishes temporary build tags,
+commits the manifest, then promotes semantic registry tags to the committed digests.
+`latest` and `stable` are mutable
 channel pointers; moving one never alters an existing manifest.
 
 The currently supported provider-neutral release source is a filesystem directory

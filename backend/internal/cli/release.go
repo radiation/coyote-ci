@@ -68,12 +68,12 @@ func writeReleaseOverlay(path string, resolved releases.Resolved) error {
 	defer func() {
 		_ = os.Remove(temporaryPath)
 	}()
-	if err := releases.WriteValuesOverlay(file, resolved); err != nil {
+	if overlayErr := releases.WriteValuesOverlay(file, resolved); overlayErr != nil {
 		_ = file.Close()
-		return err
+		return overlayErr
 	}
-	if err := file.Close(); err != nil {
-		return err
+	if closeErr := file.Close(); closeErr != nil {
+		return closeErr
 	}
 	return os.Rename(temporaryPath, path)
 }
@@ -86,6 +86,9 @@ func (a *app) newReleasePublishCommand() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if strings.TrimSpace(manifestPath) == "" || strings.TrimSpace(sourceLocation) == "" {
 				return &ExitError{Code: 2, Err: errors.New("--manifest and --release-source are required")}
+			}
+			if channel != "" && channel != "latest" && channel != "stable" {
+				return &ExitError{Code: 2, Err: fmt.Errorf("unsupported release channel %q", channel)}
 			}
 			data, readErr := os.ReadFile(manifestPath)
 			if readErr != nil {
@@ -104,15 +107,7 @@ func (a *app) newReleasePublishCommand() *cobra.Command {
 				return &ExitError{Code: 1, Err: publishErr}
 			}
 			if channel != "" {
-				if channel != "latest" && channel != "stable" {
-					return &ExitError{Code: 2, Err: fmt.Errorf("unsupported release channel %q", channel)}
-				}
-				index, indexErr := loadChannelIndex(context.Background(), sourceLocation)
-				if indexErr != nil {
-					return &ExitError{Code: 1, Err: indexErr}
-				}
-				index.Channels[channel] = releases.ChannelEntry{Release: manifest.Release, ManifestDigest: digest}
-				if channelErr := publisher.PublishChannels(index); channelErr != nil {
+				if channelErr := publisher.PromoteChannel(context.Background(), channel, manifest.Release, digest); channelErr != nil {
 					return &ExitError{Code: 1, Err: channelErr}
 				}
 			}
@@ -124,22 +119,4 @@ func (a *app) newReleasePublishCommand() *cobra.Command {
 	command.Flags().StringVar(&sourceLocation, "release-source", "", "Filesystem path or file:// URL containing release documents")
 	command.Flags().StringVar(&channel, "channel", "", "Optional channel to promote: latest or stable")
 	return command
-}
-
-func loadChannelIndex(ctx context.Context, location string) (releases.ChannelIndex, error) {
-	source, sourceErr := releases.NewFileSource(location)
-	if sourceErr != nil {
-		return releases.ChannelIndex{}, sourceErr
-	}
-	index, indexErr := source.FetchChannelIndex(ctx)
-	if errors.Is(indexErr, releases.ErrNotFound) {
-		return releases.ChannelIndex{SchemaVersion: releases.SchemaVersion, Channels: map[string]releases.ChannelEntry{}}, nil
-	}
-	if indexErr != nil {
-		return releases.ChannelIndex{}, indexErr
-	}
-	if validateErr := index.Validate(); validateErr != nil {
-		return releases.ChannelIndex{}, validateErr
-	}
-	return index, nil
 }
