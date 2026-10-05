@@ -1,18 +1,22 @@
 package pipeline
 
-import "github.com/radiation/coyote-ci/backend/internal/domain"
+import (
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/versioning"
+)
 
 // ResolvedPipeline is the internal normalized representation of a pipeline config.
 // YAML schema types do not leak beyond the pipeline package; the rest of the system
 // works exclusively with this type.
 type ResolvedPipeline struct {
-	Name      string
-	Image     string
-	Env       map[string]string
-	Steps     []ResolvedStep
-	Plan      ExecutionPlan
-	Artifacts ResolvedArtifacts
-	Cache     *domain.StepCacheConfig
+	Name               string
+	Image              string
+	Env                map[string]string
+	ApplicationVersion versioning.ApplicationVersionConfig
+	Steps              []ResolvedStep
+	Plan               ExecutionPlan
+	Artifacts          ResolvedArtifacts
+	Cache              *domain.StepCacheConfig
 }
 
 // ResolvedStep is a single normalized step ready for conversion to a canonical build step.

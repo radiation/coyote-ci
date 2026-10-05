@@ -24,10 +24,12 @@ func TestValidate_UnsupportedVersion(t *testing.T) {
 		Version: 99,
 		Steps:   []StepDef{{Name: "x", Run: "echo"}},
 	}
+
 	err := Validate(pf)
 	if err == nil {
 		t.Fatal("expected error for version 99")
 	}
+
 	assertContains(t, err.Error(), "unsupported version")
 }
 

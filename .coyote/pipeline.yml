@@ -2,10 +2,14 @@ version: 1
 pipeline:
   name: coyote-ci
   image: golang:1.27.1
+  application_version:
+    template: "0.0.{build_number}"
 steps:
   - name: Backend Format Check
     depends_on: []
-    run: test -z "$(gofmt -l .)"
+    run: |
+      echo "COYOTE_APPLICATION_VERSION=$COYOTE_APPLICATION_VERSION"
+      test -z "$(gofmt -l .)"
     working_dir: backend
     timeout_seconds: 300
     cache:

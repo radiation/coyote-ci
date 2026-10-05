@@ -423,6 +423,30 @@ func (r *BuildRepository) GetByID(_ context.Context, id string) (domain.Build, e
 	return build, nil
 }
 
+func (r *BuildRepository) SetApplicationVersionIfUnset(_ context.Context, id string, version string) (domain.Build, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	build, ok := r.builds[id]
+	if !ok {
+		return domain.Build{}, repository.ErrBuildNotFound
+	}
+
+	trimmed := strings.TrimSpace(version)
+	if trimmed == "" {
+		return domain.Build{}, repository.ErrApplicationVersionConflict
+	}
+	if build.ApplicationVersion != nil {
+		if *build.ApplicationVersion == trimmed {
+			return build, nil
+		}
+		return domain.Build{}, repository.ErrApplicationVersionConflict
+	}
+	build.ApplicationVersion = &trimmed
+	r.builds[id] = build
+	return build, nil
+}
+
 func (r *BuildRepository) UpdateStatus(_ context.Context, id string, status domain.BuildStatus, errorMessage *string) (domain.Build, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

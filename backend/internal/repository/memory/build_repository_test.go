@@ -53,6 +53,7 @@ func TestBuildRepository_Create(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected no error, got %v", err)
 			}
+
 			if got.ID == "" {
 				t.Fatal("expected id to be present")
 			}

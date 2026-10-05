@@ -37,6 +37,16 @@ func Validate(pf *PipelineFile) error {
 
 	errCache := validateCacheDef("pipeline.cache", pf.Pipeline.Cache)
 	errs = append(errs, errCache...)
+	if pf.Pipeline.ApplicationVersion != nil {
+		config := versioning.ApplicationVersionConfig{
+			Value:    pf.Pipeline.ApplicationVersion.Value,
+			Template: pf.Pipeline.ApplicationVersion.Template,
+			File:     pf.Pipeline.ApplicationVersion.File,
+		}
+		if err := versioning.ValidateApplicationVersionConfig(config); err != nil {
+			errs = append(errs, ValidationError{Field: "pipeline.application_version", Message: err.Error()})
+		}
+	}
 
 	// top-level env keys
 	for key := range pf.Env {

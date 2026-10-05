@@ -19,9 +19,16 @@ type PipelineFile struct {
 
 // PipelineMeta holds optional pipeline-level metadata from the YAML.
 type PipelineMeta struct {
-	Name  string    `yaml:"name"`
-	Image string    `yaml:"image"`
-	Cache *CacheDef `yaml:"cache,omitempty"`
+	Name               string                 `yaml:"name"`
+	Image              string                 `yaml:"image"`
+	Cache              *CacheDef              `yaml:"cache,omitempty"`
+	ApplicationVersion *ApplicationVersionDef `yaml:"application_version,omitempty"`
+}
+
+type ApplicationVersionDef struct {
+	Value    string `yaml:"value,omitempty"`
+	Template string `yaml:"template,omitempty"`
+	File     string `yaml:"file,omitempty"`
 }
 
 // StepDef is the YAML-facing definition for a single step.
