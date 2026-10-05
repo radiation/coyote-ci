@@ -325,6 +325,9 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 		return failed, nil
 	}
 	build = resolvedBuild
+	if build.ApplicationVersion != nil {
+		s.emitBuildPreparationLog(ctx, buildID, fmt.Sprintf("Resolved application version: %s", *build.ApplicationVersion))
+	}
 	if domain.NormalizeBuildTrigger(build.Trigger).Kind == domain.BuildTriggerKindArtifact {
 		s.emitBuildPreparationLog(ctx, buildID, "Preparing trigger artifact handoff")
 		if handoffErr := s.prepareTriggerArtifactHandoff(ctx, build); handoffErr != nil {

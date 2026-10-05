@@ -12,6 +12,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	executionsvc "github.com/radiation/coyote-ci/backend/internal/service/execution"
 )
 
 func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerRunnableStep, bool, error) {
@@ -89,7 +90,11 @@ func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerR
 			Cache:          claimedStep.Cache.Clone(),
 		}
 
-		return w.bindRunnableStepFromJob(ctx, runnableStep, claim), true, nil
+		boundStep, bindErr := w.bindRunnableStepFromJob(ctx, runnableStep, claim)
+		if bindErr != nil {
+			return WorkerRunnableStep{}, false, bindErr
+		}
+		return boundStep, true, nil
 	}
 
 	for _, build := range builds {
@@ -139,7 +144,11 @@ func (w *ExecutionWorkerService) ClaimRunnableStep(ctx context.Context) (WorkerR
 			Cache:          reclaimedStep.Cache.Clone(),
 		}
 
-		return w.bindRunnableStepFromJob(ctx, runnableStep, claim), true, nil
+		boundStep, bindErr := w.bindRunnableStepFromJob(ctx, runnableStep, claim)
+		if bindErr != nil {
+			return WorkerRunnableStep{}, false, bindErr
+		}
+		return boundStep, true, nil
 	}
 
 	if len(builds) > 0 {
@@ -178,6 +187,10 @@ func (w *ExecutionWorkerService) claimRunnableStepFromJobs(ctx context.Context) 
 	if executionKind == "" {
 		executionKind = domain.ExecutionKindShell
 	}
+	environment, envErr := w.environmentFromDurableBuild(ctx, job.BuildID, workerEnvFromJob(job))
+	if envErr != nil {
+		return WorkerRunnableStep{}, false, envErr
+	}
 	runnable := WorkerRunnableStep{
 		BuildID:          job.BuildID,
 		JobID:            job.ID,
@@ -193,7 +206,7 @@ func (w *ExecutionWorkerService) claimRunnableStepFromJobs(ctx context.Context) 
 		Image:            job.Image,
 		Command:          workerCommandFromJob(job),
 		Args:             workerArgsFromJob(job),
-		Env:              workerEnvFromJob(job),
+		Env:              environment,
 		WorkingDir:       workerDefaultString(job.WorkingDir, "."),
 		TimeoutSeconds:   workerTimeoutFromJob(job),
 		Cache:            claimedStep.Cache.Clone(),
@@ -305,27 +318,46 @@ func (w *ExecutionWorkerService) mirrorJobClaimToStep(ctx context.Context, job d
 	return domain.BuildStep{}, buildsvc.ErrInvalidBuildStepTransition
 }
 
-func (w *ExecutionWorkerService) bindRunnableStepFromJob(ctx context.Context, step WorkerRunnableStep, claim repository.StepClaim) WorkerRunnableStep {
+func (w *ExecutionWorkerService) bindRunnableStepFromJob(ctx context.Context, step WorkerRunnableStep, claim repository.StepClaim) (WorkerRunnableStep, error) {
 	if step.StepID == "" {
-		return step
+		return step, nil
 	}
 
 	job, claimed, err := w.builds.ClaimJobByStepID(ctx, step.StepID, claim)
 	if err != nil || !claimed {
-		return step
+		return step, nil
+	}
+	environment, envErr := w.environmentFromDurableBuild(ctx, job.BuildID, workerEnvFromJob(job))
+	if envErr != nil {
+		return WorkerRunnableStep{}, envErr
 	}
 
 	step.JobID = job.ID
 	step.Image = job.Image
 	step.Command = workerCommandFromJob(job)
 	step.Args = workerArgsFromJob(job)
-	step.Env = workerEnvFromJob(job)
+	step.Env = environment
 	step.WorkingDir = workerDefaultString(job.WorkingDir, ".")
 	if job.TimeoutSeconds != nil {
 		step.TimeoutSeconds = workerMaxInt(*job.TimeoutSeconds, 0)
 	}
 
-	return step
+	return step, nil
+}
+
+func (w *ExecutionWorkerService) environmentFromDurableBuild(ctx context.Context, buildID string, environment map[string]string) (map[string]string, error) {
+	build, err := w.builds.GetBuild(ctx, buildID)
+	if err != nil {
+		return nil, err
+	}
+	if build.ApplicationVersion == nil {
+		return environment, nil
+	}
+	if environment == nil {
+		environment = map[string]string{}
+	}
+	environment[executionsvc.ApplicationVersionEnvironmentKey] = *build.ApplicationVersion
+	return environment, nil
 }
 
 func (w *ExecutionWorkerService) ensureBuildRunning(ctx context.Context, buildID string) error {

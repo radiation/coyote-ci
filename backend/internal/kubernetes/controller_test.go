@@ -18,6 +18,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
@@ -32,6 +33,7 @@ func TestControllerCreatesDeterministicSecureJob(t *testing.T) {
 	if err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
+
 	job := client.jobs[jobName(step.JobID)]
 	if job == nil {
 		t.Fatal("expected Kubernetes Job")
@@ -60,6 +62,62 @@ func TestControllerCreatesDeterministicSecureJob(t *testing.T) {
 	}
 	assertEphemeralStorage(t, container, buildEphemeralStorageRequest, buildEphemeralStorageLimit)
 	assertBuildResources(t, container)
+}
+
+func TestControllerInjectsPersistedApplicationVersionIntoPipelineBuildPod(t *testing.T) {
+	ctx := context.Background()
+	buildRepo := memoryrepo.NewBuildRepository()
+	executionJobRepo := memoryrepo.NewExecutionJobRepository()
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	buildService.SetExecutionJobRepository(executionJobRepo)
+
+	pipelineYAML := `
+version: 1
+pipeline:
+  application_version:
+    template: "0.0.{build_number}"
+steps:
+  - name: verify-version
+    run: echo "$COYOTE_APPLICATION_VERSION"
+    env:
+      COYOTE_APPLICATION_VERSION: user-value
+`
+	build, createErr := buildService.CreateBuildFromPipeline(ctx, buildsvc.CreatePipelineBuildInput{
+		ProjectID:    "project-1",
+		PipelineYAML: pipelineYAML,
+	})
+	if createErr != nil {
+		t.Fatalf("create pipeline build: %v", createErr)
+	}
+
+	worker := workersvc.NewExecutionWorkerService(buildService)
+	client := newFakeClient()
+	controller := NewController(client, worker, nil, "ci")
+	if reconcileErr := controller.Reconcile(ctx); reconcileErr != nil {
+		t.Fatalf("reconcile pipeline build: %v", reconcileErr)
+	}
+
+	persisted, getErr := buildRepo.GetByID(ctx, build.ID)
+	if getErr != nil {
+		t.Fatalf("get persisted build: %v", getErr)
+	}
+	if persisted.ApplicationVersion == nil || *persisted.ApplicationVersion != "0.0.1" {
+		t.Fatalf("persisted application version=%v, want 0.0.1", persisted.ApplicationVersion)
+	}
+	jobs, jobsErr := executionJobRepo.GetJobsByBuildID(ctx, build.ID)
+	if jobsErr != nil {
+		t.Fatalf("get execution jobs: %v", jobsErr)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("execution jobs=%d, want 1", len(jobs))
+	}
+	job := client.jobs[jobName(jobs[0].ID)]
+	if job == nil {
+		t.Fatal("expected Kubernetes Job")
+	}
+	if got := environmentValue(job.Spec.Template.Spec.Containers[0].Env, "COYOTE_APPLICATION_VERSION"); got != "0.0.1" {
+		t.Fatalf("pod application version environment=%q, want 0.0.1", got)
+	}
 }
 
 func TestBuildJobUsesCommandTimeoutWithLifecycleAllowance(t *testing.T) {

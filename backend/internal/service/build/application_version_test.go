@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,7 +28,8 @@ steps:
 		Status:             domain.BuildStatusQueued,
 		PipelineConfigYAML: &pipelineYAML,
 	}}
-	svc := NewBuildService(repo, nil, nil)
+	logSink := &fakeLogSink{}
+	svc := NewBuildService(repo, nil, logSink)
 
 	build, prepErr := svc.PrepareBuildExecution(context.Background(), "build-1")
 	if prepErr != nil {
@@ -35,6 +37,9 @@ steps:
 	}
 	if build.ApplicationVersion == nil || *build.ApplicationVersion != "0.4.137" {
 		t.Fatalf("application version=%v, want 0.4.137", build.ApplicationVersion)
+	}
+	if !slices.Contains(logSink.lines, "Resolved application version: 0.4.137") {
+		t.Fatalf("expected application version preparation log, got %#v", logSink.lines)
 	}
 
 	reprepared, repeatErr := svc.resolveApplicationVersionForBuild(context.Background(), "build-1")
