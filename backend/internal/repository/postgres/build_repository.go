@@ -98,6 +98,7 @@ func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domai
 	if build.CurrentStepIndex < 0 {
 		build.CurrentStepIndex = 0
 	}
+
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
 	}
@@ -176,6 +177,33 @@ func (r *BuildRepository) Create(ctx context.Context, build domain.Build) (domai
 	}
 
 	return build, nil
+}
+
+func (r *BuildRepository) SetApplicationVersionIfUnset(ctx context.Context, id string, version string) (domain.Build, error) {
+	const query = `
+		UPDATE builds
+		SET application_version = $2
+		WHERE id = $1
+		  AND (application_version IS NULL OR application_version = $2)
+		RETURNING ` + buildColumns + `
+	`
+	normalizedID := strings.TrimSpace(id)
+	normalizedVersion := strings.TrimSpace(version)
+	build, err := scanBuild(r.db.QueryRowContext(ctx, query, normalizedID, normalizedVersion))
+	if err == nil {
+		return build, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.Build{}, err
+	}
+	existing, getErr := r.GetByID(ctx, normalizedID)
+	if getErr != nil {
+		return domain.Build{}, getErr
+	}
+	if existing.ApplicationVersion != nil && strings.TrimSpace(*existing.ApplicationVersion) != normalizedVersion {
+		return domain.Build{}, repository.ErrApplicationVersionConflict
+	}
+	return domain.Build{}, repository.ErrBuildNotFound
 }
 
 func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error) {

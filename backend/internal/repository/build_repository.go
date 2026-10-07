@@ -11,6 +11,7 @@ import (
 var ErrBuildNotFound = errors.New("build not found")
 var ErrInvalidBuildStatusTransition = errors.New("invalid build status transition")
 var ErrInvalidBuildStepTransition = errors.New("invalid build step transition")
+var ErrApplicationVersionConflict = errors.New("application version is already set to a different value")
 
 // StepUpdate contains the fields to update on a build step.
 type StepUpdate struct {
@@ -111,6 +112,7 @@ type BuildRepository interface {
 	ListByJobID(ctx context.Context, jobID string) ([]domain.Build, error)
 	ListLatestByJobIDs(ctx context.Context, jobIDs []string) (map[string]domain.Build, error)
 	GetByID(ctx context.Context, id string) (domain.Build, error)
+	SetApplicationVersionIfUnset(ctx context.Context, id string, version string) (domain.Build, error)
 	UpdateStatus(ctx context.Context, id string, status domain.BuildStatus, errorMessage *string) (domain.Build, error)
 	UpdateSourceCommitSHA(ctx context.Context, id string, commitSHA string) (domain.Build, error)
 	UpdateSourceProvenance(ctx context.Context, id string, update SourceProvenanceUpdate) (domain.Build, error)

@@ -101,6 +101,8 @@ func TestParse_FullConfig(t *testing.T) {
 		"pipeline:",
 		"  name: backend-ci",
 		"  image: golang:1.24",
+		"  application_version:",
+		"    template: 0.4.{build_number}",
 		"env:",
 		"  KEY: value",
 		"steps:",
@@ -128,6 +130,9 @@ func TestParse_FullConfig(t *testing.T) {
 	}
 	if pf.Pipeline.Image != "golang:1.24" {
 		t.Errorf("expected pipeline image golang:1.24, got %q", pf.Pipeline.Image)
+	}
+	if pf.Pipeline.ApplicationVersion == nil || pf.Pipeline.ApplicationVersion.Template != "0.4.{build_number}" {
+		t.Fatalf("application version=%#v, want template", pf.Pipeline.ApplicationVersion)
 	}
 	if pf.Artifacts.Declarations[0].Version == nil {
 		t.Fatalf("expected first artifact declaration version config")

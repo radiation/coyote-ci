@@ -291,6 +291,21 @@ func (r *fakeBuildRepository) GetByID(_ context.Context, _ string) (domain.Build
 	return r.build, nil
 }
 
+func (r *fakeBuildRepository) SetApplicationVersionIfUnset(_ context.Context, id string, version string) (domain.Build, error) {
+	if r.updateErr != nil {
+		return domain.Build{}, r.updateErr
+	}
+	if r.build.ID != "" && r.build.ID != id {
+		return domain.Build{}, repository.ErrBuildNotFound
+	}
+	trimmed := strings.TrimSpace(version)
+	if r.build.ApplicationVersion != nil && *r.build.ApplicationVersion != trimmed {
+		return domain.Build{}, repository.ErrApplicationVersionConflict
+	}
+	r.build.ApplicationVersion = &trimmed
+	return r.build, nil
+}
+
 func (r *fakeBuildRepository) UpdateStatus(_ context.Context, id string, status domain.BuildStatus, errorMessage *string) (domain.Build, error) {
 	r.updateCalls++
 	r.updatedID = id

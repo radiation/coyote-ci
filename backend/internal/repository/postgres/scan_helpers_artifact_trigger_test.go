@@ -81,7 +81,7 @@ func TestScanBuild_MapsArtifactTriggerFields(t *testing.T) {
 	deleted := true
 
 	rows := sqlmock.NewRows(buildMockColumns).AddRow(
-		"build-1", int64(42), "project-1", "job-1", 0, "success", now, queuedAt, startedAt, finishedAt, 2, 0, "rerun-1", int64(1), "done",
+		"build-1", int64(42), "project-1", "job-1", 0, "success", now, queuedAt, startedAt, finishedAt, 2, 0, "rerun-1", int64(1), "done", nil,
 		nil, nil, nil,
 		"version: 1", "pipeline", "repo", ".coyote/pipeline.yml", "https://github.com/example/repo.git", "main", "abc123",
 		"Author", "author@example.com", "Committer", "committer@example.com",
@@ -126,7 +126,7 @@ func TestScanBuild_MapsArtifactTriggerFields(t *testing.T) {
 func TestScanBuildList_DefaultsExternalImageSourceAndMapsArtifactTriggerFields(t *testing.T) {
 	now := time.Now().UTC()
 	build, err := scanBuildList(stubRowScanner{values: []any{
-		"build-2", int64(7), "project-1", sql.NullString{}, 5, "queued", now, sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, 0, 1, sql.NullString{}, sql.NullInt64{}, sql.NullString{},
+		"build-2", int64(7), "project-1", sql.NullString{}, 5, "queued", now, sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, 0, 1, sql.NullString{}, sql.NullInt64{}, sql.NullString{}, sql.NullString{},
 		"pipeline", "repo", ".coyote/pipeline.yml", "https://github.com/example/repo.git", "main", "abc123",
 		sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{},
 		"artifact", sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullBool{}, sql.NullString{}, sql.NullString{}, sql.NullString{},

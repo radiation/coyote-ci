@@ -19,21 +19,22 @@ const (
 )
 
 type Build struct {
-	ID               string
-	BuildNumber      int64
-	ProjectID        string
-	JobID            *string
-	Priority         int
-	Status           BuildStatus
-	CreatedAt        time.Time
-	QueuedAt         *time.Time
-	StartedAt        *time.Time
-	FinishedAt       *time.Time
-	CurrentStepIndex int
-	AttemptNumber    int
-	RerunOfBuildID   *string
-	RerunFromStepIdx *int
-	ErrorMessage     *string
+	ID                 string
+	BuildNumber        int64
+	ProjectID          string
+	JobID              *string
+	Priority           int
+	Status             BuildStatus
+	CreatedAt          time.Time
+	QueuedAt           *time.Time
+	StartedAt          *time.Time
+	FinishedAt         *time.Time
+	CurrentStepIndex   int
+	AttemptNumber      int
+	RerunOfBuildID     *string
+	RerunFromStepIdx   *int
+	ErrorMessage       *string
+	ApplicationVersion *string
 
 	// Repository identity is snapshotted from a registered job repository.
 	RegisteredRepositoryID *string

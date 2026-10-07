@@ -13,10 +13,10 @@ type rowScanner interface {
 }
 
 // buildColumns is the canonical column list for build SELECT/RETURNING clauses (full detail).
-const buildColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, registered_repository_id, scm_connection_id, provider_repository_id, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, source_author_name, source_author_email, source_committer_name, source_committer_email, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, trigger_producer_project_id, trigger_producer_job_id, trigger_producer_build_id, trigger_artifact_id, trigger_artifact_path, trigger_artifact_name, trigger_artifact_size_bytes, trigger_artifact_checksum_sha256, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id, pull_request_number, pull_request_action, pull_request_url, pull_request_base_ref, pull_request_base_sha, pull_request_head_ref, pull_request_head_sha, pull_request_source_mode`
+const buildColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, application_version, registered_repository_id, scm_connection_id, provider_repository_id, pipeline_config_yaml, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, source_author_name, source_author_email, source_committer_name, source_committer_email, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, trigger_producer_project_id, trigger_producer_job_id, trigger_producer_build_id, trigger_artifact_id, trigger_artifact_path, trigger_artifact_name, trigger_artifact_size_bytes, trigger_artifact_checksum_sha256, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id, pull_request_number, pull_request_action, pull_request_url, pull_request_base_ref, pull_request_base_sha, pull_request_head_ref, pull_request_head_sha, pull_request_source_mode`
 
 // buildListColumns is a minimal column list used for list queries (omits large pipeline YAML).
-const buildListColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, source_author_name, source_author_email, source_committer_name, source_committer_email, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, trigger_producer_project_id, trigger_producer_job_id, trigger_producer_build_id, trigger_artifact_id, trigger_artifact_path, trigger_artifact_name, trigger_artifact_size_bytes, trigger_artifact_checksum_sha256, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id, pull_request_number, pull_request_action, pull_request_url, pull_request_base_ref, pull_request_base_sha, pull_request_head_ref, pull_request_head_sha, pull_request_source_mode`
+const buildListColumns = `id, build_number, project_id, job_id, priority, status, created_at, queued_at, started_at, finished_at, current_step_index, attempt_number, rerun_of_build_id, rerun_from_step_index, error_message, application_version, pipeline_name, pipeline_source, pipeline_path, repo_url, ref, commit_sha, source_author_name, source_author_email, source_committer_name, source_committer_email, trigger_kind, scm_provider, event_type, trigger_repository_owner, trigger_repository_name, trigger_repository_url, trigger_raw_ref, trigger_ref, trigger_ref_type, trigger_ref_name, trigger_deleted, trigger_commit_sha, trigger_delivery_id, trigger_actor, trigger_producer_project_id, trigger_producer_job_id, trigger_producer_build_id, trigger_artifact_id, trigger_artifact_path, trigger_artifact_name, trigger_artifact_size_bytes, trigger_artifact_checksum_sha256, requested_image_ref, resolved_image_ref, image_source_kind, managed_image_id, managed_image_version_id, pull_request_number, pull_request_action, pull_request_url, pull_request_base_ref, pull_request_base_sha, pull_request_head_ref, pull_request_head_sha, pull_request_source_mode`
 
 var queueEntryColumns = qualifyColumns("b", buildListColumns) + `, p.name, p.slug, j.name, running_job.claimed_by, running_job.claim_expires_at`
 
@@ -57,6 +57,7 @@ func scanBuildList(scanner rowScanner) (domain.Build, error) {
 		&nf.rerunOfBuildID,
 		&nf.rerunFromStepIdx,
 		&nf.errorMessage,
+		&nf.applicationVersion,
 		&nf.pipelineName,
 		&nf.pipelineSource,
 		&nf.pipelinePath,
@@ -131,6 +132,7 @@ func scanBuild(scanner rowScanner) (domain.Build, error) {
 		&nf.rerunOfBuildID,
 		&nf.rerunFromStepIdx,
 		&nf.errorMessage,
+		&nf.applicationVersion,
 		&nf.registeredRepositoryID,
 		&nf.scmConnectionID,
 		&nf.providerRepositoryID,
@@ -201,6 +203,7 @@ type buildNullFields struct {
 	rerunOfBuildID                sql.NullString
 	rerunFromStepIdx              sql.NullInt64
 	errorMessage                  sql.NullString
+	applicationVersion            sql.NullString
 	registeredRepositoryID        sql.NullString
 	scmConnectionID               sql.NullString
 	providerRepositoryID          sql.NullString
@@ -285,6 +288,10 @@ func (nf *buildNullFields) applyTo(build *domain.Build) {
 	if nf.errorMessage.Valid {
 		v := nf.errorMessage.String
 		build.ErrorMessage = &v
+	}
+	if nf.applicationVersion.Valid {
+		v := nf.applicationVersion.String
+		build.ApplicationVersion = &v
 	}
 	if nf.registeredRepositoryID.Valid {
 		value := nf.registeredRepositoryID.String
@@ -492,6 +499,7 @@ func scanQueueEntry(scanner rowScanner) (domain.QueueEntry, error) {
 		&nf.rerunOfBuildID,
 		&nf.rerunFromStepIdx,
 		&nf.errorMessage,
+		&nf.applicationVersion,
 		&nf.pipelineName,
 		&nf.pipelineSource,
 		&nf.pipelinePath,

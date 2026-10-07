@@ -380,6 +380,72 @@ func TestPrepareBuildExecution_HandsOffTriggerArtifactIntoWorkspace(t *testing.T
 	}
 }
 
+func TestPrepareBuildExecution_ResolvesApplicationVersionFromHandedOffTriggerArtifact(t *testing.T) {
+	ctx := context.Background()
+	workspaceRoot := t.TempDir()
+	storageRoot := t.TempDir()
+	body := []byte("1.2.3\n")
+	checksumBytes := sha256.Sum256(body)
+	checksum := hex.EncodeToString(checksumBytes[:])
+	store := artifact.NewFilesystemStore(storageRoot)
+	if _, saveErr := store.Save(ctx, "producer/VERSION", strings.NewReader(string(body))); saveErr != nil {
+		t.Fatalf("seed artifact store: %v", saveErr)
+	}
+
+	pipelineYAML := `
+version: 1
+pipeline:
+  application_version:
+    file: .coyote/trigger-artifacts/VERSION
+steps:
+  - name: build
+    run: true
+`
+	producerProjectID := "project-1"
+	producerBuildID := "build-upstream"
+	artifactID := "artifact-version"
+	artifactPath := "VERSION"
+	repo := &fakeBuildRepository{build: domain.Build{
+		ID:                 "build-downstream",
+		ProjectID:          producerProjectID,
+		Status:             domain.BuildStatusQueued,
+		PipelineConfigYAML: &pipelineYAML,
+		Trigger: domain.BuildTrigger{
+			Kind:                   domain.BuildTriggerKindArtifact,
+			ProducerProjectID:      &producerProjectID,
+			ProducerBuildID:        &producerBuildID,
+			ArtifactID:             &artifactID,
+			ArtifactPath:           &artifactPath,
+			ArtifactChecksumSHA256: &checksum,
+		},
+	}}
+	artifactRepo := &fakeArtifactRepository{artifacts: map[string][]domain.BuildArtifact{
+		producerBuildID: {{
+			ID:              artifactID,
+			BuildID:         producerBuildID,
+			LogicalPath:     artifactPath,
+			StorageKey:      "producer/VERSION",
+			StorageProvider: domain.StorageProviderFilesystem,
+			SizeBytes:       int64(len(body)),
+			ChecksumSHA256:  &checksum,
+		}},
+	}}
+
+	svc := NewBuildService(repo, nil, &fakeLogSink{})
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(store), workspaceRoot)
+
+	build, prepErr := svc.PrepareBuildExecution(ctx, "build-downstream")
+	if prepErr != nil {
+		t.Fatalf("prepare build execution: %v", prepErr)
+	}
+	if build.Status != domain.BuildStatusRunning {
+		t.Fatalf("build status=%q, want running", build.Status)
+	}
+	if build.ApplicationVersion == nil || *build.ApplicationVersion != "1.2.3" {
+		t.Fatalf("application version=%v, want 1.2.3", build.ApplicationVersion)
+	}
+}
+
 func TestPrepareBuildExecution_FailsBuildWhenTriggerArtifactMissing(t *testing.T) {
 	producerProjectID := "project-1"
 	producerBuildID := "build-upstream"

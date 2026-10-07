@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	executionsvc "github.com/radiation/coyote-ci/backend/internal/service/execution"
 )
 
 type fakeExecutionWorkerBoundary struct {
@@ -913,6 +915,52 @@ func TestExecutionWorkerService_ClaimRunnableStep_ClaimsJobDirectly(t *testing.T
 	}
 	if boundary.startCalls != 1 {
 		t.Fatalf("expected start build call once, got %d", boundary.startCalls)
+	}
+}
+
+func TestExecutionWorkerService_EnvironmentFromDurableBuild(t *testing.T) {
+	version := "1.2.3"
+	tests := []struct {
+		name        string
+		builds      []domain.Build
+		environment map[string]string
+		want        map[string]string
+		wantErr     error
+	}{
+		{
+			name:        "preserves environment without application version",
+			builds:      []domain.Build{{ID: "build-1"}},
+			environment: map[string]string{"A": "value"},
+			want:        map[string]string{"A": "value"},
+		},
+		{
+			name:   "creates environment for application version",
+			builds: []domain.Build{{ID: "build-1", ApplicationVersion: &version}},
+			want:   map[string]string{executionsvc.ApplicationVersionEnvironmentKey: version},
+		},
+		{
+			name:    "returns missing build error",
+			wantErr: buildsvc.ErrBuildNotFound,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			worker := NewExecutionWorkerService(&fakeExecutionWorkerBoundary{listBuildsResp: testCase.builds})
+			got, environmentErr := worker.environmentFromDurableBuild(context.Background(), "build-1", testCase.environment)
+			if testCase.wantErr != nil {
+				if !errors.Is(environmentErr, testCase.wantErr) {
+					t.Fatalf("environment error=%v, want %v", environmentErr, testCase.wantErr)
+				}
+				return
+			}
+			if environmentErr != nil {
+				t.Fatalf("environment from durable build: %v", environmentErr)
+			}
+			if !reflect.DeepEqual(got, testCase.want) {
+				t.Fatalf("environment=%#v, want %#v", got, testCase.want)
+			}
+		})
 	}
 }
 

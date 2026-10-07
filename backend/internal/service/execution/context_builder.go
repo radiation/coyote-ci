@@ -17,6 +17,8 @@ import (
 var ErrBuildNotFound = errors.New("build not found")
 var ErrExecutionJobNotFound = errors.New("execution job not found")
 
+const ApplicationVersionEnvironmentKey = "COYOTE_APPLICATION_VERSION"
+
 // StepExecutionContext is the canonical execution plan for one step execution.
 type StepExecutionContext struct {
 	Build          domain.Build
@@ -101,6 +103,12 @@ func (b *StepExecutionContextBuilder) Build(ctx context.Context, request runner.
 	// Ensure the execution request carries the resolved image for the runner.
 	if strings.TrimSpace(boundRequest.Image) == "" {
 		boundRequest.Image = executionImage
+	}
+	if build.ApplicationVersion != nil {
+		if boundRequest.Env == nil {
+			boundRequest.Env = map[string]string{}
+		}
+		boundRequest.Env[ApplicationVersionEnvironmentKey] = *build.ApplicationVersion
 	}
 
 	var chunkAppender logs.StepLogChunkAppender

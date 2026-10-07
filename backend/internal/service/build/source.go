@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service/execution"
 	"github.com/radiation/coyote-ci/backend/internal/source"
+	"github.com/radiation/coyote-ci/backend/internal/versioning"
 )
 
 const buildPreparationLogStepName = "build-prep"
@@ -320,10 +322,27 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 			if updateErr != nil {
 				return domain.Build{}, mapRepoErr(updateErr)
 			}
+
 			log.Printf("build preparation failed: build_id=%s duration_ms=%d reason=%q", buildID, time.Since(prepStartedAt).Milliseconds(), handoffErr.Error())
 			return failed, nil
 		}
 		s.emitBuildPreparationLog(ctx, buildID, "Trigger artifact handoff complete")
+	}
+	resolvedBuild, versionErr := s.resolveApplicationVersionForBuild(ctx, buildID)
+	if versionErr != nil {
+		message := fmt.Sprintf("application version resolution failed: %v", versionErr)
+		s.emitBuildPreparationLog(ctx, buildID, "Application version resolution failed")
+		s.emitBuildPreparationLog(ctx, buildID, formatFailureReasonLine(message))
+		failed, updateErr := s.persistBuildStatus(ctx, buildID, domain.BuildStatusFailed, &message)
+		if updateErr != nil {
+			return domain.Build{}, mapRepoErr(updateErr)
+		}
+		log.Printf("build preparation failed: build_id=%s duration_ms=%d reason=%q", buildID, time.Since(prepStartedAt).Milliseconds(), message)
+		return failed, nil
+	}
+	build = resolvedBuild
+	if build.ApplicationVersion != nil {
+		s.emitBuildPreparationLog(ctx, buildID, fmt.Sprintf("Resolved application version: %s", *build.ApplicationVersion))
 	}
 	s.emitBuildPreparationLog(ctx, buildID, "Build workspace ready")
 
@@ -333,6 +352,44 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 	}
 	log.Printf("build preparation completed: build_id=%s duration_ms=%d", buildID, time.Since(prepStartedAt).Milliseconds())
 	return runningBuild, nil
+}
+
+func (s *BuildService) resolveApplicationVersionForBuild(ctx context.Context, buildID string) (domain.Build, error) {
+	build, err := s.buildRepo.GetByID(ctx, buildID)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	if build.ApplicationVersion != nil {
+		return build, nil
+	}
+	if build.PipelineConfigYAML == nil || strings.TrimSpace(*build.PipelineConfigYAML) == "" {
+		return build, nil
+	}
+
+	resolved, err := pipeline.LoadAndResolve([]byte(*build.PipelineConfigYAML))
+	if err != nil {
+		return domain.Build{}, fmt.Errorf("load pipeline application version configuration: %w", err)
+	}
+	config := resolved.ApplicationVersion
+	if config.Empty() {
+		return build, nil
+	}
+
+	var version string
+	if strings.TrimSpace(config.File) != "" {
+		workspaceRoot := s.currentWorkspaceRoot()
+		if workspaceRoot == "" {
+			return domain.Build{}, ErrExecutionWorkspaceRootNotConfigured
+		}
+		version, err = versioning.ReadApplicationVersionFile(filepath.Join(workspaceRoot, buildID), config.File)
+	} else {
+		version, err = versioning.ResolveApplicationVersion(config, build)
+	}
+	if err != nil {
+		return domain.Build{}, err
+	}
+
+	return s.buildRepo.SetApplicationVersionIfUnset(ctx, buildID, version)
 }
 
 func classifyBuildSourceFailureReason(err error, sourceSpec execution.ResolvedBuildSourceSpec) string {

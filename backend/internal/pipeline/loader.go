@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/versioning"
 
 	"gopkg.in/yaml.v3"
 )
@@ -115,13 +116,25 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 	}
 
 	return &ResolvedPipeline{
-		Name:      pf.Pipeline.Name,
-		Image:     strings.TrimSpace(pf.Pipeline.Image),
-		Env:       mergedPipelineEnv,
-		Steps:     steps,
-		Plan:      ExecutionPlan{Nodes: nodes},
-		Artifacts: ResolvedArtifacts{Paths: append([]string{}, pf.Artifacts.Paths...), Declarations: append([]domain.ArtifactDeclaration(nil), pf.Artifacts.Declarations...)},
-		Cache:     pipelineCache.Clone(),
+		Name:               pf.Pipeline.Name,
+		Image:              strings.TrimSpace(pf.Pipeline.Image),
+		Env:                mergedPipelineEnv,
+		ApplicationVersion: resolveApplicationVersion(pf.Pipeline.ApplicationVersion),
+		Steps:              steps,
+		Plan:               ExecutionPlan{Nodes: nodes},
+		Artifacts:          ResolvedArtifacts{Paths: append([]string{}, pf.Artifacts.Paths...), Declarations: append([]domain.ArtifactDeclaration(nil), pf.Artifacts.Declarations...)},
+		Cache:              pipelineCache.Clone(),
+	}
+}
+
+func resolveApplicationVersion(def *ApplicationVersionDef) versioning.ApplicationVersionConfig {
+	if def == nil {
+		return versioning.ApplicationVersionConfig{}
+	}
+	return versioning.ApplicationVersionConfig{
+		Value:    strings.TrimSpace(def.Value),
+		Template: strings.TrimSpace(def.Template),
+		File:     strings.TrimSpace(def.File),
 	}
 }
 
