@@ -48,8 +48,8 @@ func (r *BuildRepository) Create(_ context.Context, build domain.Build) (domain.
 		return domain.Build{}, err
 	}
 
-	r.builds[build.ID] = build
-	return build, nil
+	r.storeBuildLocked(build)
+	return cloneBuildApplicationVersion(build), nil
 }
 
 // CancelBuild terminalizes a cancelable build and cancellable steps atomically under lock.
@@ -100,9 +100,9 @@ func (r *BuildRepository) CancelBuild(_ context.Context, id string, reason strin
 		build.FinishedAt = &canceledAt
 	}
 	build.ErrorMessage = reasonPtr
-	r.builds[id] = build
+	r.storeBuildLocked(build)
 
-	return build, updatedSteps, nil
+	return cloneBuildApplicationVersion(build), updatedSteps, nil
 }
 
 func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error) {
@@ -131,7 +131,7 @@ func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Buil
 		build.QueuedAt = &now
 	}
 
-	r.builds[build.ID] = build
+	r.storeBuildLocked(build)
 
 	cloned := make([]domain.BuildStep, 0, len(steps))
 	for _, step := range steps {
@@ -148,7 +148,7 @@ func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Buil
 
 	r.buildSteps[build.ID] = cloned
 
-	return build, nil
+	return cloneBuildApplicationVersion(build), nil
 }
 
 func (r *BuildRepository) assignBuildNumberLocked(build *domain.Build) {
@@ -210,7 +210,7 @@ func (r *BuildRepository) List(_ context.Context) ([]domain.Build, error) {
 
 	builds := make([]domain.Build, 0, len(r.builds))
 	for _, build := range r.builds {
-		builds = append(builds, build)
+		builds = append(builds, cloneBuildApplicationVersion(build))
 	}
 
 	sort.Slice(builds, func(i, j int) bool {
@@ -232,7 +232,7 @@ func (r *BuildRepository) ListActive(_ context.Context) ([]domain.Build, error) 
 		if build.Status != domain.BuildStatusPreparing && build.Status != domain.BuildStatusQueued && build.Status != domain.BuildStatusRunning {
 			continue
 		}
-		builds = append(builds, build)
+		builds = append(builds, cloneBuildApplicationVersion(build))
 	}
 
 	sort.Slice(builds, func(i, j int) bool {
@@ -288,7 +288,7 @@ func (r *BuildRepository) ListQueue(_ context.Context, params repository.QueueLi
 		if statusFilter != "" && string(build.Status) != statusFilter {
 			continue
 		}
-		entries = append(entries, domain.QueueEntry{Build: build})
+		entries = append(entries, domain.QueueEntry{Build: cloneBuildApplicationVersion(build)})
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
@@ -363,7 +363,7 @@ func (r *BuildRepository) ListByJobID(_ context.Context, jobID string) ([]domain
 	builds := make([]domain.Build, 0)
 	for _, build := range r.builds {
 		if build.JobID != nil && *build.JobID == jobID {
-			builds = append(builds, build)
+			builds = append(builds, cloneBuildApplicationVersion(build))
 		}
 	}
 
@@ -404,7 +404,7 @@ func (r *BuildRepository) ListLatestByJobIDs(_ context.Context, jobIDs []string)
 		}
 		existing, exists := latest[jobID]
 		if !exists || build.CreatedAt.After(existing.CreatedAt) || (build.CreatedAt.Equal(existing.CreatedAt) && build.ID < existing.ID) {
-			latest[jobID] = build
+			latest[jobID] = cloneBuildApplicationVersion(build)
 		}
 	}
 
@@ -420,7 +420,7 @@ func (r *BuildRepository) GetByID(_ context.Context, id string) (domain.Build, e
 		return domain.Build{}, repository.ErrBuildNotFound
 	}
 
-	return build, nil
+	return cloneBuildApplicationVersion(build), nil
 }
 
 func (r *BuildRepository) SetApplicationVersionIfUnset(_ context.Context, id string, version string) (domain.Build, error) {
@@ -438,13 +438,13 @@ func (r *BuildRepository) SetApplicationVersionIfUnset(_ context.Context, id str
 	}
 	if build.ApplicationVersion != nil {
 		if *build.ApplicationVersion == trimmed {
-			return build, nil
+			return cloneBuildApplicationVersion(build), nil
 		}
 		return domain.Build{}, repository.ErrApplicationVersionConflict
 	}
 	build.ApplicationVersion = &trimmed
-	r.builds[id] = build
-	return build, nil
+	r.storeBuildLocked(build)
+	return cloneBuildApplicationVersion(build), nil
 }
 
 func (r *BuildRepository) UpdateStatus(_ context.Context, id string, status domain.BuildStatus, errorMessage *string) (domain.Build, error) {
@@ -473,9 +473,9 @@ func (r *BuildRepository) UpdateStatus(_ context.Context, id string, status doma
 		build.ErrorMessage = nil
 	}
 
-	r.builds[id] = build
+	r.storeBuildLocked(build)
 
-	return build, nil
+	return cloneBuildApplicationVersion(build), nil
 }
 
 func (r *BuildRepository) UpdateSourceCommitSHA(_ context.Context, id string, commitSHA string) (domain.Build, error) {
@@ -505,8 +505,8 @@ func (r *BuildRepository) UpdateSourceProvenance(_ context.Context, id string, u
 	build.SourceCommitterEmail = readOptionalStringPtr(update.CommitterEmail)
 	build.Source = domain.NewSourceSpec(readOptionalString(build.RepoURL), readOptionalString(build.Ref), readOptionalString(build.CommitSHA))
 
-	r.builds[id] = build
-	return build, nil
+	r.storeBuildLocked(build)
+	return cloneBuildApplicationVersion(build), nil
 }
 
 func (r *BuildRepository) UpdateImageExecution(_ context.Context, id string, requestedRef *string, resolvedRef *string, sourceKind domain.ImageSourceKind, managedImageID *string, managedImageVersionID *string) (domain.Build, error) {
@@ -524,8 +524,8 @@ func (r *BuildRepository) UpdateImageExecution(_ context.Context, id string, req
 	build.ManagedImageID = managedImageID
 	build.ManagedImageVersionID = managedImageVersionID
 
-	r.builds[id] = build
-	return build, nil
+	r.storeBuildLocked(build)
+	return cloneBuildApplicationVersion(build), nil
 }
 
 func (r *BuildRepository) QueueBuild(_ context.Context, id string, steps []domain.BuildStep) (domain.Build, error) {
@@ -544,7 +544,7 @@ func (r *BuildRepository) QueueBuild(_ context.Context, id string, steps []domai
 	}
 	build.CurrentStepIndex = 0
 	build.ErrorMessage = nil
-	r.builds[id] = build
+	r.storeBuildLocked(build)
 
 	cloned := make([]domain.BuildStep, 0, len(steps))
 	for _, step := range steps {
@@ -561,7 +561,7 @@ func (r *BuildRepository) QueueBuild(_ context.Context, id string, steps []domai
 
 	r.buildSteps[id] = cloned
 
-	return build, nil
+	return cloneBuildApplicationVersion(build), nil
 }
 
 func (r *BuildRepository) GetStepsByBuildID(_ context.Context, buildID string) ([]domain.BuildStep, error) {
@@ -935,7 +935,7 @@ func (r *BuildRepository) completeStepLocked(request repository.CompleteStepRequ
 			}
 		}
 
-		r.builds[request.BuildID] = build
+		r.storeBuildLocked(build)
 		r.buildSteps[request.BuildID] = steps
 		return repository.CompleteStepResult{Step: cloneStep(steps[idx]), Outcome: repository.StepCompletionCompleted}, nil
 	}
@@ -953,9 +953,22 @@ func (r *BuildRepository) UpdateCurrentStepIndex(_ context.Context, id string, c
 	}
 
 	build.CurrentStepIndex = currentStepIndex
-	r.builds[id] = build
+	r.storeBuildLocked(build)
 
-	return build, nil
+	return cloneBuildApplicationVersion(build), nil
+}
+
+func (r *BuildRepository) storeBuildLocked(build domain.Build) {
+	r.builds[build.ID] = cloneBuildApplicationVersion(build)
+}
+
+func cloneBuildApplicationVersion(build domain.Build) domain.Build {
+	if build.ApplicationVersion == nil {
+		return build
+	}
+	version := *build.ApplicationVersion
+	build.ApplicationVersion = &version
+	return build
 }
 
 func cloneStep(step domain.BuildStep) domain.BuildStep {

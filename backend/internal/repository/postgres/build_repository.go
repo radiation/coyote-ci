@@ -187,18 +187,20 @@ func (r *BuildRepository) SetApplicationVersionIfUnset(ctx context.Context, id s
 		  AND (application_version IS NULL OR application_version = $2)
 		RETURNING ` + buildColumns + `
 	`
-	build, err := scanBuild(r.db.QueryRowContext(ctx, query, strings.TrimSpace(id), strings.TrimSpace(version)))
+	normalizedID := strings.TrimSpace(id)
+	normalizedVersion := strings.TrimSpace(version)
+	build, err := scanBuild(r.db.QueryRowContext(ctx, query, normalizedID, normalizedVersion))
 	if err == nil {
 		return build, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return domain.Build{}, err
 	}
-	existing, getErr := r.GetByID(ctx, id)
+	existing, getErr := r.GetByID(ctx, normalizedID)
 	if getErr != nil {
 		return domain.Build{}, getErr
 	}
-	if existing.ApplicationVersion != nil && strings.TrimSpace(*existing.ApplicationVersion) != strings.TrimSpace(version) {
+	if existing.ApplicationVersion != nil && strings.TrimSpace(*existing.ApplicationVersion) != normalizedVersion {
 		return domain.Build{}, repository.ErrApplicationVersionConflict
 	}
 	return domain.Build{}, repository.ErrBuildNotFound

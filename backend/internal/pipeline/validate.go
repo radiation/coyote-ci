@@ -43,7 +43,9 @@ func Validate(pf *PipelineFile) error {
 			Template: pf.Pipeline.ApplicationVersion.Template,
 			File:     pf.Pipeline.ApplicationVersion.File,
 		}
-		if err := versioning.ValidateApplicationVersionConfig(config); err != nil {
+		if config.Empty() {
+			errs = append(errs, ValidationError{Field: "pipeline.application_version", Message: "exactly one of value, template, or file must be configured"})
+		} else if err := versioning.ValidateApplicationVersionConfig(config); err != nil {
 			errs = append(errs, ValidationError{Field: "pipeline.application_version", Message: err.Error()})
 		}
 	}
