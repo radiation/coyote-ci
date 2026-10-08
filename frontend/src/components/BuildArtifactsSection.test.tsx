@@ -45,6 +45,7 @@ function makeBuild(overrides: Partial<Build> = {}): Build {
     current_step_index: 1,
     attempt_number: 1,
     error_message: null,
+    application_version: null,
     repository_url: "https://github.com/example/platform",
     source_ref: "refs/heads/main",
     source_commit_sha: "abcdef1234567890",

@@ -68,6 +68,7 @@ export interface Build {
   rerun_of_build_id?: string | null;
   rerun_from_step_index?: number | null;
   error_message: string | null;
+  application_version: string | null;
   pipeline_config_yaml?: string | null;
   pipeline_name?: string | null;
   pipeline_source?: string | null;

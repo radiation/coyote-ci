@@ -99,24 +99,26 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 	ref := "refs/heads/main"
 	errorMessage := "boom"
 	pipeline := "default"
+	applicationVersion := "0.0.9"
 	build := api.BuildResponse{
-		ID:           "build-1",
-		ProjectID:    "project-1",
-		ProjectName:  &projectName,
-		JobID:        &jobID,
-		JobName:      stringPtr("coyote-ci"),
-		Status:       "failed",
-		CreatedAt:    "2026-07-04T00:00:00Z",
-		StartedAt:    stringPtr("2026-07-04T00:00:01Z"),
-		FinishedAt:   stringPtr("2026-07-04T00:00:03Z"),
-		SourceRef:    &ref,
-		SourceSHA:    &sha,
-		TriggeredBy:  stringPtr("trigger-user"),
-		ErrorMessage: &errorMessage,
-		PipelineName: &pipeline,
-		PullRequest:  &api.PullRequestResponse{Number: 42, Action: "synchronize", URL: "https://github.com/octo/repo/pull/42", BaseRef: "main", BaseSHA: "base1234567890", HeadRef: "feature/pr-42", HeadSHA: "head9876543210", SourceMode: "head"},
-		SCMStatus:    &api.BuildSCMStatusResponse{Reportable: true, Configured: true, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: stringPtr("abcdef1234567890"), Context: stringPtr("coyote/project-1/job-1"), DesiredState: stringPtr("failure"), DeliveryState: stringPtr("retry_waiting"), Attempts: intPtr(2), NextAttemptAt: stringPtr("2026-07-17T14:30:00Z"), LastError: stringPtr("GitHub rate limit exceeded")},
-		CurrentSteps: []api.BuildCurrentStepResponse{{ID: "step-0", Index: 0, Name: "lint", Status: "running", StartedAt: stringPtr("2026-07-04T00:00:01Z")}, {ID: "step-2", Index: 2, Name: "test", Status: "running", StartedAt: stringPtr("2026-07-04T00:00:02Z")}},
+		ID:                 "build-1",
+		ProjectID:          "project-1",
+		ProjectName:        &projectName,
+		JobID:              &jobID,
+		JobName:            stringPtr("coyote-ci"),
+		Status:             "failed",
+		CreatedAt:          "2026-07-04T00:00:00Z",
+		StartedAt:          stringPtr("2026-07-04T00:00:01Z"),
+		FinishedAt:         stringPtr("2026-07-04T00:00:03Z"),
+		SourceRef:          &ref,
+		SourceSHA:          &sha,
+		TriggeredBy:        stringPtr("trigger-user"),
+		ErrorMessage:       &errorMessage,
+		ApplicationVersion: &applicationVersion,
+		PipelineName:       &pipeline,
+		PullRequest:        &api.PullRequestResponse{Number: 42, Action: "synchronize", URL: "https://github.com/octo/repo/pull/42", BaseRef: "main", BaseSHA: "base1234567890", HeadRef: "feature/pr-42", HeadSHA: "head9876543210", SourceMode: "head"},
+		SCMStatus:          &api.BuildSCMStatusResponse{Reportable: true, Configured: true, Provider: "github", RepositoryOwner: "octo", RepositoryName: "repo", CommitSHA: stringPtr("abcdef1234567890"), Context: stringPtr("coyote/project-1/job-1"), DesiredState: stringPtr("failure"), DeliveryState: stringPtr("retry_waiting"), Attempts: intPtr(2), NextAttemptAt: stringPtr("2026-07-17T14:30:00Z"), LastError: stringPtr("GitHub rate limit exceeded")},
+		CurrentSteps:       []api.BuildCurrentStepResponse{{ID: "step-0", Index: 0, Name: "lint", Status: "running", StartedAt: stringPtr("2026-07-04T00:00:01Z")}, {ID: "step-2", Index: 2, Name: "test", Status: "running", StartedAt: stringPtr("2026-07-04T00:00:02Z")}},
 	}
 	steps := []api.BuildStepResponse{{StepIndex: 1, Name: "test", Status: "failed", ExitCode: intPtr(1), Job: &api.ExecutionJobResponse{Name: jobName}}}
 	payload := makeBuildStatusPayload("https://example.com/base", build, steps)
@@ -135,6 +137,16 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 	if !strings.Contains(payload.Build.WebURL, "/base/builds/build-1?step=1") {
 		t.Fatalf("unexpected web url: %s", payload.Build.WebURL)
 	}
+	if payload.Build.ApplicationVersion == nil || *payload.Build.ApplicationVersion != applicationVersion {
+		t.Fatalf("application version=%v, want %q", payload.Build.ApplicationVersion, applicationVersion)
+	}
+	payloadJSON, payloadMarshalErr := json.Marshal(payload)
+	if payloadMarshalErr != nil {
+		t.Fatalf("marshal status payload: %v", payloadMarshalErr)
+	}
+	if !strings.Contains(string(payloadJSON), `"application_version":"0.0.9"`) {
+		t.Fatalf("expected application version in status JSON, got %s", payloadJSON)
+	}
 
 	buf := &bytes.Buffer{}
 	if err := writeBuildStatusHuman(buf, payload); err != nil {
@@ -148,6 +160,13 @@ func TestBuildHelperFormattingAndFallbacks(t *testing.T) {
 	}
 
 	minimal := buildStatusPayload{Build: buildStatusView{ID: "build-2", ProjectID: "project-2", Status: "running", CreatedAt: "2026-07-04T00:00:00Z"}}
+	minimalJSON, minimalMarshalErr := json.Marshal(minimal)
+	if minimalMarshalErr != nil {
+		t.Fatalf("marshal minimal status payload: %v", minimalMarshalErr)
+	}
+	if strings.Contains(string(minimalJSON), "application_version") {
+		t.Fatalf("did not expect application version in minimal status JSON, got %s", minimalJSON)
+	}
 	buf.Reset()
 	if err := writeBuildStatusHuman(buf, minimal); err != nil {
 		t.Fatalf("writeBuildStatusHuman minimal failed: %v", err)

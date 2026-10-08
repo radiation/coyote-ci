@@ -35,6 +35,30 @@ func TestToBuildResponse_MapsOptionalPullRequestSnapshot(t *testing.T) {
 	}
 }
 
+func TestToBuildResponse_MapsApplicationVersion(t *testing.T) {
+	version := "0.0.9"
+	response := toBuildResponse(domain.Build{
+		ID:                 "build-1",
+		ProjectID:          "project-1",
+		Status:             domain.BuildStatusQueued,
+		CreatedAt:          time.Now().UTC(),
+		ApplicationVersion: &version,
+	})
+	if response.ApplicationVersion == nil || *response.ApplicationVersion != version {
+		t.Fatalf("application version=%v, want %q", response.ApplicationVersion, version)
+	}
+
+	response = toBuildResponse(domain.Build{
+		ID:        "build-2",
+		ProjectID: "project-1",
+		Status:    domain.BuildStatusQueued,
+		CreatedAt: time.Now().UTC(),
+	})
+	if response.ApplicationVersion != nil {
+		t.Fatalf("application version=%v, want nil", response.ApplicationVersion)
+	}
+}
+
 func TestToExecutionJobResponse_MapsOptionalTiming(t *testing.T) {
 	startedAt := time.Date(2026, time.September, 14, 10, 0, 0, 0, time.UTC)
 	finishedAt := startedAt.Add(5 * time.Minute)

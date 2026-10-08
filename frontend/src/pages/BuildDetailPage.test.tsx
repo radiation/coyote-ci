@@ -60,6 +60,7 @@ function makeBuild(overrides: Partial<Build> = {}): Build {
     finished_at: "2026-03-30T00:02:05Z",
     current_step_index: 1,
     error_message: "Build failed during deploy.",
+    application_version: null,
     pipeline_source: "repo",
     pipeline_path: "scenarios/success-basic/coyote.yml",
     source_author_name: null,
@@ -329,6 +330,7 @@ describe("BuildDetailPage", () => {
     ).toBeNull();
     expect(within(summaryPanel).getByText("Priority")).toBeTruthy();
     expect(within(summaryPanel).getByText("9")).toBeTruthy();
+    expect(within(summaryPanel).queryByText("Version")).toBeNull();
     expect(
       within(summaryPanel).getByRole("link", {
         name: "View full provenance details",
@@ -349,6 +351,22 @@ describe("BuildDetailPage", () => {
       ),
     ).toEqual(["Back to builds", "View project", "View job", "Rerun"]);
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+
+  it("renders the application version in build summary metadata", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({ application_version: "0.0.9" }),
+    );
+
+    renderPage();
+
+    await screen.findByRole("heading", { level: 2, name: "release #21" });
+    const summaryPanel = screen
+      .getByText(/Build #21 · Build ID build-1 · Attempt 1/)
+      .closest("section") as HTMLElement;
+
+    expect(within(summaryPanel).getByText("Version")).toBeTruthy();
+    expect(within(summaryPanel).getByText("0.0.9")).toBeTruthy();
   });
 
   it("uses the fetched job name when the build payload omits job_name", async () => {

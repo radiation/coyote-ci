@@ -303,6 +303,9 @@ export function BuildSummaryPanel({
             "—",
         )
       : null,
+    textValue(build.application_version)
+      ? metadataItem("Version", textValue(build.application_version) ?? "—")
+      : null,
     metadataItem("Priority", String(build.priority)),
   ].filter((item): item is { label: string; value: ReactNode } =>
     Boolean(item),

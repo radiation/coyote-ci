@@ -144,6 +144,7 @@ type BuildResponse struct {
 	RerunOfBuildID                *string                    `json:"rerun_of_build_id,omitempty"`
 	RerunFromStepIndex            *int                       `json:"rerun_from_step_index,omitempty"`
 	ErrorMessage                  *string                    `json:"error_message"`
+	ApplicationVersion            *string                    `json:"application_version"`
 	PipelineConfigYAML            *string                    `json:"pipeline_config_yaml,omitempty"`
 	PipelineName                  *string                    `json:"pipeline_name,omitempty"`
 	PipelineSource                *string                    `json:"pipeline_source,omitempty"`

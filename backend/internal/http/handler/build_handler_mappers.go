@@ -40,6 +40,7 @@ func toBuildResponse(build domain.Build, project ...*domain.Project) api.BuildRe
 		RerunOfBuildID:                build.RerunOfBuildID,
 		RerunFromStepIndex:            build.RerunFromStepIdx,
 		ErrorMessage:                  build.ErrorMessage,
+		ApplicationVersion:            build.ApplicationVersion,
 		PipelineConfigYAML:            build.PipelineConfigYAML,
 		PipelineName:                  build.PipelineName,
 		PipelineSource:                build.PipelineSource,

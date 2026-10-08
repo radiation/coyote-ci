@@ -11,20 +11,22 @@ func TestBuildEnvelope_JSONShape(t *testing.T) {
 	queuedAt := "2026-03-20T12:01:00Z"
 	startedAt := "2026-03-20T12:02:00Z"
 	finishedAt := "2026-03-20T12:03:00Z"
+	applicationVersion := "0.0.9"
 	payload := BuildEnvelope{Data: BuildResponse{
-		ID:               "build-1",
-		ProjectID:        "project-1",
-		Status:           "running",
-		CreatedAt:        "2026-03-20T12:00:00Z",
-		SourceRef:        stringPtr("main"),
-		SourceSHA:        stringPtr("abc123"),
-		TriggerType:      "manual",
-		TriggeredBy:      stringPtr("octocat"),
-		QueuedAt:         &queuedAt,
-		StartedAt:        &startedAt,
-		FinishedAt:       &finishedAt,
-		CurrentStepIndex: 2,
-		ErrorMessage:     &errMsg,
+		ID:                 "build-1",
+		ProjectID:          "project-1",
+		Status:             "running",
+		CreatedAt:          "2026-03-20T12:00:00Z",
+		SourceRef:          stringPtr("main"),
+		SourceSHA:          stringPtr("abc123"),
+		TriggerType:        "manual",
+		TriggeredBy:        stringPtr("octocat"),
+		QueuedAt:           &queuedAt,
+		StartedAt:          &startedAt,
+		FinishedAt:         &finishedAt,
+		CurrentStepIndex:   2,
+		ErrorMessage:       &errMsg,
+		ApplicationVersion: &applicationVersion,
 	}}
 
 	raw, err := json.Marshal(payload)
@@ -37,20 +39,46 @@ func TestBuildEnvelope_JSONShape(t *testing.T) {
 		t.Fatalf("unmarshal failed: %v", err)
 	}
 
-	data, ok := decoded["data"].(map[string]any)
-	if !ok {
+	data, dataOK := decoded["data"].(map[string]any)
+	if !dataOK {
 		t.Fatalf("expected data object, got %v", decoded)
 	}
 	if data["id"] != "build-1" || data["project_id"] != "project-1" || data["status"] != "running" {
 		t.Fatalf("unexpected build payload: %v", data)
 	}
-	if _, ok := data["created_at"]; !ok {
+	if _, createdAtOK := data["created_at"]; !createdAtOK {
 		t.Fatalf("expected created_at field in payload: %v", data)
 	}
 	for _, field := range []string{"queued_at", "started_at", "finished_at", "current_step_index", "error_message", "source_ref", "source_sha", "trigger_type", "triggered_by"} {
-		if _, ok := data[field]; !ok {
+		if _, fieldOK := data[field]; !fieldOK {
 			t.Fatalf("expected %s field in payload: %v", field, data)
 		}
+	}
+	if data["application_version"] != applicationVersion {
+		t.Fatalf("application_version=%v, want %q", data["application_version"], applicationVersion)
+	}
+
+	withoutVersion := BuildEnvelope{Data: BuildResponse{
+		ID:        "build-2",
+		ProjectID: "project-1",
+		Status:    "queued",
+		CreatedAt: "2026-03-20T12:00:00Z",
+	}}
+	withoutVersionRaw, withoutVersionMarshalErr := json.Marshal(withoutVersion)
+	if withoutVersionMarshalErr != nil {
+		t.Fatalf("marshal without version failed: %v", withoutVersionMarshalErr)
+	}
+	var withoutVersionDecoded map[string]any
+	withoutVersionUnmarshalErr := json.Unmarshal(withoutVersionRaw, &withoutVersionDecoded)
+	if withoutVersionUnmarshalErr != nil {
+		t.Fatalf("unmarshal without version failed: %v", withoutVersionUnmarshalErr)
+	}
+	withoutVersionData, withoutVersionDataOK := withoutVersionDecoded["data"].(map[string]any)
+	if !withoutVersionDataOK {
+		t.Fatalf("expected data object without version, got %v", withoutVersionDecoded)
+	}
+	if value, applicationVersionOK := withoutVersionData["application_version"]; !applicationVersionOK || value != nil {
+		t.Fatalf("application_version=%v, want explicit null", value)
 	}
 }
 

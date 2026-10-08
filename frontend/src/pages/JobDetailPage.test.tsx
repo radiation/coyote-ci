@@ -86,6 +86,7 @@ describe("JobDetailPage", () => {
         finished_at: null,
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
       {
         id: "build-recent-1",
@@ -102,6 +103,7 @@ describe("JobDetailPage", () => {
         finished_at: "2026-03-30T00:01:10Z",
         current_step_index: 0,
         error_message: null,
+        application_version: null,
         trigger_ref: "main",
       },
     ]);
@@ -219,6 +221,7 @@ describe("JobDetailPage", () => {
       finished_at: null,
       current_step_index: 0,
       error_message: null,
+      application_version: null,
     });
   });
 
@@ -662,6 +665,7 @@ describe("JobDetailPage", () => {
       finished_at: null,
       current_step_index: 0,
       error_message: null,
+      application_version: null,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Run Now" }));
@@ -790,6 +794,7 @@ describe("JobDetailPage", () => {
         finished_at: "2026-03-30T00:02:00Z",
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
       {
         id: "build-success-1",
@@ -806,6 +811,7 @@ describe("JobDetailPage", () => {
         finished_at: "2026-03-30T00:01:10Z",
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
     ]);
 
@@ -910,6 +916,7 @@ describe("JobDetailPage", () => {
         finished_at: null,
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
     ]);
 

@@ -31,6 +31,7 @@ function build(overrides: Partial<Build> = {}): Build {
     current_step_index: 0,
     attempt_number: 1,
     error_message: null,
+    application_version: null,
     ...overrides,
   };
 }

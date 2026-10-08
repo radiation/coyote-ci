@@ -63,7 +63,7 @@ func TestClient_BuildInspectionMethods(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.String() {
 		case "/api/builds/build-1":
-			_, _ = w.Write([]byte(`{"data":{"id":"build-1","project_id":"project-1","project_name":"Coyote","job_id":"job-1","job_name":"coyote-ci","status":"failed","created_at":"2026-07-04T00:00:00Z","queued_at":null,"started_at":"2026-07-04T00:00:10Z","finished_at":"2026-07-04T00:01:10Z","current_step_index":1,"attempt_number":1,"error_message":null,"trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"},"current_steps":[{"id":"step-run-1","index":0,"name":"lint","status":"running","started_at":"2026-07-04T00:00:12Z"}]}}`))
+			_, _ = w.Write([]byte(`{"data":{"id":"build-1","project_id":"project-1","project_name":"Coyote","job_id":"job-1","job_name":"coyote-ci","status":"failed","created_at":"2026-07-04T00:00:00Z","queued_at":null,"started_at":"2026-07-04T00:00:10Z","finished_at":"2026-07-04T00:01:10Z","current_step_index":1,"attempt_number":1,"error_message":null,"application_version":"0.0.9","trigger_type":"manual","trigger_kind":"manual","image":{"source_kind":"external"},"current_steps":[{"id":"step-run-1","index":0,"name":"lint","status":"running","started_at":"2026-07-04T00:00:12Z"}]}}`))
 		case "/api/builds/build-1/steps":
 			_, _ = w.Write([]byte(`{"data":{"build_id":"build-1","steps":[{"id":"step-1","build_id":"build-1","step_index":1,"name":"test","command":"go test ./...","status":"failed","image":{"source_kind":"external"},"job":{"id":"job-exec-1","build_id":"build-1","step_id":"step-1","name":"test","step_index":1,"attempt_number":1,"status":"failed","image":"golang:1.24","working_dir":"/workspace","command":["go","test","./..."],"command_preview":"go test ./...","environment":{},"spec_version":1,"created_at":"2026-07-04T00:00:00Z","outputs":[]},"worker_id":null,"started_at":"2026-07-04T00:00:10Z","finished_at":"2026-07-04T00:01:10Z","exit_code":1,"stdout":null,"stderr":null,"error_message":null}]}}`))
 		case "/api/builds/build-1/logs?failed=true&tail=5":
@@ -98,6 +98,9 @@ func TestClient_BuildInspectionMethods(t *testing.T) {
 	}
 	if build.JobName == nil || *build.JobName != "coyote-ci" || len(build.CurrentSteps) != 1 || build.CurrentSteps[0].Name != "lint" {
 		t.Fatalf("unexpected build response details: %+v", build)
+	}
+	if build.ApplicationVersion == nil || *build.ApplicationVersion != "0.0.9" {
+		t.Fatalf("application version=%v, want 0.0.9", build.ApplicationVersion)
 	}
 	if len(steps) != 1 || steps[0].Job == nil || steps[0].Job.Name != "test" {
 		t.Fatalf("unexpected step response: %+v", steps)
