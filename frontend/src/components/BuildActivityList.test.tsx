@@ -141,6 +141,7 @@ describe("BuildActivityList", () => {
                 finished_at: null,
                 current_step_index: 0,
                 error_message: null,
+                application_version: null,
                 trigger_ref: "release/1.0",
               },
             },
@@ -183,6 +184,7 @@ describe("BuildActivityList", () => {
                 finished_at: null,
                 current_step_index: 0,
                 error_message: null,
+                application_version: null,
               },
             },
           ]}

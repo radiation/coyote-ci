@@ -75,6 +75,7 @@ describe("DashboardPage", () => {
         finished_at: "2026-05-01T00:01:00Z",
         current_step_index: 2,
         error_message: "boom",
+        application_version: null,
         trigger_ref: "main",
       },
     ]);
@@ -155,6 +156,7 @@ describe("DashboardPage", () => {
         finished_at: null,
         current_step_index: 1,
         error_message: null,
+        application_version: null,
       },
     ]);
 
@@ -225,6 +227,7 @@ describe("DashboardPage", () => {
         finished_at: null,
         current_step_index: 1,
         error_message: null,
+        application_version: null,
       },
       {
         id: "build-new",
@@ -240,6 +243,7 @@ describe("DashboardPage", () => {
         finished_at: null,
         current_step_index: 1,
         error_message: null,
+        application_version: null,
       },
     ]);
 

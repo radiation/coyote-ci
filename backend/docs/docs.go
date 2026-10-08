@@ -5078,6 +5078,10 @@ const docTemplate = `{
                 "actor": {
                     "type": "string"
                 },
+                "application_version": {
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "attempt_number": {
                     "type": "integer"
                 },

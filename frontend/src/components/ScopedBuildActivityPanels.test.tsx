@@ -80,6 +80,7 @@ describe("ScopedBuildActivityPanels", () => {
         finished_at: null,
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
     ]);
 
@@ -142,6 +143,7 @@ describe("ScopedBuildActivityPanels", () => {
         finished_at: null,
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
     ]);
     mockedListJobsByProject.mockResolvedValue([
@@ -219,6 +221,7 @@ describe("ScopedBuildActivityPanels", () => {
         finished_at: null,
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
     ]);
     mockedListJobsByProject.mockResolvedValue([
@@ -271,6 +274,7 @@ describe("ScopedBuildActivityPanels", () => {
         finished_at: null,
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
       {
         id: "build-running",
@@ -285,6 +289,7 @@ describe("ScopedBuildActivityPanels", () => {
         finished_at: null,
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
       {
         id: "build-success",
@@ -299,6 +304,7 @@ describe("ScopedBuildActivityPanels", () => {
         finished_at: "2026-05-01T00:01:00Z",
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
     ]);
 

@@ -63,6 +63,7 @@ describe("QueuePage", () => {
       finished_at: "2026-03-24T00:00:30Z",
       current_step_index: 0,
       error_message: "build canceled by operator request",
+      application_version: null,
     });
     mockedListProjects.mockResolvedValue([
       {
@@ -151,6 +152,7 @@ describe("QueuePage", () => {
         finished_at: "2026-03-24T00:02:05Z",
         current_step_index: 0,
         error_message: "boom",
+        application_version: null,
       },
       {
         id: "build-canceled-1",
@@ -169,6 +171,7 @@ describe("QueuePage", () => {
         finished_at: "2026-03-24T00:03:00Z",
         current_step_index: 0,
         error_message: "build canceled by operator request",
+        application_version: null,
       },
       {
         id: "build-success-1",
@@ -187,6 +190,7 @@ describe("QueuePage", () => {
         finished_at: "2026-03-24T00:01:40Z",
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
       {
         id: "build-ignored-1",
@@ -205,6 +209,7 @@ describe("QueuePage", () => {
         finished_at: null,
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
     ]);
 
@@ -338,6 +343,7 @@ describe("QueuePage", () => {
         finished_at: "2026-03-24T00:02:05Z",
         current_step_index: 0,
         error_message: "boom",
+        application_version: null,
       },
     ]);
     mockedListJobsByProject.mockResolvedValue([

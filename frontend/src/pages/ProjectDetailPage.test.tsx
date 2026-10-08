@@ -163,6 +163,7 @@ describe("ProjectDetailPage", () => {
         finished_at: null,
         current_step_index: 0,
         error_message: null,
+        application_version: null,
       },
     ]);
     mockedUpsertProjectMember.mockResolvedValue({
