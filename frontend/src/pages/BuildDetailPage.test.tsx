@@ -369,6 +369,21 @@ describe("BuildDetailPage", () => {
     expect(within(summaryPanel).getByText("0.0.9")).toBeTruthy();
   });
 
+  it("omits blank application version metadata", async () => {
+    mockedGetBuild.mockResolvedValueOnce(
+      makeBuild({ application_version: "   " }),
+    );
+
+    renderPage();
+
+    await screen.findByRole("heading", { level: 2, name: "release #21" });
+    const summaryPanel = screen
+      .getByText(/Build #21 · Build ID build-1 · Attempt 1/)
+      .closest("section") as HTMLElement;
+
+    expect(within(summaryPanel).queryByText("Version")).toBeNull();
+  });
+
   it("uses the fetched job name when the build payload omits job_name", async () => {
     mockedGetBuild.mockResolvedValueOnce(
       makeBuild({

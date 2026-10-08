@@ -5079,7 +5079,8 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "application_version": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "attempt_number": {
                     "type": "integer"

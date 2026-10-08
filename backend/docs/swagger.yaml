@@ -475,6 +475,7 @@ definitions:
         type: string
       application_version:
         type: string
+        x-nullable: true
       attempt_number:
         type: integer
       build_number:

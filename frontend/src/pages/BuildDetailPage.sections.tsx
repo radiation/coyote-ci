@@ -255,6 +255,7 @@ export function BuildSummaryPanel({
   const currentStepLabel = stepsLoading
     ? "Loading…"
     : currentStepSummaryLabel(build.current_step_index, stepCounts.total);
+  const applicationVersion = textValue(build.application_version);
   const contextItems = [
     [
       textValue(build.trigger_kind),
@@ -303,9 +304,7 @@ export function BuildSummaryPanel({
             "—",
         )
       : null,
-    textValue(build.application_version)
-      ? metadataItem("Version", textValue(build.application_version) ?? "—")
-      : null,
+    applicationVersion ? metadataItem("Version", applicationVersion) : null,
     metadataItem("Priority", String(build.priority)),
   ].filter((item): item is { label: string; value: ReactNode } =>
     Boolean(item),
