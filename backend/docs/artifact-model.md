@@ -8,6 +8,7 @@ This repository currently uses four related artifact concepts:
 - Artifact version: an immutable version assignment for one artifact package that points at one concrete artifact instance.
 - Artifact channel: a mutable alias such as `latest` or `prod` that points at the current concrete artifact instance for one package.
 - VersionTag: the compatibility API read model returned by existing version-tag endpoints. Artifact-backed responses are assembled from artifact versions and artifact channels; managed image version tags remain backed by the legacy `version_tags` table.
+- Collected artifacts with a matching declaration inherit their build's resolved application version as an immutable artifact version by default. An artifact-local version template takes precedence; `version.inherit_application_version: false` opts out. Inherited versions do not create or move channels.
 
 Two intentional constraints for the current design:
 

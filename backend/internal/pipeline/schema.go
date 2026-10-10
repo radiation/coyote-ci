@@ -88,8 +88,9 @@ type artifactPathObject struct {
 }
 
 type artifactVersionSpec struct {
-	Template string `yaml:"template,omitempty"`
-	Channel  string `yaml:"channel,omitempty"`
+	Template                  string `yaml:"template,omitempty"`
+	Channel                   string `yaml:"channel,omitempty"`
+	InheritApplicationVersion *bool  `yaml:"inherit_application_version,omitempty"`
 }
 
 // UnmarshalYAML supports ergonomic artifact declarations while normalizing
@@ -174,8 +175,9 @@ func parseArtifactDeclaration(node *yaml.Node) (domain.ArtifactDeclaration, erro
 		}
 		if obj.Version != nil {
 			declaration.Version = &domain.ArtifactVersionDeclaration{
-				Template: obj.Version.Template,
-				Channel:  obj.Version.Channel,
+				Template:                  obj.Version.Template,
+				Channel:                   obj.Version.Channel,
+				InheritApplicationVersion: obj.Version.InheritApplicationVersion,
 			}
 		}
 		return declaration, nil

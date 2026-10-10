@@ -35,8 +35,9 @@ type BuildArtifact struct {
 type ArtifactInstance = BuildArtifact
 
 type ArtifactVersionDeclaration struct {
-	Template string
-	Channel  string
+	Template                  string
+	Channel                   string
+	InheritApplicationVersion *bool
 }
 
 // ArtifactDeclaration describes one artifact path declaration from pipeline config.

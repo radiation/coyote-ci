@@ -74,7 +74,7 @@ func Validate(pf *PipelineFile) error {
 			}
 		}
 		if declaration.Version != nil {
-			if err := versioning.ValidateArtifactVersionConfig(declaration.Version.Template, declaration.Version.Channel); err != nil {
+			if err := validateArtifactVersionDeclaration(declaration.Version); err != nil {
 				errs = append(errs, ValidationError{Field: field + ".version", Message: err.Error()})
 			}
 		}
@@ -365,7 +365,7 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 			}
 		}
 		if declaration.Version != nil {
-			if err := versioning.ValidateArtifactVersionConfig(declaration.Version.Template, declaration.Version.Channel); err != nil {
+			if err := validateArtifactVersionDeclaration(declaration.Version); err != nil {
 				errs = append(errs, ValidationError{Field: field + ".version", Message: err.Error()})
 			}
 		}
@@ -373,6 +373,22 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 
 	errs = append(errs, validateCacheDef(prefix+".cache", step.Cache)...)
 	return errs
+}
+
+func validateArtifactVersionDeclaration(declaration *domain.ArtifactVersionDeclaration) error {
+	if inherit := declaration.InheritApplicationVersion; inherit != nil {
+		switch {
+		case *inherit:
+			return fmt.Errorf("inherit_application_version must be false")
+		case strings.TrimSpace(declaration.Template) != "":
+			return fmt.Errorf("inherit_application_version cannot be combined with template")
+		case strings.TrimSpace(declaration.Channel) != "":
+			return fmt.Errorf("channel requires a template")
+		default:
+			return nil
+		}
+	}
+	return versioning.ValidateArtifactVersionConfig(declaration.Template, declaration.Channel)
 }
 
 func validImageBuildRepositoryPath(value string, allowCurrentDirectory bool) bool {

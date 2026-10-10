@@ -414,8 +414,11 @@ func mergeArtifactVersionDeclarations(preferred *domain.ArtifactVersionDeclarati
 		if strings.TrimSpace(merged.Channel) == "" {
 			merged.Channel = supplemental.Channel
 		}
+		if merged.InheritApplicationVersion == nil {
+			merged.InheritApplicationVersion = supplemental.InheritApplicationVersion
+		}
 	}
-	if strings.TrimSpace(merged.Template) == "" && strings.TrimSpace(merged.Channel) == "" {
+	if strings.TrimSpace(merged.Template) == "" && strings.TrimSpace(merged.Channel) == "" && merged.InheritApplicationVersion == nil {
 		return nil
 	}
 	return &merged

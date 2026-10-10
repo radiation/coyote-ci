@@ -1730,7 +1730,7 @@ func TestBuildService_RunStep_EmitsHighSignalPhaseMarkers(t *testing.T) {
 	)
 }
 
-func TestBuildService_RunStep_AutoTagsOutputsAfterTerminalSuccess(t *testing.T) {
+func TestBuildService_RunStep_InheritsPersistedApplicationVersionAfterArtifactCollection(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	buildID := "build-auto-tags"
 	jobID := "job-1"
@@ -1751,10 +1751,8 @@ func TestBuildService_RunStep_AutoTagsOutputsAfterTerminalSuccess(t *testing.T) 
 		"    run: make build",
 		"artifacts:",
 		"  - path: dist/**",
-		"    version:",
-		"      template: 0.1.{build_number}",
-		"      channel: latest",
 	}, "\n")
+	applicationVersion := "0.1.7"
 	repo := &fakeBuildRepository{
 		build: domain.Build{
 			ID:                 buildID,
@@ -1763,6 +1761,7 @@ func TestBuildService_RunStep_AutoTagsOutputsAfterTerminalSuccess(t *testing.T) 
 			JobID:              &jobID,
 			Status:             domain.BuildStatusRunning,
 			CurrentStepIndex:   0,
+			ApplicationVersion: &applicationVersion,
 			PipelineConfigYAML: &pipelineYAML,
 			CreatedAt:          time.Now().UTC(),
 		},
@@ -1794,8 +1793,8 @@ func TestBuildService_RunStep_AutoTagsOutputsAfterTerminalSuccess(t *testing.T) 
 	if tagErr != nil {
 		t.Fatalf("expected artifact tags, got %v", tagErr)
 	}
-	if len(tags) != 2 {
-		t.Fatalf("expected generated version and channel tags, got %#v", tags)
+	if len(tags) != 1 {
+		t.Fatalf("expected only inherited immutable version tag, got %#v", tags)
 	}
 	if got := artifactRepo.artifacts[buildID][0].ArtifactType; got != domain.ArtifactTypeUnknown {
 		t.Fatalf("expected inferred unknown artifact type for legacy declaration, got %q", got)
@@ -1805,10 +1804,10 @@ func TestBuildService_RunStep_AutoTagsOutputsAfterTerminalSuccess(t *testing.T) 
 		kinds[tag.Kind] = tag.Version
 	}
 	if kinds[domain.VersionTagKindVersion] != "0.1.7" {
-		t.Fatalf("expected generated version 0.1.7, got %#v", kinds)
+		t.Fatalf("expected inherited version 0.1.7, got %#v", kinds)
 	}
-	if kinds[domain.VersionTagKindChannel] != "latest" {
-		t.Fatalf("expected generated channel latest, got %#v", kinds)
+	if _, exists := kinds[domain.VersionTagKindChannel]; exists {
+		t.Fatalf("inherited version unexpectedly moved a channel: %#v", kinds)
 	}
 }
 
