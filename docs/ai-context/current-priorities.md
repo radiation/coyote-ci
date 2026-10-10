@@ -24,6 +24,7 @@ Near-term priorities include:
 ## Recent completed capabilities and current baseline
 
 - artifact lineage plus automatic generated artifact version/channel labels V1 is complete
+- versioned image publication uses a Build-owned application version as the exact Cloud Build/Artifact Registry tag, requires immutable Artifact Registry tags before versioned submission, and persists the registry-visible tag plus immutable digest reference; unversioned image builds preserve their existing behavior. Recovery is idempotent for the same execution job; content-addressed reuse across distinct Builds sharing a version tag remains deferred.
 - artifact-local generated version templates and channels are configured per artifact declaration, not a top-level `release` block; collected artifacts with a matching declaration otherwise inherit a resolved build application version unless opted out, without moving channels
 - notifications are an active product feature area after the artifact/provenance slice
 - local Mailpit-backed email notification plumbing is the first notifications slice; SMTP config lives in `backend/internal/platform/config`, transport plumbing lives in `backend/internal/platform/email`, and local inspection is via `http://localhost:8025`

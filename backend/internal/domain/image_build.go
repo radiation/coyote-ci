@@ -73,11 +73,12 @@ type ImageBuildSource struct {
 }
 
 type ImageBuildRequest struct {
-	ExecutionJobID string
-	Source         ImageBuildSource
-	Spec           RemoteImageBuildSpec
-	Timeout        time.Duration
-	Artifacts      []ImageBuildArtifact
+	ExecutionJobID          string
+	Source                  ImageBuildSource
+	Spec                    RemoteImageBuildSpec
+	PublishedImageReference string
+	Timeout                 time.Duration
+	Artifacts               []ImageBuildArtifact
 }
 
 type ImageBuildHandle struct {
@@ -86,28 +87,32 @@ type ImageBuildHandle struct {
 }
 
 type ImageBuildResult struct {
-	Status         ImageBuildStatus
-	ImageDigest    string
-	ExternalLogURL string
-	FailureDetail  string
-	Timing         *ExecutionTiming
+	Status                        ImageBuildStatus
+	PublishedImageReference       string
+	ImageDigest                   string
+	PublishedImageDigestReference string
+	ExternalLogURL                string
+	FailureDetail                 string
+	Timing                        *ExecutionTiming
 }
 
 type ExternalImageBuild struct {
-	ExecutionJobID       string
-	Provider             ImageBuildProvider
-	SubmissionState      ExternalImageBuildSubmissionState
-	ExternalBuildID      string
-	ExternalResourceName string
-	Source               ImageBuildSource
-	ConsumedArtifacts    []ImageBuildArtifact
-	TargetImageReference string
-	SubmittedAt          *time.Time
-	LastProviderStatus   string
-	TerminalResult       string
-	ImageDigest          string
-	ExternalLogURL       string
-	FailureDetail        string
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	ExecutionJobID                string
+	Provider                      ImageBuildProvider
+	SubmissionState               ExternalImageBuildSubmissionState
+	ExternalBuildID               string
+	ExternalResourceName          string
+	Source                        ImageBuildSource
+	ConsumedArtifacts             []ImageBuildArtifact
+	TargetImageReference          string
+	PublishedImageReference       string
+	PublishedImageDigestReference string
+	SubmittedAt                   *time.Time
+	LastProviderStatus            string
+	TerminalResult                string
+	ImageDigest                   string
+	ExternalLogURL                string
+	FailureDetail                 string
+	CreatedAt                     time.Time
+	UpdatedAt                     time.Time
 }

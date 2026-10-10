@@ -91,7 +91,7 @@ prerequisite.
 | --- | --- | --- | --- |
 | Server | `coyote-ci/coyote-server` | `coyote-gke-server@<project>.iam.gserviceaccount.com` | Cloud SQL Client, required Secret Manager secrets, and GCS object access for artifacts, cache archives, and workspace revisions. |
 | Migration | `coyote-ci/coyote-migrate` | `coyote-gke-migrate@<project>.iam.gserviceaccount.com` | Cloud SQL Client and only the database URL secret. |
-| Staging worker | `coyote-ci-staging/coyote-kubernetes-worker-staging` | `coyote-gke-staging-worker@<project>.iam.gserviceaccount.com` | Cloud SQL Client, staging database secret, GCS access, Cloud Build submission, and authority to use the Cloud Build runtime GSA. |
+| Staging worker | `coyote-ci-staging/coyote-kubernetes-worker-staging` | `coyote-gke-staging-worker@<project>.iam.gserviceaccount.com` | Cloud SQL Client, staging database secret, GCS access, Cloud Build submission, Artifact Registry read access, and authority to use the Cloud Build runtime GSA. |
 | Execution helpers | `coyote-ci-staging/coyote-workspace-helper` | none | Projected Kubernetes identity and server-issued capabilities only. |
 
 The server GSA needs GCS object write permission, including
@@ -104,6 +104,7 @@ The staging worker GSA needs:
 - Secret Manager access to `coyote-staging-database-url`;
 - appropriate GCS object access;
 - `roles/cloudbuild.builds.editor`;
+- `roles/artifactregistry.reader` on the configured Artifact Registry repository;
 - `roles/iam.serviceAccountUser` on the configured Cloud Build runtime GSA,
   such as `coyote-cloud-build@<project>.iam.gserviceaccount.com`.
 
@@ -303,7 +304,7 @@ code `124` commonly indicates the configured execution timeout.
 | `redirect_uri_mismatch` | Provider and deployment callback URIs differ. | Register and deploy the exact `https://<hostname>/auth/callback` value. |
 | Workspace publication GCS 403 | Server GSA cannot create/write workspace revision objects. | Grant required object access, including `storage.objects.create`, on the revision bucket. |
 | `image build execution controller is not configured` | Staging worker lacks Cloud Build configuration. | Set the required `GOOGLE_CLOUD_PROJECT` and `CLOUD_BUILD_*` inputs, then redeploy the worker. |
-| Cloud Build permission failure | Worker GSA lacks Cloud Build editor or runtime-service-account user permission. | Verify `roles/cloudbuild.builds.editor` and `roles/iam.serviceAccountUser` on the configured runtime GSA. |
+| Cloud Build or Artifact Registry permission failure | Worker GSA lacks Cloud Build editor, Artifact Registry reader, or runtime-service-account user permission. | Verify `roles/cloudbuild.builds.editor`, `roles/artifactregistry.reader` on the configured repository, and `roles/iam.serviceAccountUser` on the configured runtime GSA. |
 | `fatal: Needed a single revision` | Configured source ref is missing or cannot be fetched. | Verify the branch/ref exists remotely and check source-fetch credentials/access. |
 | Step exits `124` | Execution timeout was too short. | Increase the relevant pipeline/step timeout with cold-start headroom. |
 | Migration cannot reach Cloud SQL | Migration GSA, DB secret, DSN, or proxy sidecar is misconfigured. | Inspect migration Job and proxy logs; confirm Cloud SQL Client and `127.0.0.1:5432` DSN use. |

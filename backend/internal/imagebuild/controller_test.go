@@ -54,6 +54,175 @@ func TestControllerStagesSubmitsRenewsAndCompletesImageBuild(t *testing.T) {
 	}
 }
 
+func TestControllerPublishesPersistedApplicationVersionAndDigestReference(t *testing.T) {
+	execution := newExecutionFake(t)
+	version := "1.4.2"
+	execution.build.ApplicationVersion = &version
+	records := memoryrepo.NewExternalImageBuildRepository()
+	builder := &builderFake{result: domain.ImageBuildResult{Status: domain.ImageBuildStatusSuccess, PublishedImageReference: "registry.example/apps/coyote-ci/backend:1.4.2", ImageDigest: "sha256:abc", PublishedImageDigestReference: "registry.example/apps/coyote-ci/backend@sha256:abc"}}
+	inspector := &publicationInspectorFake{found: true, digestReference: "registry.example/apps/coyote-ci/backend@sha256:abc"}
+	controller, newErr := NewController(execution, records, builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+	controller.WithPublicationInspector(inspector)
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active || execution.result.Status != runner.RunStepStatusSuccess {
+		t.Fatalf("active=%t err=%v result=%+v", active, reconcileErr, execution.result)
+	}
+	if builder.request.PublishedImageReference != "registry.example/apps/coyote-ci/backend:1.4.2" {
+		t.Fatalf("published image=%q", builder.request.PublishedImageReference)
+	}
+	record, getErr := records.GetByExecutionJobID(context.Background(), execution.job.ID)
+	if getErr != nil || record.PublishedImageReference != builder.result.PublishedImageReference || record.PublishedImageDigestReference != builder.result.PublishedImageDigestReference {
+		t.Fatalf("record=%+v err=%v", record, getErr)
+	}
+}
+
+func TestControllerRejectsVersionedPublicationWithoutImmutableRegistryTags(t *testing.T) {
+	execution := newExecutionFake(t)
+	version := "1.4.2"
+	execution.build.ApplicationVersion = &version
+	records := memoryrepo.NewExternalImageBuildRepository()
+	builder := &builderFake{}
+	inspector := &publicationInspectorFake{immutableErr: errors.New("immutable tags disabled")}
+	controller, newErr := NewController(execution, records, builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+	controller.WithPublicationInspector(inspector)
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active || builder.submitCalls != 0 || execution.result.Status != runner.RunStepStatusFailed {
+		t.Fatalf("active=%t err=%v submit=%d result=%+v", active, reconcileErr, builder.submitCalls, execution.result)
+	}
+	record, getErr := records.GetByExecutionJobID(context.Background(), execution.job.ID)
+	if getErr != nil || record.SubmissionState != domain.ExternalImageBuildSubmissionTerminal || record.TerminalResult != string(domain.ImageBuildStatusFailed) || record.FailureDetail != inspector.immutableErr.Error() {
+		t.Fatalf("record=%+v err=%v", record, getErr)
+	}
+}
+
+func TestControllerRecoversTerminalPreSubmissionFailureWithoutProviderPolling(t *testing.T) {
+	execution := newExecutionFake(t)
+	version := "1.4.2"
+	execution.build.ApplicationVersion = &version
+	records := memoryrepo.NewExternalImageBuildRepository()
+	created, createErr := records.CreateIntent(context.Background(), domain.ExternalImageBuild{
+		ExecutionJobID:          execution.job.ID,
+		Provider:                domain.ImageBuildProviderCloudBuild,
+		TargetImageReference:    "coyote-ci/backend",
+		PublishedImageReference: "registry.example/apps/coyote-ci/backend:1.4.2",
+	})
+	if createErr != nil {
+		t.Fatalf("create intent: %v", createErr)
+	}
+	created.SubmissionState = domain.ExternalImageBuildSubmissionTerminal
+	created.TerminalResult = string(domain.ImageBuildStatusFailed)
+	created.FailureDetail = "immutable tags disabled"
+	if _, updateErr := records.Update(context.Background(), created); updateErr != nil {
+		t.Fatalf("persist terminal failure: %v", updateErr)
+	}
+	builder := &builderFake{}
+	controller, newErr := NewController(execution, records, builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+	controller.WithPublicationInspector(&publicationInspectorFake{})
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active || builder.getCalls != 0 || execution.result.Status != runner.RunStepStatusFailed || execution.result.Stderr != "immutable tags disabled" {
+		t.Fatalf("active=%t err=%v providerGets=%d result=%+v", active, reconcileErr, builder.getCalls, execution.result)
+	}
+}
+
+func TestControllerUsesPersistedPublicationReferenceDuringRecovery(t *testing.T) {
+	execution := newExecutionFake(t)
+	version := "1.4.2"
+	execution.build.ApplicationVersion = &version
+	records := memoryrepo.NewExternalImageBuildRepository()
+	persistedReference := "registry.example/previous/apps/coyote-ci/backend:1.4.2"
+	created, createErr := records.CreateIntent(context.Background(), domain.ExternalImageBuild{
+		ExecutionJobID:          execution.job.ID,
+		Provider:                domain.ImageBuildProviderCloudBuild,
+		TargetImageReference:    "coyote-ci/backend",
+		PublishedImageReference: persistedReference,
+	})
+	if createErr != nil {
+		t.Fatalf("create intent: %v", createErr)
+	}
+	created.SubmissionState = domain.ExternalImageBuildSubmissionStaged
+	if _, updateErr := records.Update(context.Background(), created); updateErr != nil {
+		t.Fatalf("persist staged intent: %v", updateErr)
+	}
+	builder := &builderFake{
+		resolvedTarget: "registry.example/current/apps/coyote-ci/backend:1.4.2",
+		result: domain.ImageBuildResult{
+			Status:                        domain.ImageBuildStatusSuccess,
+			ImageDigest:                   "sha256:abc",
+			PublishedImageReference:       persistedReference,
+			PublishedImageDigestReference: "registry.example/previous/apps/coyote-ci/backend@sha256:abc",
+		},
+	}
+	inspector := &publicationInspectorFake{
+		found:           true,
+		digestReference: "registry.example/previous/apps/coyote-ci/backend@sha256:abc",
+	}
+	controller, newErr := NewController(execution, records, builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+	controller.WithPublicationInspector(inspector)
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active {
+		t.Fatalf("active=%t err=%v", active, reconcileErr)
+	}
+	if builder.request.PublishedImageReference != persistedReference {
+		t.Fatalf("submitted reference=%q, want %q", builder.request.PublishedImageReference, persistedReference)
+	}
+	if inspector.digestReferenceRequest != persistedReference {
+		t.Fatalf("digest lookup reference=%q, want %q", inspector.digestReferenceRequest, persistedReference)
+	}
+}
+
+func TestControllerRejectsVersionedPublicationConflict(t *testing.T) {
+	execution := newExecutionFake(t)
+	version := "1.4.2"
+	execution.build.ApplicationVersion = &version
+	builder := &builderFake{result: domain.ImageBuildResult{Status: domain.ImageBuildStatusSuccess, PublishedImageReference: "registry.example/apps/coyote-ci/backend:1.4.2", ImageDigest: "sha256:new", PublishedImageDigestReference: "registry.example/apps/coyote-ci/backend@sha256:new"}}
+	inspector := &publicationInspectorFake{found: true, digestReference: "registry.example/apps/coyote-ci/backend@sha256:old"}
+	controller, newErr := NewController(execution, memoryrepo.NewExternalImageBuildRepository(), builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+	controller.WithPublicationInspector(inspector)
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active || execution.result.Status != runner.RunStepStatusFailed || !strings.Contains(execution.result.Stderr, service.ErrImagePublicationConflict.Error()) {
+		t.Fatalf("active=%t err=%v result=%+v", active, reconcileErr, execution.result)
+	}
+}
+
+func TestControllerRecoversCompletedPublicationAfterIdentityPersistenceFailure(t *testing.T) {
+	execution := newExecutionFake(t)
+	records := &failingTerminalUpdateRepository{ExternalImageBuildRepository: memoryrepo.NewExternalImageBuildRepository(), failTerminalUpdate: true}
+	builder := &builderFake{result: domain.ImageBuildResult{Status: domain.ImageBuildStatusSuccess, PublishedImageReference: "registry.example/apps/coyote-ci/backend", ImageDigest: "sha256:abc", PublishedImageDigestReference: "registry.example/apps/coyote-ci/backend@sha256:abc"}}
+	controller, newErr := NewController(execution, records, builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if !active || reconcileErr == nil || builder.submitCalls != 1 || execution.completions != 0 {
+		t.Fatalf("first reconcile active=%t err=%v submits=%d completions=%d", active, reconcileErr, builder.submitCalls, execution.completions)
+	}
+	active, reconcileErr = controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active || builder.submitCalls != 1 || execution.result.Status != runner.RunStepStatusSuccess {
+		t.Fatalf("recovery active=%t err=%v submits=%d result=%+v", active, reconcileErr, builder.submitCalls, execution.result)
+	}
+}
+
 func TestControllerCompletesWhenTimingPersistenceFails(t *testing.T) {
 	execution := newExecutionFake(t)
 	execution.timingErr = errors.New("timing store unavailable")
@@ -519,6 +688,7 @@ func (r *imageBuildArtifactRepositoryFake) ListByStepID(_ context.Context, stepI
 
 type executionFake struct {
 	job         domain.ExecutionJob
+	build       domain.Build
 	step        workersvc.WorkerRunnableStep
 	renewCalls  int
 	renewLost   bool
@@ -536,14 +706,14 @@ func newExecutionFake(t *testing.T) *executionFake {
 	if marshalErr != nil {
 		t.Fatal(marshalErr)
 	}
-	return &executionFake{job: domain.ExecutionJob{ID: "job-1", BuildID: "build-1", Status: domain.ExecutionJobStatusRunning, ResolvedSpecJSON: string(spec)}, step: workersvc.WorkerRunnableStep{BuildID: "build-1", JobID: "job-1", ClaimToken: "claim"}}
+	return &executionFake{job: domain.ExecutionJob{ID: "job-1", BuildID: "build-1", Status: domain.ExecutionJobStatusRunning, ResolvedSpecJSON: string(spec)}, build: domain.Build{ID: "build-1"}, step: workersvc.WorkerRunnableStep{BuildID: "build-1", JobID: "job-1", ClaimToken: "claim"}}
 }
 
 func (f *executionFake) GetExecutionJob(context.Context, string) (domain.ExecutionJob, error) {
 	return f.job, nil
 }
 func (f *executionFake) GetBuild(context.Context, string) (domain.Build, error) {
-	return domain.Build{ID: "build-1"}, nil
+	return f.build, nil
 }
 func (f *executionFake) GetBuildSteps(context.Context, string) ([]domain.BuildStep, error) {
 	return f.steps, nil
@@ -569,8 +739,22 @@ type builderFake struct {
 	found                    bool
 	handle                   domain.ImageBuildHandle
 	result                   domain.ImageBuildResult
+	resolvedTarget           string
 	submitErr                error
 	submitCalls, cancelCalls int
+	getCalls                 int
+	request                  domain.ImageBuildRequest
+}
+
+func (f *builderFake) ResolveTargetImageReference(logicalName, applicationVersion string) (string, error) {
+	if f.resolvedTarget != "" {
+		return f.resolvedTarget, nil
+	}
+	target := "registry.example/apps/" + logicalName
+	if applicationVersion != "" {
+		target += ":" + applicationVersion
+	}
+	return target, nil
 }
 
 type retryableBuilderError struct {
@@ -582,8 +766,9 @@ func (e retryableBuilderError) Error() string   { return e.err.Error() }
 func (e retryableBuilderError) Unwrap() error   { return e.err }
 func (e retryableBuilderError) Retryable() bool { return e.retryable }
 
-func (f *builderFake) Submit(_ context.Context, _ domain.ImageBuildRequest) (domain.ImageBuildHandle, error) {
+func (f *builderFake) Submit(_ context.Context, request domain.ImageBuildRequest) (domain.ImageBuildHandle, error) {
 	f.submitCalls++
+	f.request = request
 	if f.submitErr != nil {
 		return domain.ImageBuildHandle{}, f.submitErr
 	}
@@ -593,6 +778,7 @@ func (f *builderFake) Submit(_ context.Context, _ domain.ImageBuildRequest) (dom
 	return f.handle, nil
 }
 func (f *builderFake) Get(context.Context, domain.ImageBuildHandle) (domain.ImageBuildResult, error) {
+	f.getCalls++
 	return f.result, nil
 }
 func (f *builderFake) Cancel(context.Context, domain.ImageBuildHandle) error {
@@ -601,6 +787,38 @@ func (f *builderFake) Cancel(context.Context, domain.ImageBuildHandle) error {
 }
 func (f *builderFake) FindByExecutionJobID(context.Context, string) (domain.ImageBuildHandle, bool, error) {
 	return f.handle, f.found, nil
+}
+
+type publicationInspectorFake struct {
+	immutableErr           error
+	immutableReference     string
+	digestReference        string
+	digestReferenceRequest string
+	found                  bool
+	resolveErr             error
+}
+
+type failingTerminalUpdateRepository struct {
+	repository.ExternalImageBuildRepository
+	failTerminalUpdate bool
+}
+
+func (r *failingTerminalUpdateRepository) Update(ctx context.Context, build domain.ExternalImageBuild) (domain.ExternalImageBuild, error) {
+	if r.failTerminalUpdate && build.SubmissionState == domain.ExternalImageBuildSubmissionTerminal {
+		r.failTerminalUpdate = false
+		return domain.ExternalImageBuild{}, errors.New("identity persistence unavailable")
+	}
+	return r.ExternalImageBuildRepository.Update(ctx, build)
+}
+
+func (f *publicationInspectorFake) EnsureImmutableTags(_ context.Context, reference string) error {
+	f.immutableReference = reference
+	return f.immutableErr
+}
+
+func (f *publicationInspectorFake) ResolvePublishedDigest(_ context.Context, reference string) (string, bool, error) {
+	f.digestReferenceRequest = reference
+	return f.digestReference, f.found, f.resolveErr
 }
 
 type stagerFake struct {
@@ -633,5 +851,6 @@ func (f failingSourceFake) OpenSourceArchive(context.Context, domain.Build, doma
 }
 
 var _ service.ImageBuilder = (*builderFake)(nil)
+var _ service.ImagePublicationInspector = (*publicationInspectorFake)(nil)
 var _ service.ImageBuildSourceStager = (*stagerFake)(nil)
 var _ service.WorkspaceSourceArchivePreparer = (*sourceFake)(nil)
