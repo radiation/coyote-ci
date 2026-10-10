@@ -34,6 +34,7 @@ type Controller struct {
 	service        executionService
 	records        repository.ExternalImageBuildRepository
 	builder        service.ImageBuilder
+	inspector      service.ImagePublicationInspector
 	stager         service.ImageBuildSourceStager
 	sources        service.WorkspaceSourceArchivePreparer
 	artifacts      repository.ArtifactRepository
@@ -44,6 +45,11 @@ type Controller struct {
 
 func (c *Controller) WithArtifactInputs(artifacts repository.ArtifactRepository, stores *artifactpkg.StoreResolver) *Controller {
 	c.artifacts, c.artifactStores = artifacts, stores
+	return c
+}
+
+func (c *Controller) WithPublicationInspector(inspector service.ImagePublicationInspector) *Controller {
+	c.inspector = inspector
 	return c
 }
 
@@ -67,14 +73,40 @@ func (c *Controller) ReconcileClaimed(ctx context.Context, step workersvc.Worker
 	if decodeErr != nil || spec.ExecutionKind != domain.ExecutionKindImageBuild || spec.RemoteImageBuild == nil {
 		return false, c.complete(ctx, step, false, "invalid remote image build specification", nil)
 	}
-	record, err := c.records.CreateIntent(ctx, domain.ExternalImageBuild{ExecutionJobID: job.ID, Provider: domain.ImageBuildProviderCloudBuild, TargetImageReference: spec.RemoteImageBuild.TargetImageReference})
+	build, buildErr := c.service.GetBuild(ctx, job.BuildID)
+	if buildErr != nil {
+		return true, buildErr
+	}
+	applicationVersion := ""
+	if build.ApplicationVersion != nil {
+		applicationVersion = strings.TrimSpace(*build.ApplicationVersion)
+	}
+	publishedImageReference, targetErr := c.builder.ResolveTargetImageReference(spec.RemoteImageBuild.TargetImageReference, applicationVersion)
+	if targetErr != nil {
+		return false, c.complete(ctx, step, false, targetErr.Error(), nil)
+	}
+	versionedPublication := applicationVersion != ""
+	if versionedPublication {
+		if c.inspector == nil {
+			return false, c.complete(ctx, step, false, "versioned image publication requires immutable registry tag verification", nil)
+		}
+	}
+	record, err := c.records.CreateIntent(ctx, domain.ExternalImageBuild{ExecutionJobID: job.ID, Provider: domain.ImageBuildProviderCloudBuild, TargetImageReference: spec.RemoteImageBuild.TargetImageReference, PublishedImageReference: publishedImageReference})
 	if err != nil {
 		return true, err
 	}
+	if record.PublishedImageReference == "" {
+		record.PublishedImageReference = publishedImageReference
+		record, err = c.records.Update(ctx, record)
+		if err != nil {
+			return true, err
+		}
+	}
 	if record.SubmissionState == domain.ExternalImageBuildSubmissionIntent {
-		build, buildErr := c.service.GetBuild(ctx, job.BuildID)
-		if buildErr != nil {
-			return true, buildErr
+		if versionedPublication {
+			if immutableErr := c.inspector.EnsureImmutableTags(ctx, publishedImageReference); immutableErr != nil {
+				return c.completePublicationFailure(ctx, record, step, immutableErr.Error(), nil)
+			}
 		}
 		inputs, inputErr := c.resolveArtifactInputs(ctx, job, *spec.RemoteImageBuild)
 		if inputErr != nil {
@@ -105,7 +137,7 @@ func (c *Controller) ReconcileClaimed(ctx context.Context, step workersvc.Worker
 			return true, findErr
 		}
 		if !found {
-			handle, findErr = c.builder.Submit(ctx, domain.ImageBuildRequest{ExecutionJobID: job.ID, Source: record.Source, Spec: *spec.RemoteImageBuild, Timeout: time.Duration(spec.TimeoutSeconds) * time.Second, Artifacts: record.ConsumedArtifacts})
+			handle, findErr = c.builder.Submit(ctx, domain.ImageBuildRequest{ExecutionJobID: job.ID, Source: record.Source, Spec: *spec.RemoteImageBuild, PublishedImageReference: publishedImageReference, Timeout: time.Duration(spec.TimeoutSeconds) * time.Second, Artifacts: record.ConsumedArtifacts})
 			if findErr != nil {
 				if !isRetryableSubmissionError(findErr) {
 					return false, c.complete(ctx, step, false, submissionFailureMessage(findErr), nil)
@@ -144,14 +176,42 @@ func (c *Controller) ReconcileClaimed(ctx context.Context, step workersvc.Worker
 		_, err := c.service.RenewRunnableStepLease(ctx, step)
 		return true, err
 	}
+	if result.Status == domain.ImageBuildStatusSuccess {
+		if strings.TrimSpace(result.ImageDigest) == "" {
+			return c.completePublicationFailure(ctx, record, step, "remote image build succeeded without an immutable image digest", result.Timing)
+		}
+		if versionedPublication {
+			if strings.TrimSpace(result.PublishedImageReference) != publishedImageReference {
+				return c.completePublicationFailure(ctx, record, step, fmt.Sprintf("remote image build published unexpected image reference %q", result.PublishedImageReference), result.Timing)
+			}
+			if strings.TrimSpace(result.PublishedImageDigestReference) == "" {
+				return c.completePublicationFailure(ctx, record, step, "remote image build succeeded without an immutable image digest reference", result.Timing)
+			}
+			publishedDigest, found, resolveErr := c.inspector.ResolvePublishedDigest(ctx, publishedImageReference)
+			if resolveErr != nil {
+				return true, resolveErr
+			}
+			if found && publishedDigest != result.PublishedImageDigestReference {
+				return c.completePublicationFailure(ctx, record, step, fmt.Sprintf("%s: tag %q resolves to %q instead of %q", service.ErrImagePublicationConflict, publishedImageReference, publishedDigest, result.PublishedImageDigestReference), result.Timing)
+			}
+		}
+	}
 	record.SubmissionState, record.TerminalResult, record.ImageDigest = domain.ExternalImageBuildSubmissionTerminal, string(result.Status), result.ImageDigest
+	record.PublishedImageReference, record.PublishedImageDigestReference = result.PublishedImageReference, result.PublishedImageDigestReference
 	if _, err := c.records.Update(ctx, record); err != nil {
 		return true, err
 	}
-	if result.Status == domain.ImageBuildStatusSuccess && strings.TrimSpace(result.ImageDigest) == "" {
-		return false, c.complete(ctx, step, false, "remote image build succeeded without an immutable image digest", result.Timing)
-	}
 	return false, c.complete(ctx, step, result.Status == domain.ImageBuildStatusSuccess, result.FailureDetail, result.Timing)
+}
+
+func (c *Controller) completePublicationFailure(ctx context.Context, record domain.ExternalImageBuild, step workersvc.WorkerRunnableStep, message string, timing *domain.ExecutionTiming) (bool, error) {
+	record.SubmissionState = domain.ExternalImageBuildSubmissionTerminal
+	record.TerminalResult = string(domain.ImageBuildStatusFailed)
+	record.FailureDetail = message
+	if _, err := c.records.Update(ctx, record); err != nil {
+		return true, err
+	}
+	return false, c.complete(ctx, step, false, message, timing)
 }
 
 func (c *Controller) cancel(ctx context.Context, jobID string) error {

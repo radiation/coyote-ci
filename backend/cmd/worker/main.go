@@ -337,7 +337,7 @@ func resolveExecutionControllerWithImageBuild(cfg config.Config, workerService *
 		if imageControllerErr != nil {
 			return nil, imageControllerErr
 		}
-		imageController.WithArtifactInputs(artifacts, artifactStores)
+		imageController.WithArtifactInputs(artifacts, artifactStores).WithPublicationInspector(builder)
 		controller.WithImageBuildController(imageController)
 	}
 	return controller, nil

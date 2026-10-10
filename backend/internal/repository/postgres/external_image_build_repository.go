@@ -17,12 +17,12 @@ func NewExternalImageBuildRepository(db *sql.DB) *ExternalImageBuildRepository {
 	return &ExternalImageBuildRepository{db: db}
 }
 
-const externalImageBuildColumns = `execution_job_id, provider, submission_state, external_build_id, external_resource_name, source_bucket, source_object, source_generation, consumed_artifacts, target_image_reference, submitted_at, last_provider_status, terminal_result, image_digest, external_log_url, failure_detail, created_at, updated_at`
+const externalImageBuildColumns = `execution_job_id, provider, submission_state, external_build_id, external_resource_name, source_bucket, source_object, source_generation, consumed_artifacts, target_image_reference, published_image_reference, published_image_digest_reference, submitted_at, last_provider_status, terminal_result, image_digest, external_log_url, failure_detail, created_at, updated_at`
 
 func (r *ExternalImageBuildRepository) CreateIntent(ctx context.Context, build domain.ExternalImageBuild) (domain.ExternalImageBuild, error) {
 	now := time.Now().UTC()
-	const query = `INSERT INTO external_image_builds (` + externalImageBuildColumns + `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT (execution_job_id) DO NOTHING RETURNING ` + externalImageBuildColumns
-	created, err := scanExternalImageBuild(r.db.QueryRowContext(ctx, query, build.ExecutionJobID, build.Provider, domain.ExternalImageBuildSubmissionIntent, nil, nil, nil, nil, nil, "[]", build.TargetImageReference, nil, nil, nil, nil, nil, nil, now, now))
+	const query = `INSERT INTO external_image_builds (` + externalImageBuildColumns + `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT (execution_job_id) DO NOTHING RETURNING ` + externalImageBuildColumns
+	created, err := scanExternalImageBuild(r.db.QueryRowContext(ctx, query, build.ExecutionJobID, build.Provider, domain.ExternalImageBuildSubmissionIntent, nil, nil, nil, nil, nil, "[]", build.TargetImageReference, nullableString(build.PublishedImageReference), nullableString(build.PublishedImageDigestReference), nil, nil, nil, nil, nil, nil, now, now))
 	if err == nil {
 		return created, nil
 	}
@@ -48,8 +48,8 @@ func (r *ExternalImageBuildRepository) Update(ctx context.Context, build domain.
 	if marshalErr != nil {
 		return domain.ExternalImageBuild{}, marshalErr
 	}
-	const query = `UPDATE external_image_builds SET provider=$2, submission_state=$3, external_build_id=$4, external_resource_name=$5, source_bucket=$6, source_object=$7, source_generation=$8, consumed_artifacts=$9::jsonb, target_image_reference=$10, submitted_at=$11, last_provider_status=$12, terminal_result=$13, image_digest=$14, external_log_url=$15, failure_detail=$16, updated_at=NOW() WHERE execution_job_id=$1 RETURNING ` + externalImageBuildColumns
-	updated, err := scanExternalImageBuild(r.db.QueryRowContext(ctx, query, build.ExecutionJobID, build.Provider, build.SubmissionState, nullableString(build.ExternalBuildID), nullableString(build.ExternalResourceName), nullableString(build.Source.Bucket), nullableString(build.Source.Object), nullableString(build.Source.Generation), string(consumedArtifacts), build.TargetImageReference, build.SubmittedAt, nullableString(build.LastProviderStatus), nullableString(build.TerminalResult), nullableString(build.ImageDigest), nullableString(build.ExternalLogURL), nullableString(build.FailureDetail)))
+	const query = `UPDATE external_image_builds SET provider=$2, submission_state=$3, external_build_id=$4, external_resource_name=$5, source_bucket=$6, source_object=$7, source_generation=$8, consumed_artifacts=$9::jsonb, target_image_reference=$10, published_image_reference=$11, published_image_digest_reference=$12, submitted_at=$13, last_provider_status=$14, terminal_result=$15, image_digest=$16, external_log_url=$17, failure_detail=$18, updated_at=NOW() WHERE execution_job_id=$1 RETURNING ` + externalImageBuildColumns
+	updated, err := scanExternalImageBuild(r.db.QueryRowContext(ctx, query, build.ExecutionJobID, build.Provider, build.SubmissionState, nullableString(build.ExternalBuildID), nullableString(build.ExternalResourceName), nullableString(build.Source.Bucket), nullableString(build.Source.Object), nullableString(build.Source.Generation), string(consumedArtifacts), build.TargetImageReference, nullableString(build.PublishedImageReference), nullableString(build.PublishedImageDigestReference), build.SubmittedAt, nullableString(build.LastProviderStatus), nullableString(build.TerminalResult), nullableString(build.ImageDigest), nullableString(build.ExternalLogURL), nullableString(build.FailureDetail)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ExternalImageBuild{}, repository.ErrExternalImageBuildNotFound
 	}
@@ -59,14 +59,15 @@ func (r *ExternalImageBuildRepository) Update(ctx context.Context, build domain.
 func scanExternalImageBuild(row interface{ Scan(...any) error }) (domain.ExternalImageBuild, error) {
 	var build domain.ExternalImageBuild
 	var provider, state string
-	var externalBuildID, resourceName, bucket, object, generation, status, terminal, digest, logURL, failure sql.NullString
+	var externalBuildID, resourceName, bucket, object, generation, publishedReference, publishedDigestReference, status, terminal, digest, logURL, failure sql.NullString
 	var consumedArtifacts []byte
-	err := row.Scan(&build.ExecutionJobID, &provider, &state, &externalBuildID, &resourceName, &bucket, &object, &generation, &consumedArtifacts, &build.TargetImageReference, &build.SubmittedAt, &status, &terminal, &digest, &logURL, &failure, &build.CreatedAt, &build.UpdatedAt)
+	err := row.Scan(&build.ExecutionJobID, &provider, &state, &externalBuildID, &resourceName, &bucket, &object, &generation, &consumedArtifacts, &build.TargetImageReference, &publishedReference, &publishedDigestReference, &build.SubmittedAt, &status, &terminal, &digest, &logURL, &failure, &build.CreatedAt, &build.UpdatedAt)
 	if err != nil {
 		return domain.ExternalImageBuild{}, err
 	}
 	build.Provider, build.SubmissionState = domain.ImageBuildProvider(provider), domain.ExternalImageBuildSubmissionState(state)
 	build.ExternalBuildID, build.ExternalResourceName = externalBuildID.String, resourceName.String
+	build.PublishedImageReference, build.PublishedImageDigestReference = publishedReference.String, publishedDigestReference.String
 	build.Source = domain.ImageBuildSource{Bucket: bucket.String, Object: object.String, Generation: generation.String}
 	if len(consumedArtifacts) > 0 {
 		if err := json.Unmarshal(consumedArtifacts, &build.ConsumedArtifacts); err != nil {

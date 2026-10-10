@@ -16,7 +16,7 @@ func TestExternalImageBuildRepositoryCreatesIdempotentIntentAndCopiesSubmissionT
 	repo.now = func() time.Time { return now }
 	ctx := context.Background()
 
-	created, createErr := repo.CreateIntent(ctx, domain.ExternalImageBuild{ExecutionJobID: "execution-1", Provider: domain.ImageBuildProviderCloudBuild, TargetImageReference: "coyote-ci/backend"})
+	created, createErr := repo.CreateIntent(ctx, domain.ExternalImageBuild{ExecutionJobID: "execution-1", Provider: domain.ImageBuildProviderCloudBuild, TargetImageReference: "coyote-ci/backend", PublishedImageReference: "registry.example/ci/coyote-ci/backend:1.2.3"})
 	if createErr != nil || created.SubmissionState != domain.ExternalImageBuildSubmissionIntent || !created.CreatedAt.Equal(now) {
 		t.Fatalf("created=%+v err=%v", created, createErr)
 	}
@@ -28,8 +28,9 @@ func TestExternalImageBuildRepositoryCreatesIdempotentIntentAndCopiesSubmissionT
 	submittedAt := now.Add(time.Minute)
 	created.SubmissionState = domain.ExternalImageBuildSubmissionSubmitted
 	created.SubmittedAt = &submittedAt
+	created.PublishedImageDigestReference = "registry.example/ci/coyote-ci/backend@sha256:abc"
 	updated, updateErr := repo.Update(ctx, created)
-	if updateErr != nil || updated.SubmittedAt == nil || !updated.SubmittedAt.Equal(submittedAt) {
+	if updateErr != nil || updated.SubmittedAt == nil || !updated.SubmittedAt.Equal(submittedAt) || updated.PublishedImageDigestReference != "registry.example/ci/coyote-ci/backend@sha256:abc" {
 		t.Fatalf("updated=%+v err=%v", updated, updateErr)
 	}
 	*updated.SubmittedAt = time.Time{}

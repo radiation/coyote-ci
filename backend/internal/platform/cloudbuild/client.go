@@ -7,17 +7,20 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	artifactregistry "google.golang.org/api/artifactregistry/v1"
 	googlecloudbuild "google.golang.org/api/cloudbuild/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
 var validLogicalImageName = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
@@ -35,6 +38,8 @@ type Client struct {
 	runtimeServiceAccount      string
 	artifactRegistryRepository string
 	builds                     *googlecloudbuild.ProjectsLocationsBuildsService
+	registry                   *artifactregistry.Service
+	registryRepositoryName     string
 }
 
 func New(ctx context.Context, config Config, options ...option.ClientOption) (*Client, error) {
@@ -45,7 +50,24 @@ func New(ctx context.Context, config Config, options ...option.ClientOption) (*C
 	if err != nil {
 		return nil, err
 	}
-	return &Client{projectID: strings.TrimSpace(config.ProjectID), location: strings.TrimSpace(config.Location), runtimeServiceAccount: strings.TrimSpace(config.RuntimeServiceAccount), artifactRegistryRepository: strings.TrimSuffix(strings.TrimSpace(config.ArtifactRegistryRepository), "/"), builds: googlecloudbuild.NewProjectsLocationsBuildsService(service)}, nil
+	registry, err := artifactregistry.NewService(ctx, options...)
+	if err != nil {
+		return nil, err
+	}
+	repository := strings.TrimSuffix(strings.TrimSpace(config.ArtifactRegistryRepository), "/")
+	repositoryName, repositoryErr := artifactRegistryRepositoryName(repository)
+	if repositoryErr != nil {
+		return nil, repositoryErr
+	}
+	return &Client{projectID: strings.TrimSpace(config.ProjectID), location: strings.TrimSpace(config.Location), runtimeServiceAccount: strings.TrimSpace(config.RuntimeServiceAccount), artifactRegistryRepository: repository, builds: googlecloudbuild.NewProjectsLocationsBuildsService(service), registry: registry, registryRepositoryName: repositoryName}, nil
+}
+
+func (c *Client) ResolveTargetImageReference(logicalName, applicationVersion string) (string, error) {
+	targetImage, err := c.targetImageReference(logicalName)
+	if err != nil || strings.TrimSpace(applicationVersion) == "" {
+		return targetImage, err
+	}
+	return targetImage + ":" + applicationVersion, nil
 }
 
 func (c *Client) Submit(ctx context.Context, request domain.ImageBuildRequest) (domain.ImageBuildHandle, error) {
@@ -94,9 +116,13 @@ func (c *Client) buildRequest(request domain.ImageBuildRequest) (*googlecloudbui
 	if generationErr != nil || generation <= 0 {
 		return nil, fmt.Errorf("invalid source generation %q", request.Source.Generation)
 	}
-	targetImage, targetErr := c.targetImageReference(request.Spec.TargetImageReference)
-	if targetErr != nil {
-		return nil, targetErr
+	targetImage := strings.TrimSpace(request.PublishedImageReference)
+	if targetImage == "" {
+		var targetErr error
+		targetImage, targetErr = c.ResolveTargetImageReference(request.Spec.TargetImageReference, "")
+		if targetErr != nil {
+			return nil, targetErr
+		}
 	}
 	args := []string{"build", "--file=" + request.Spec.DockerfilePath, "--tag=" + targetImage}
 	if target := strings.TrimSpace(request.Spec.Target); target != "" {
@@ -150,6 +176,87 @@ func (c *Client) targetImageReference(logicalName string) (string, error) {
 	return c.artifactRegistryRepository + "/" + trimmed, nil
 }
 
+func (c *Client) EnsureImmutableTags(ctx context.Context, publishedImageReference string) error {
+	if !c.ownsPublishedImageReference(publishedImageReference) {
+		return fmt.Errorf("%w: image %q is outside configured Artifact Registry repository", service.ErrImmutableImageTagsRequired, publishedImageReference)
+	}
+	repository, err := c.registry.Projects.Locations.Repositories.Get(c.registryRepositoryName).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("checking Artifact Registry immutable tag configuration: %w", err)
+	}
+	if repository.DockerConfig == nil || !repository.DockerConfig.ImmutableTags {
+		return fmt.Errorf("%w: Artifact Registry repository %q does not enable immutable tags", service.ErrImmutableImageTagsRequired, c.artifactRegistryRepository)
+	}
+	return nil
+}
+
+func (c *Client) ResolvePublishedDigest(ctx context.Context, publishedImageReference string) (string, bool, error) {
+	if !c.ownsPublishedImageReference(publishedImageReference) {
+		return "", false, fmt.Errorf("image %q is outside configured Artifact Registry repository", publishedImageReference)
+	}
+	tag, ok := imageTag(publishedImageReference)
+	if !ok {
+		return "", false, fmt.Errorf("image %q does not include a tag", publishedImageReference)
+	}
+	tagName := c.registryRepositoryName + "/packages/" + url.PathEscape(strings.TrimPrefix(imageRepository(publishedImageReference), c.artifactRegistryRepository+"/")) + "/tags/" + url.PathEscape(tag)
+	resolvedTag, err := c.registry.Projects.Locations.Repositories.Packages.Tags.Get(tagName).Context(ctx).Do()
+	if isNotFound(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("resolving Artifact Registry image tag %q: %w", publishedImageReference, err)
+	}
+	versionMarker := "/versions/"
+	versionIndex := strings.LastIndex(resolvedTag.Version, versionMarker)
+	if versionIndex == -1 {
+		return "", false, fmt.Errorf("artifact Registry tag %q returned an invalid version reference %q", publishedImageReference, resolvedTag.Version)
+	}
+	digest := resolvedTag.Version[versionIndex+len(versionMarker):]
+	if !strings.HasPrefix(digest, "sha256:") {
+		return "", false, fmt.Errorf("artifact Registry tag %q returned a non-digest version reference %q", publishedImageReference, resolvedTag.Version)
+	}
+	return imageRepository(publishedImageReference) + "@" + digest, true, nil
+}
+
+func isNotFound(err error) bool {
+	var apiErr *googleapi.Error
+	return errors.As(err, &apiErr) && apiErr.Code == http.StatusNotFound
+}
+
+func (c *Client) ownsPublishedImageReference(reference string) bool {
+	return strings.HasPrefix(strings.TrimSpace(reference), c.artifactRegistryRepository+"/")
+}
+
+func artifactRegistryRepositoryName(repository string) (string, error) {
+	parts := strings.Split(strings.TrimSpace(repository), "/")
+	if len(parts) != 3 || !strings.HasSuffix(parts[0], "-docker.pkg.dev") || strings.TrimSpace(parts[1]) == "" || strings.TrimSpace(parts[2]) == "" {
+		return "", fmt.Errorf("invalid Artifact Registry repository %q", repository)
+	}
+	location := strings.TrimSuffix(parts[0], "-docker.pkg.dev")
+	if location == "" {
+		return "", fmt.Errorf("invalid Artifact Registry repository %q", repository)
+	}
+	return fmt.Sprintf("projects/%s/locations/%s/repositories/%s", parts[1], location, parts[2]), nil
+}
+
+func imageTag(reference string) (string, bool) {
+	lastSlash := strings.LastIndex(reference, "/")
+	lastColon := strings.LastIndex(reference, ":")
+	if lastColon <= lastSlash || lastColon == len(reference)-1 {
+		return "", false
+	}
+	return reference[lastColon+1:], true
+}
+
+func imageRepository(reference string) string {
+	lastSlash := strings.LastIndex(reference, "/")
+	lastColon := strings.LastIndex(reference, ":")
+	if lastColon > lastSlash {
+		return reference[:lastColon]
+	}
+	return reference
+}
+
 func (c *Client) serviceAccountResourceName() string {
 	return fmt.Sprintf("projects/%s/serviceAccounts/%s", c.projectID, c.runtimeServiceAccount)
 }
@@ -171,7 +278,12 @@ func resultFromBuild(build *googlecloudbuild.Build) domain.ImageBuildResult {
 		result.FailureDetail = build.FailureInfo.Detail
 	}
 	if build.Results != nil && len(build.Results.Images) > 0 {
-		result.ImageDigest = build.Results.Images[0].Digest
+		image := build.Results.Images[0]
+		result.PublishedImageReference = image.Name
+		result.ImageDigest = image.Digest
+		if image.Name != "" && strings.HasPrefix(image.Digest, "sha256:") {
+			result.PublishedImageDigestReference = imageRepository(image.Name) + "@" + image.Digest
+		}
 	}
 	return result
 }
