@@ -486,6 +486,42 @@ func TestValidate_Artifacts_ChannelRequiresTemplate(t *testing.T) {
 	assertContains(t, err.Error(), "requires a template")
 }
 
+func TestValidate_ArtifactVersionApplicationVersionOptOut(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		wantErr string
+	}{
+		{name: "template", version: "      template: 1.2.{build_number}"},
+		{name: "template and channel", version: "      template: 1.2.{build_number}\n      channel: latest"},
+		{name: "opt out", version: "      inherit_application_version: false"},
+		{name: "empty version block", version: "    version: {}", wantErr: "template or channel is required"},
+		{name: "channel only", version: "      channel: latest", wantErr: "requires a template"},
+		{name: "true is unsupported", version: "      inherit_application_version: true", wantErr: "must be false"},
+		{name: "template with opt out", version: "      template: 1.2.{build_number}\n      inherit_application_version: false", wantErr: "cannot be combined with template"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			versionYAML := test.version
+			if versionYAML != "" && !strings.HasPrefix(versionYAML, "    version:") {
+				versionYAML = "    version:\n" + versionYAML
+			}
+			yaml := "version: 1\nsteps:\n  - name: build\n    run: make\nartifacts:\n  - path: dist/app.tgz\n" + versionYAML + "\n"
+			_, err := ParseAndValidate([]byte(yaml))
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected valid artifact version config, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected validation error containing %q", test.wantErr)
+			}
+			assertContains(t, err.Error(), test.wantErr)
+		})
+	}
+}
+
 func TestValidate_StepArtifacts_GeneratedVersionTemplateAllowsWildcardPath(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,

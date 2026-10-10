@@ -548,6 +548,26 @@ artifacts:
 	}
 }
 
+func TestParse_ArtifactVersionApplicationVersionOptOut(t *testing.T) {
+	pf, err := ParseAndValidate([]byte(`
+version: 1
+steps:
+  - name: build
+    run: make
+artifacts:
+  - path: dist/app.tgz
+    version:
+      inherit_application_version: false
+`))
+	if err != nil {
+		t.Fatalf("parse and validate opt-out declaration: %v", err)
+	}
+	version := pf.Artifacts.Declarations[0].Version
+	if version == nil || version.InheritApplicationVersion == nil || *version.InheritApplicationVersion {
+		t.Fatalf("opt-out declaration=%#v, want explicit false", version)
+	}
+}
+
 func TestResolve_CachePipelineDefaultAndStepOverride(t *testing.T) {
 	yaml := "version: 1\n" +
 		"pipeline:\n" +

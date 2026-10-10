@@ -482,6 +482,18 @@ func TestArtifactDeclarationHelpers_MergeIndexesAndLabels(t *testing.T) {
 		t.Fatalf("expected merged version declaration, got %#v", merged.Version)
 	}
 
+	explicitOptOut := false
+	mergedOptOut := mergeArtifactDeclarations(
+		domain.ArtifactDeclaration{Path: "dist/app.tgz", Version: &domain.ArtifactVersionDeclaration{InheritApplicationVersion: &explicitOptOut}},
+		domain.ArtifactDeclaration{Path: "dist/app.tgz", Version: &domain.ArtifactVersionDeclaration{Template: "1.2.{build_number}"}},
+	)
+	if mergedOptOut.Version == nil || mergedOptOut.Version.InheritApplicationVersion == nil || *mergedOptOut.Version.InheritApplicationVersion {
+		t.Fatalf("merged opt-out=%#v, want explicit false preserved", mergedOptOut.Version)
+	}
+	if mergedOptOut.Version.Template != "1.2.{build_number}" {
+		t.Fatalf("merged opt-out template=%q, want supplemental template preserved", mergedOptOut.Version.Template)
+	}
+
 	typeIndex := declarationTypeIndex([]domain.ArtifactDeclaration{{Path: " dist/app.tgz ", Type: domain.ArtifactTypeGeneric}, {Path: "", Type: domain.ArtifactTypeDockerImage}})
 	if typeIndex["dist/app.tgz"] != domain.ArtifactTypeGeneric {
 		t.Fatalf("expected trimmed type index, got %#v", typeIndex)

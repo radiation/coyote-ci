@@ -411,6 +411,7 @@ type artifactVersionTagPlan struct {
 	LogicalPath  string
 	Pattern      string
 	Template     string
+	Version      string
 	Channel      string
 }
 
@@ -420,9 +421,13 @@ func (s *BuildService) autoTagDeclaredArtifactOutputs(ctx context.Context, build
 		return err
 	}
 	for _, plan := range plans {
-		version, resolveErr := versioning.ResolveArtifactVersionTemplate(plan.Template, build)
-		if resolveErr != nil {
-			return fmt.Errorf("generated version tagging failed for artifact path=%q name=%q declaration=%q template=%q: %w", plan.LogicalPath, plan.ArtifactName, plan.Pattern, plan.Template, resolveErr)
+		version := plan.Version
+		if plan.Template != "" {
+			resolved, resolveErr := versioning.ResolveArtifactVersionTemplate(plan.Template, build)
+			if resolveErr != nil {
+				return fmt.Errorf("generated version tagging failed for artifact path=%q name=%q declaration=%q template=%q: %w", plan.LogicalPath, plan.ArtifactName, plan.Pattern, plan.Template, resolveErr)
+			}
+			version = resolved
 		}
 		if _, createErr := s.versionTagger.CreateVersionTags(ctx, jobID, versiontagsvc.CreateVersionTagsInput{
 			Kind:        string(domain.VersionTagKindVersion),
@@ -469,8 +474,26 @@ func (s *BuildService) plannedArtifactVersionTags(ctx context.Context, build dom
 	plans := make([]artifactVersionTagPlan, 0)
 	for _, item := range artifacts {
 		declaration, ok := matchingArtifactDeclaration(item, stepIndexByID, buildDeclarations, stepDeclarations)
-		if !ok || declaration.Version == nil || strings.TrimSpace(declaration.Version.Template) == "" {
+		if !ok {
 			continue
+		}
+		template := ""
+		channel := ""
+		version := ""
+		if declaration.Version != nil {
+			if declaration.Version.InheritApplicationVersion != nil && !*declaration.Version.InheritApplicationVersion {
+				continue
+			}
+			template = strings.TrimSpace(declaration.Version.Template)
+			if template != "" {
+				channel = strings.TrimSpace(declaration.Version.Channel)
+			}
+		}
+		if template == "" {
+			if build.ApplicationVersion == nil || strings.TrimSpace(*build.ApplicationVersion) == "" {
+				continue
+			}
+			version = *build.ApplicationVersion
 		}
 		pattern := strings.TrimSpace(declaration.Path)
 		if buildDeclaration, found := firstMatchingArtifactDeclaration(item.LogicalPath, buildDeclarations); found && buildDeclaration.Version != nil && strings.TrimSpace(buildDeclaration.Version.Template) != "" {
@@ -481,8 +504,9 @@ func (s *BuildService) plannedArtifactVersionTags(ctx context.Context, build dom
 			ArtifactName: strings.TrimSpace(item.Name),
 			LogicalPath:  item.LogicalPath,
 			Pattern:      pattern,
-			Template:     strings.TrimSpace(declaration.Version.Template),
-			Channel:      strings.TrimSpace(declaration.Version.Channel),
+			Template:     template,
+			Version:      version,
+			Channel:      channel,
 		})
 	}
 	sort.SliceStable(plans, func(i, j int) bool {

@@ -1383,6 +1383,111 @@ func TestBuildService_CompleteBuild_GeneratesArtifactVersionAndChannel(t *testin
 	}
 }
 
+func TestBuildService_CompleteBuild_ApplicationVersionArtifactInheritance(t *testing.T) {
+	tests := []struct {
+		name               string
+		declaredPath       string
+		versionYAML        string
+		applicationVersion string
+		wantVersion        string
+		wantChannel        string
+	}{
+		{
+			name:               "inherits application version without channel",
+			applicationVersion: "5.6.7",
+			wantVersion:        "5.6.7",
+		},
+		{
+			name:               "unmatched collected artifact remains unversioned",
+			declaredPath:       "reports/report.xml",
+			applicationVersion: "5.6.7",
+		},
+		{
+			name: "local template overrides application version and retains channel",
+			versionYAML: "    version:\n" +
+				"      template: artifact-{build_number}\n" +
+				"      channel: latest\n",
+			applicationVersion: "5.6.7",
+			wantVersion:        "artifact-42",
+			wantChannel:        "latest",
+		},
+		{
+			name: "explicit opt out suppresses inheritance",
+			versionYAML: "    version:\n" +
+				"      inherit_application_version: false\n",
+			applicationVersion: "5.6.7",
+		},
+		{
+			name: "missing application version preserves unversioned behavior",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			jobID := "job-1"
+			declaredPath := test.declaredPath
+			if declaredPath == "" {
+				declaredPath = "dist/app.tgz"
+			}
+			pipelineYAML := "version: 1\nsteps:\n  - name: build\n    run: make build\nartifacts:\n  - path: " + declaredPath + "\n"
+			pipelineYAML += test.versionYAML
+			build := domain.Build{
+				ID:                 "build-1",
+				BuildNumber:        42,
+				JobID:              &jobID,
+				Status:             domain.BuildStatusRunning,
+				PipelineConfigYAML: &pipelineYAML,
+			}
+			if test.applicationVersion != "" {
+				build.ApplicationVersion = &test.applicationVersion
+			}
+			repo := &fakeBuildRepository{build: build}
+			artifact := domain.BuildArtifact{ID: "artifact-1", BuildID: repo.build.ID, LogicalPath: "dist/app.tgz", CreatedAt: time.Now().UTC()}
+			artifactRepo := &fakeArtifactRepository{artifacts: map[string][]domain.BuildArtifact{repo.build.ID: {artifact}}}
+			labelRepo := memoryrepo.NewArtifactLabelRepository()
+			labelRepo.SeedBuilds(repo.build)
+			labelRepo.SeedArtifacts(artifact)
+
+			svc := NewBuildService(repo, nil, nil)
+			svc.artifactRepo = artifactRepo
+			svc.versionTagger = versiontagsvc.NewService(nil).WithArtifactLabels(labelRepo)
+
+			if _, completeErr := svc.CompleteBuild(context.Background(), repo.build.ID); completeErr != nil {
+				t.Fatalf("complete build: %v", completeErr)
+			}
+			if test.name == "inherits application version without channel" {
+				if tagErr := svc.autoTagBuildOutputs(context.Background(), repo.build); tagErr != nil {
+					t.Fatalf("reprocess same artifact version: %v", tagErr)
+				}
+			}
+
+			tags, listErr := labelRepo.ListByArtifactID(context.Background(), artifact.ID)
+			if listErr != nil {
+				t.Fatalf("list artifact tags: %v", listErr)
+			}
+			wantCount := 0
+			if test.wantVersion != "" {
+				wantCount++
+			}
+			if test.wantChannel != "" {
+				wantCount++
+			}
+			if len(tags) != wantCount {
+				t.Fatalf("artifact tags=%#v, want %d tags", tags, wantCount)
+			}
+			kinds := map[domain.VersionTagKind]string{}
+			for _, tag := range tags {
+				kinds[tag.Kind] = tag.Version
+			}
+			if got := kinds[domain.VersionTagKindVersion]; got != test.wantVersion {
+				t.Fatalf("artifact version=%q, want %q", got, test.wantVersion)
+			}
+			if got := kinds[domain.VersionTagKindChannel]; got != test.wantChannel {
+				t.Fatalf("artifact channel=%q, want %q", got, test.wantChannel)
+			}
+		})
+	}
+}
+
 func TestBuildService_CompleteBuild_GeneratedArtifactVersionConflictReturnsError(t *testing.T) {
 	jobID := "job-1"
 	pipelineYAML := strings.Join([]string{
@@ -1429,6 +1534,40 @@ func TestBuildService_CompleteBuild_GeneratedArtifactVersionConflictReturnsError
 	_, err = svc.CompleteBuild(context.Background(), "build-2")
 	if !errors.Is(err, repository.ErrVersionTagConflict) {
 		t.Fatalf("expected version conflict, got %v", err)
+	}
+}
+
+func TestBuildService_CompleteBuild_InheritedArtifactVersionConflictReturnsError(t *testing.T) {
+	jobID := "job-1"
+	applicationVersion := "5.6.7"
+	pipelineYAML := "version: 1\nsteps:\n  - name: build\n    run: make build\nartifacts:\n  - dist/app.tgz\n"
+	repo := &fakeBuildRepository{build: domain.Build{
+		ID:                 "build-current",
+		JobID:              &jobID,
+		Status:             domain.BuildStatusRunning,
+		ApplicationVersion: &applicationVersion,
+		PipelineConfigYAML: &pipelineYAML,
+	}}
+	previousBuild := domain.Build{ID: "build-previous", JobID: &jobID}
+	previousArtifact := domain.BuildArtifact{ID: "artifact-previous", BuildID: previousBuild.ID, LogicalPath: "dist/app.tgz", CreatedAt: time.Now().UTC().Add(-time.Minute)}
+	currentArtifact := domain.BuildArtifact{ID: "artifact-current", BuildID: repo.build.ID, LogicalPath: "dist/app.tgz", CreatedAt: time.Now().UTC()}
+	labelRepo := memoryrepo.NewArtifactLabelRepository()
+	labelRepo.SeedBuilds(repo.build, previousBuild)
+	labelRepo.SeedArtifacts(previousArtifact, currentArtifact)
+	if _, seedErr := labelRepo.CreateForArtifacts(context.Background(), repository.CreateArtifactLabelsParams{
+		JobID:       jobID,
+		Value:       applicationVersion,
+		Kind:        domain.VersionTagKindVersion,
+		ArtifactIDs: []string{previousArtifact.ID},
+	}); seedErr != nil {
+		t.Fatalf("seed existing immutable version: %v", seedErr)
+	}
+
+	svc := NewBuildService(repo, nil, nil)
+	svc.artifactRepo = &fakeArtifactRepository{artifacts: map[string][]domain.BuildArtifact{repo.build.ID: {currentArtifact}}}
+	svc.versionTagger = versiontagsvc.NewService(nil).WithArtifactLabels(labelRepo)
+	if _, completeErr := svc.CompleteBuild(context.Background(), repo.build.ID); !errors.Is(completeErr, repository.ErrVersionTagConflict) {
+		t.Fatalf("complete build error=%v, want immutable version conflict", completeErr)
 	}
 }
 
