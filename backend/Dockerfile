@@ -1,4 +1,4 @@
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=1.27.2
 
 FROM debian:bookworm-slim AS runtime-base
 

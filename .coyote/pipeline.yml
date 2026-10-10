@@ -1,7 +1,7 @@
 version: 1
 pipeline:
   name: coyote-ci
-  image: golang:1.27.1
+  image: golang:1.27.2
   application_version:
     template: "0.0.{build_number}"
 steps:
