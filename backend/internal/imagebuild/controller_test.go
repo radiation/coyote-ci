@@ -103,6 +103,89 @@ func TestControllerRejectsVersionedPublicationWithoutImmutableRegistryTags(t *te
 	}
 }
 
+func TestControllerRecoversTerminalPreSubmissionFailureWithoutProviderPolling(t *testing.T) {
+	execution := newExecutionFake(t)
+	version := "1.4.2"
+	execution.build.ApplicationVersion = &version
+	records := memoryrepo.NewExternalImageBuildRepository()
+	created, createErr := records.CreateIntent(context.Background(), domain.ExternalImageBuild{
+		ExecutionJobID:          execution.job.ID,
+		Provider:                domain.ImageBuildProviderCloudBuild,
+		TargetImageReference:    "coyote-ci/backend",
+		PublishedImageReference: "registry.example/apps/coyote-ci/backend:1.4.2",
+	})
+	if createErr != nil {
+		t.Fatalf("create intent: %v", createErr)
+	}
+	created.SubmissionState = domain.ExternalImageBuildSubmissionTerminal
+	created.TerminalResult = string(domain.ImageBuildStatusFailed)
+	created.FailureDetail = "immutable tags disabled"
+	if _, updateErr := records.Update(context.Background(), created); updateErr != nil {
+		t.Fatalf("persist terminal failure: %v", updateErr)
+	}
+	builder := &builderFake{}
+	controller, newErr := NewController(execution, records, builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+	controller.WithPublicationInspector(&publicationInspectorFake{})
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active || builder.getCalls != 0 || execution.result.Status != runner.RunStepStatusFailed || execution.result.Stderr != "immutable tags disabled" {
+		t.Fatalf("active=%t err=%v providerGets=%d result=%+v", active, reconcileErr, builder.getCalls, execution.result)
+	}
+}
+
+func TestControllerUsesPersistedPublicationReferenceDuringRecovery(t *testing.T) {
+	execution := newExecutionFake(t)
+	version := "1.4.2"
+	execution.build.ApplicationVersion = &version
+	records := memoryrepo.NewExternalImageBuildRepository()
+	persistedReference := "registry.example/previous/apps/coyote-ci/backend:1.4.2"
+	created, createErr := records.CreateIntent(context.Background(), domain.ExternalImageBuild{
+		ExecutionJobID:          execution.job.ID,
+		Provider:                domain.ImageBuildProviderCloudBuild,
+		TargetImageReference:    "coyote-ci/backend",
+		PublishedImageReference: persistedReference,
+	})
+	if createErr != nil {
+		t.Fatalf("create intent: %v", createErr)
+	}
+	created.SubmissionState = domain.ExternalImageBuildSubmissionStaged
+	if _, updateErr := records.Update(context.Background(), created); updateErr != nil {
+		t.Fatalf("persist staged intent: %v", updateErr)
+	}
+	builder := &builderFake{
+		resolvedTarget: "registry.example/current/apps/coyote-ci/backend:1.4.2",
+		result: domain.ImageBuildResult{
+			Status:                        domain.ImageBuildStatusSuccess,
+			ImageDigest:                   "sha256:abc",
+			PublishedImageReference:       persistedReference,
+			PublishedImageDigestReference: "registry.example/previous/apps/coyote-ci/backend@sha256:abc",
+		},
+	}
+	inspector := &publicationInspectorFake{
+		found:           true,
+		digestReference: "registry.example/previous/apps/coyote-ci/backend@sha256:abc",
+	}
+	controller, newErr := NewController(execution, records, builder, &stagerFake{}, &sourceFake{})
+	if newErr != nil {
+		t.Fatalf("new controller: %v", newErr)
+	}
+	controller.WithPublicationInspector(inspector)
+
+	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)
+	if reconcileErr != nil || active {
+		t.Fatalf("active=%t err=%v", active, reconcileErr)
+	}
+	if builder.request.PublishedImageReference != persistedReference {
+		t.Fatalf("submitted reference=%q, want %q", builder.request.PublishedImageReference, persistedReference)
+	}
+	if inspector.digestReferenceRequest != persistedReference {
+		t.Fatalf("digest lookup reference=%q, want %q", inspector.digestReferenceRequest, persistedReference)
+	}
+}
+
 func TestControllerRejectsVersionedPublicationConflict(t *testing.T) {
 	execution := newExecutionFake(t)
 	version := "1.4.2"
@@ -656,12 +739,17 @@ type builderFake struct {
 	found                    bool
 	handle                   domain.ImageBuildHandle
 	result                   domain.ImageBuildResult
+	resolvedTarget           string
 	submitErr                error
 	submitCalls, cancelCalls int
+	getCalls                 int
 	request                  domain.ImageBuildRequest
 }
 
 func (f *builderFake) ResolveTargetImageReference(logicalName, applicationVersion string) (string, error) {
+	if f.resolvedTarget != "" {
+		return f.resolvedTarget, nil
+	}
 	target := "registry.example/apps/" + logicalName
 	if applicationVersion != "" {
 		target += ":" + applicationVersion
@@ -690,6 +778,7 @@ func (f *builderFake) Submit(_ context.Context, request domain.ImageBuildRequest
 	return f.handle, nil
 }
 func (f *builderFake) Get(context.Context, domain.ImageBuildHandle) (domain.ImageBuildResult, error) {
+	f.getCalls++
 	return f.result, nil
 }
 func (f *builderFake) Cancel(context.Context, domain.ImageBuildHandle) error {
@@ -701,10 +790,12 @@ func (f *builderFake) FindByExecutionJobID(context.Context, string) (domain.Imag
 }
 
 type publicationInspectorFake struct {
-	immutableErr    error
-	digestReference string
-	found           bool
-	resolveErr      error
+	immutableErr           error
+	immutableReference     string
+	digestReference        string
+	digestReferenceRequest string
+	found                  bool
+	resolveErr             error
 }
 
 type failingTerminalUpdateRepository struct {
@@ -720,11 +811,13 @@ func (r *failingTerminalUpdateRepository) Update(ctx context.Context, build doma
 	return r.ExternalImageBuildRepository.Update(ctx, build)
 }
 
-func (f *publicationInspectorFake) EnsureImmutableTags(context.Context, string) error {
+func (f *publicationInspectorFake) EnsureImmutableTags(_ context.Context, reference string) error {
+	f.immutableReference = reference
 	return f.immutableErr
 }
 
-func (f *publicationInspectorFake) ResolvePublishedDigest(context.Context, string) (string, bool, error) {
+func (f *publicationInspectorFake) ResolvePublishedDigest(_ context.Context, reference string) (string, bool, error) {
+	f.digestReferenceRequest = reference
 	return f.digestReference, f.found, f.resolveErr
 }
 

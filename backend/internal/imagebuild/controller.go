@@ -102,6 +102,14 @@ func (c *Controller) ReconcileClaimed(ctx context.Context, step workersvc.Worker
 			return true, err
 		}
 	}
+	publishedImageReference = record.PublishedImageReference
+	if record.SubmissionState == domain.ExternalImageBuildSubmissionTerminal && strings.TrimSpace(record.ExternalBuildID) == "" {
+		message := strings.TrimSpace(record.FailureDetail)
+		if message == "" {
+			message = "remote image build failed before provider submission"
+		}
+		return false, c.complete(ctx, step, false, message, nil)
+	}
 	if record.SubmissionState == domain.ExternalImageBuildSubmissionIntent {
 		if versionedPublication {
 			if immutableErr := c.inspector.EnsureImmutableTags(ctx, publishedImageReference); immutableErr != nil {
