@@ -27,6 +27,18 @@ func (h *ApplicationReleaseHandler) SetAuthorization(mode auth.Mode, roles auth.
 	h.authMode, h.projectRoles = mode, roles
 }
 
+// Get godoc
+// @Summary Get application release
+// @Description Returns a generic application release and its expected output publication state.
+// @Tags application-releases
+// @Produce json
+// @Param releaseID path string true "Application release ID"
+// @Success 200 {object} api.ApplicationReleaseEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 403 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /application-releases/{releaseID} [get]
 func (h *ApplicationReleaseHandler) Get(w http.ResponseWriter, r *http.Request) {
 	release, ok := h.loadAuthorized(w, r, false)
 	if !ok {
@@ -35,6 +47,19 @@ func (h *ApplicationReleaseHandler) Get(w http.ResponseWriter, r *http.Request) 
 	writeDataJSON(w, http.StatusOK, applicationReleaseResponse(release))
 }
 
+// PromoteStable godoc
+// @Summary Promote application release to stable
+// @Description Moves the generic stable channel to a complete job-backed application release.
+// @Tags application-releases
+// @Produce json
+// @Param releaseID path string true "Application release ID"
+// @Success 200 {object} api.ApplicationReleaseEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 403 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /application-releases/{releaseID}/channels/stable [post]
 func (h *ApplicationReleaseHandler) PromoteStable(w http.ResponseWriter, r *http.Request) {
 	release, ok := h.loadAuthorized(w, r, true)
 	if !ok {

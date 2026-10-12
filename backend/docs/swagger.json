@@ -11,6 +11,118 @@
     },
     "basePath": "/api",
     "paths": {
+        "/application-releases/{releaseID}": {
+            "get": {
+                "description": "Returns a generic application release and its expected output publication state.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "application-releases"
+                ],
+                "summary": "Get application release",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Application release ID",
+                        "name": "releaseID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ApplicationReleaseEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/application-releases/{releaseID}/channels/stable": {
+            "post": {
+                "description": "Moves the generic stable channel to a complete job-backed application release.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "application-releases"
+                ],
+                "summary": "Promote application release to stable",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Application release ID",
+                        "name": "releaseID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ApplicationReleaseEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/artifact-trigger-deliveries/{deliveryID}/retry": {
             "post": {
                 "description": "Retries a failed artifact-trigger delivery by delivery id.",
@@ -4404,6 +4516,81 @@
                     }
                 },
                 "token_prefix": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ApplicationReleaseEnvelope": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.ApplicationReleaseResponse"
+                }
+            }
+        },
+        "api.ApplicationReleaseOutputResponse": {
+            "type": "object",
+            "properties": {
+                "artifact_id": {
+                    "type": "string"
+                },
+                "execution_job_id": {
+                    "type": "string"
+                },
+                "failure_reason": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "immutable_reference": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ApplicationReleaseResponse": {
+            "type": "object",
+            "properties": {
+                "application_version": {
+                    "type": "string"
+                },
+                "auto_channel": {
+                    "type": "string"
+                },
+                "build_id": {
+                    "type": "string"
+                },
+                "failure_reason": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "outputs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ApplicationReleaseOutputResponse"
+                    }
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "status": {
                     "type": "string"
                 }
             }

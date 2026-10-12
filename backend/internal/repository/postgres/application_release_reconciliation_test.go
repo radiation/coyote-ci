@@ -20,6 +20,7 @@ func TestImagePublicationMatches(t *testing.T) {
 		{"missing published reference", "acme/api", "", validDigest, false},
 		{"missing digest reference", "acme/api", validReference, "", false},
 	}
+
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			if got := imagePublicationMatches(definition, "1.4.2", testCase.target, testCase.reference, testCase.digest); got != testCase.want {

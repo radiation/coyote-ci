@@ -3,7 +3,6 @@ package build
 import (
 	"context"
 	"errors"
-	"log"
 	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -71,14 +70,7 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, mapRepoErr(completeErr)
 		}
 		report := StepCompletionReport{Step: completed.Step, CompletionOutcome: outcome}
-		if s.buildNotifier != nil {
-			build, buildErr := s.buildRepo.GetByID(ctx, request.BuildID)
-			if buildErr != nil {
-				log.Printf("WARNING: build notification skipped: build_id=%s reason=build_lookup_failed err=%v", request.BuildID, buildErr)
-			} else {
-				s.notifyTerminalBuild(ctx, build)
-			}
-		}
+		s.postTerminalBuildByID(ctx, request.BuildID)
 		if skipLegacyLogWrite {
 			return report, nil
 		}
@@ -111,14 +103,7 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, mapRepoErr(completeErr)
 		}
 		report := StepCompletionReport{Step: completed.Step, CompletionOutcome: outcome}
-		if s.buildNotifier != nil {
-			build, buildErr := s.buildRepo.GetByID(ctx, request.BuildID)
-			if buildErr != nil {
-				log.Printf("WARNING: build notification skipped: build_id=%s reason=build_lookup_failed err=%v", request.BuildID, buildErr)
-			} else {
-				s.notifyTerminalBuild(ctx, build)
-			}
-		}
+		s.postTerminalBuildByID(ctx, request.BuildID)
 		if skipLegacyLogWrite {
 			return report, nil
 		}
@@ -165,14 +150,7 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 		}
 	}
 
-	if s.buildNotifier != nil {
-		build, buildErr := s.buildRepo.GetByID(ctx, request.BuildID)
-		if buildErr != nil {
-			log.Printf("WARNING: build notification skipped: build_id=%s reason=build_lookup_failed err=%v", request.BuildID, buildErr)
-		} else {
-			s.notifyTerminalBuild(ctx, build)
-		}
-	}
+	s.postTerminalBuildByID(ctx, request.BuildID)
 
 	if skipLegacyLogWrite {
 		return report, nil

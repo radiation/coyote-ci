@@ -38,6 +38,55 @@ definitions:
       token_prefix:
         type: string
     type: object
+  api.ApplicationReleaseEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/api.ApplicationReleaseResponse'
+    type: object
+  api.ApplicationReleaseOutputResponse:
+    properties:
+      artifact_id:
+        type: string
+      execution_job_id:
+        type: string
+      failure_reason:
+        type: string
+      id:
+        type: string
+      immutable_reference:
+        type: string
+      key:
+        type: string
+      kind:
+        type: string
+      name:
+        type: string
+      status:
+        type: string
+    type: object
+  api.ApplicationReleaseResponse:
+    properties:
+      application_version:
+        type: string
+      auto_channel:
+        type: string
+      build_id:
+        type: string
+      failure_reason:
+        type: string
+      id:
+        type: string
+      job_id:
+        type: string
+      outputs:
+        items:
+          $ref: '#/definitions/api.ApplicationReleaseOutputResponse'
+        type: array
+      project_id:
+        type: string
+      status:
+        type: string
+    type: object
   api.ArtifactBrowseEnvelope:
     properties:
       data:
@@ -2097,6 +2146,82 @@ info:
   title: Coyote CI API
   version: "0.1"
 paths:
+  /application-releases/{releaseID}:
+    get:
+      description: Returns a generic application release and its expected output publication
+        state.
+      parameters:
+      - description: Application release ID
+        in: path
+        name: releaseID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ApplicationReleaseEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get application release
+      tags:
+      - application-releases
+  /application-releases/{releaseID}/channels/stable:
+    post:
+      description: Moves the generic stable channel to a complete job-backed application
+        release.
+      parameters:
+      - description: Application release ID
+        in: path
+        name: releaseID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ApplicationReleaseEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Promote application release to stable
+      tags:
+      - application-releases
   /artifact-trigger-deliveries/{deliveryID}/retry:
     post:
       description: Retries a failed artifact-trigger delivery by delivery id.

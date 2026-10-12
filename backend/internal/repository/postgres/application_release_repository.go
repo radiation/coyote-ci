@@ -117,6 +117,30 @@ func (r *ApplicationReleaseRepository) Reconcile(ctx context.Context, releaseID 
 		}
 		return r.GetByID(ctx, releaseID)
 	}
+	var buildStatus string
+	var buildError sql.NullString
+	if err = tx.QueryRowContext(ctx, `SELECT status, error_message FROM builds WHERE id=$1 FOR UPDATE`, release.BuildID).Scan(&buildStatus, &buildError); err != nil {
+		return domain.ApplicationRelease{}, err
+	}
+	if buildStatus == string(domain.BuildStatusFailed) || buildStatus == string(domain.BuildStatusCanceled) {
+		reason := "build " + buildStatus
+		if strings.TrimSpace(buildError.String) != "" {
+			reason = strings.TrimSpace(buildError.String)
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE application_releases SET status='failed', failure_reason=$2, failed_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='pending'`, releaseID, reason); err != nil {
+			return domain.ApplicationRelease{}, err
+		}
+		if err = tx.Commit(); err != nil {
+			return domain.ApplicationRelease{}, err
+		}
+		return r.GetByID(ctx, releaseID)
+	}
+	if buildStatus != string(domain.BuildStatusSuccess) {
+		if err = tx.Commit(); err != nil {
+			return domain.ApplicationRelease{}, err
+		}
+		return r.GetByID(ctx, releaseID)
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT id, output_kind, output_key, display_name, definition_json::text, status, artifact_id, artifact_version_id, execution_job_id, immutable_reference, failure_reason, published_at, failed_at, created_at, updated_at FROM application_release_outputs WHERE release_id=$1 FOR UPDATE`, releaseID)
 	if err != nil {
 		return domain.ApplicationRelease{}, err
@@ -278,6 +302,17 @@ func moveChannel(ctx context.Context, tx *sql.Tx, release domain.ApplicationRele
 		return err
 	} else if prior.String == release.ID {
 		return nil
+	} else if name == "latest" {
+		var newer bool
+		if err = tx.QueryRowContext(ctx, `SELECT candidate.build_number > current_build.build_number FROM builds candidate JOIN application_releases current_release ON current_release.id=$2 JOIN builds current_build ON current_build.id=current_release.build_id WHERE candidate.id=$1`, release.BuildID, prior.String).Scan(&newer); err != nil {
+			return err
+		}
+		if !newer {
+			return nil
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE application_channels SET current_release_id=$2, updated_at=NOW() WHERE id=$1`, channelID.String, release.ID); err != nil {
+			return err
+		}
 	} else if _, err = tx.ExecContext(ctx, `UPDATE application_channels SET current_release_id=$2, updated_at=NOW() WHERE id=$1`, channelID.String, release.ID); err != nil {
 		return err
 	}

@@ -16,6 +16,7 @@ type releaseRepositoryFake struct {
 	promoteErr    error
 	pending       []domain.ApplicationRelease
 	reconcileErr  error
+	reconcileErrs map[string]error
 	reconciledIDs []string
 	failErr       error
 	failedBuildID string
@@ -42,6 +43,9 @@ func (f *releaseRepositoryFake) ListPending(context.Context, int) ([]domain.Appl
 }
 func (f *releaseRepositoryFake) Reconcile(_ context.Context, id string) (domain.ApplicationRelease, error) {
 	f.reconciledIDs = append(f.reconciledIDs, id)
+	if err, found := f.reconcileErrs[id]; found {
+		return domain.ApplicationRelease{}, err
+	}
 	return domain.ApplicationRelease{}, f.reconcileErr
 }
 func (f *releaseRepositoryFake) FailBuildRelease(_ context.Context, buildID string, reason string) (domain.ApplicationRelease, error) {
@@ -63,6 +67,22 @@ func TestServiceReconcilePending_ReturnsReconcileError(t *testing.T) {
 	repo := &releaseRepositoryFake{pending: []domain.ApplicationRelease{{ID: "release-1"}}, reconcileErr: errors.New("database unavailable")}
 	if err := NewService(repo).ReconcilePending(context.Background(), 10); err == nil {
 		t.Fatal("ReconcilePending() error = nil, want error")
+	}
+}
+
+func TestServiceReconcilePending_ContinuesAfterErrors(t *testing.T) {
+	firstErr := errors.New("first unavailable")
+	secondErr := errors.New("second unavailable")
+	repo := &releaseRepositoryFake{
+		pending:       []domain.ApplicationRelease{{ID: "release-1"}, {ID: "release-2"}, {ID: "release-3"}},
+		reconcileErrs: map[string]error{"release-1": firstErr, "release-2": secondErr},
+	}
+	reconcileErr := NewService(repo).ReconcilePending(context.Background(), 10)
+	if !errors.Is(reconcileErr, firstErr) || !errors.Is(reconcileErr, secondErr) {
+		t.Fatalf("ReconcilePending() error = %v, want both errors", reconcileErr)
+	}
+	if got := strings.Join(repo.reconciledIDs, ","); got != "release-1,release-2,release-3" {
+		t.Fatalf("reconciled IDs = %q, want all pending releases", got)
 	}
 }
 

@@ -84,12 +84,13 @@ func (s *Service) ReconcilePending(ctx context.Context, limit int) error {
 	if err != nil {
 		return err
 	}
+	var reconcileErrors []error
 	for _, release := range pending {
 		if _, reconcileErr := s.Reconcile(ctx, release.ID); reconcileErr != nil {
-			return fmt.Errorf("reconcile release %s: %w", release.ID, reconcileErr)
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile release %s: %w", release.ID, reconcileErr))
 		}
 	}
-	return nil
+	return errors.Join(reconcileErrors...)
 }
 
 func (s *Service) FailBuildRelease(ctx context.Context, build domain.Build) error {
@@ -121,16 +122,21 @@ func releaseOutputs(resolved *pipeline.ResolvedPipeline, build domain.Build) ([]
 	}
 	artifactDeclarations := map[string]domain.ArtifactDeclaration{}
 	for _, declaration := range resolved.Artifacts.Declarations {
-		artifactDeclarations[declaration.Name] = declaration
+		if name := strings.TrimSpace(declaration.Name); name != "" {
+			artifactDeclarations[name] = declaration
+		}
 	}
 	imageSteps := map[string]pipeline.ResolvedStep{}
 	for _, step := range resolved.Steps {
 		if step.ExecutionKind == domain.ExecutionKindImageBuild {
-			imageSteps[step.Name] = step
+			if name := strings.TrimSpace(step.Name); name != "" {
+				imageSteps[name] = step
+			}
 		}
 	}
 	outputs := make([]domain.ApplicationReleaseOutput, 0, len(resolved.Release.Artifacts)+len(resolved.Release.Images))
 	for _, name := range resolved.Release.Artifacts {
+		name = strings.TrimSpace(name)
 		declaration := artifactDeclarations[name]
 		definition, err := json.Marshal(map[string]string{"path": declaration.Path, "name": name})
 		if err != nil {
@@ -139,6 +145,7 @@ func releaseOutputs(resolved *pipeline.ResolvedPipeline, build domain.Build) ([]
 		outputs = append(outputs, domain.ApplicationReleaseOutput{ID: uuid.NewString(), Kind: domain.ApplicationReleaseOutputArtifact, OutputKey: "artifact:" + name, DisplayName: name, DefinitionJSON: string(definition), CreatedAt: time.Now().UTC()})
 	}
 	for _, name := range resolved.Release.Images {
+		name = strings.TrimSpace(name)
 		step := imageSteps[name]
 		definition, err := json.Marshal(map[string]string{"node_id": step.NodeID, "name": name, "target_image_reference": step.RemoteImageBuild.TargetImageReference})
 		if err != nil {
