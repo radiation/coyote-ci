@@ -37,6 +37,7 @@ import (
 	artifactsvc "github.com/radiation/coyote-ci/backend/internal/service/artifact"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	managedimagesvc "github.com/radiation/coyote-ci/backend/internal/service/managedimage"
+	releasesvc "github.com/radiation/coyote-ci/backend/internal/service/release"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	webhooksvc "github.com/radiation/coyote-ci/backend/internal/service/webhook"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
@@ -119,6 +120,7 @@ func main() {
 	}()
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
+	applicationReleaseRepo := repositorypostgres.NewApplicationReleaseRepository(db)
 	executionJobRepo := repositorypostgres.NewExecutionJobRepository(db)
 	workspaceRevisionRepo := repositorypostgres.NewWorkspaceRevisionRepository(db)
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
@@ -215,6 +217,7 @@ func main() {
 		log.Fatalf("failed to configure repository-aware checkout: %v", checkoutResolverErr)
 	}
 	artifactService := artifactsvc.NewService(artifactRepo)
+	applicationReleaseService := releasesvc.NewService(applicationReleaseRepo)
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, nil, logSink, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:      executionJobRepo,
 		ExecutionOutputRepo:   executionJobOutputRepo,
@@ -230,6 +233,7 @@ func main() {
 		ArtifactWorkspace:     cfg.ExecutionWorkspaceRoot,
 		ExecutionWorkspace:    cfg.ExecutionWorkspaceRoot,
 		DefaultImage:          cfg.ExecutionDefaultImage,
+		ReleaseSnapshotter:    applicationReleaseService,
 	})
 	projectService := service.NewProjectService(projectRepo)
 	userService := service.NewUserService(userRepo)
@@ -254,6 +258,7 @@ func main() {
 	webhookMetrics := observability.NewExpvarWebhookIngressMetrics()
 	webhookService.SetMetrics(webhookMetrics)
 	buildHandler := handler.NewBuildHandler(buildService)
+	applicationReleaseHandler := handler.NewApplicationReleaseHandler(applicationReleaseService)
 	workerVisibilityService := workersvc.NewVisibilityService(workerRepo, buildService)
 	workerVisibilityService.SetProjectRepository(projectRepo)
 	workerVisibilityService.SetJobRepository(jobRepo)
@@ -281,6 +286,7 @@ func main() {
 		log.Fatalf("failed to provision bootstrap admins: %v", bootstrapErr)
 	}
 	buildHandler.SetAuthorization(authMode, projectMembershipService)
+	applicationReleaseHandler.SetAuthorization(authMode, projectMembershipService)
 	artifactHandler.SetAuthorization(authMode, projectMembershipService)
 	jobHandler.SetAuthorization(authMode, projectMembershipService)
 	projectHandler.SetAuthorization(authMode, projectMembershipService)
@@ -398,6 +404,7 @@ func main() {
 		apphttp.WithWorkerHandler(workerHandler),
 		apphttp.WithWorkspaceHelperHandler(workspaceHelperHandler),
 		apphttp.WithPublicHandler(publicHandler),
+		apphttp.WithApplicationReleaseHandler(applicationReleaseHandler),
 	)
 	mux := nethttp.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())
@@ -410,6 +417,7 @@ func main() {
 	log.Printf("starting server on %s", addr)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go releasesvc.NewRecoveryService(applicationReleaseService, 10*time.Second).Run(ctx)
 	server := &nethttp.Server{Addr: addr, Handler: mux}
 	var wg sync.WaitGroup
 	wg.Add(1)

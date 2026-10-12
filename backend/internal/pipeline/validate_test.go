@@ -45,6 +45,49 @@ func TestValidate_EmptySteps(t *testing.T) {
 	assertContains(t, err.Error(), "at least one step")
 }
 
+func TestValidate_ReleaseDefinition(t *testing.T) {
+	validImage := StepDef{Name: "image", ImageBuild: &ImageBuildDef{Context: ".", Dockerfile: "Dockerfile", Image: "example/app/api"}}
+	validArtifact := domain.ArtifactDeclaration{Name: "binary", Path: "dist/app"}
+	tests := []struct {
+		name     string
+		release  *ReleaseDef
+		version  *ApplicationVersionDef
+		artifact domain.ArtifactDeclaration
+		steps    []StepDef
+		want     string
+	}{
+		{name: "requires application version", release: &ReleaseDef{Artifacts: []string{"binary"}}, artifact: validArtifact, steps: []StepDef{{Name: "build", Run: "go build"}}, want: "requires pipeline.application_version"},
+		{name: "requires output", release: &ReleaseDef{}, version: &ApplicationVersionDef{Value: "1.2.3"}, steps: []StepDef{{Name: "build", Run: "go build"}}, want: "must declare at least one"},
+		{name: "requires top level named artifact", release: &ReleaseDef{Artifacts: []string{"missing"}}, version: &ApplicationVersionDef{Value: "1.2.3"}, steps: []StepDef{{Name: "build", Run: "go build"}}, want: "named top-level artifact"},
+		{name: "rejects glob artifact", release: &ReleaseDef{Artifacts: []string{"binary"}}, version: &ApplicationVersionDef{Value: "1.2.3"}, artifact: domain.ArtifactDeclaration{Name: "binary", Path: "dist/*"}, steps: []StepDef{{Name: "build", Run: "go build"}}, want: "exact non-glob"},
+		{name: "rejects duplicate artifact", release: &ReleaseDef{Artifacts: []string{"binary", "binary"}}, version: &ApplicationVersionDef{Value: "1.2.3"}, artifact: validArtifact, steps: []StepDef{{Name: "build", Run: "go build"}}, want: "duplicate release artifact"},
+		{name: "requires image build step", release: &ReleaseDef{Images: []string{"missing"}}, version: &ApplicationVersionDef{Value: "1.2.3"}, steps: []StepDef{{Name: "build", Run: "go build"}}, want: "must reference an image_build"},
+		{name: "rejects duplicate image", release: &ReleaseDef{Images: []string{"image", "image"}}, version: &ApplicationVersionDef{Value: "1.2.3"}, steps: []StepDef{validImage}, want: "duplicate release image"},
+		{name: "rejects unsupported auto channel", release: &ReleaseDef{Images: []string{"image"}, AutoChannel: "stable"}, version: &ApplicationVersionDef{Value: "1.2.3"}, steps: []StepDef{validImage}, want: "only latest"},
+		{name: "accepts nested image build", release: &ReleaseDef{Images: []string{"image"}}, version: &ApplicationVersionDef{Value: "1.2.3"}, steps: []StepDef{{Group: &StepGroupDef{Name: "publish", Steps: []StepDef{validImage}}}}},
+		{name: "accepts valid release", release: &ReleaseDef{Artifacts: []string{"binary"}, Images: []string{"image"}, AutoChannel: "latest"}, version: &ApplicationVersionDef{Value: "1.2.3"}, artifact: validArtifact, steps: []StepDef{validImage}},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			pipelineFile := &PipelineFile{Version: 1, Pipeline: PipelineMeta{ApplicationVersion: testCase.version, Release: testCase.release}, Steps: testCase.steps}
+			if testCase.artifact.Name != "" {
+				pipelineFile.Artifacts.Declarations = []domain.ArtifactDeclaration{testCase.artifact}
+			}
+			validateErr := Validate(pipelineFile)
+			if testCase.want == "" {
+				if validateErr != nil {
+					t.Fatalf("validate release: %v", validateErr)
+				}
+				return
+			}
+			if validateErr == nil {
+				t.Fatalf("expected validation error containing %q", testCase.want)
+			}
+			assertContains(t, validateErr.Error(), testCase.want)
+		})
+	}
+}
+
 func TestValidate_EmptyStepName(t *testing.T) {
 	pf := &PipelineFile{
 		Version: 1,

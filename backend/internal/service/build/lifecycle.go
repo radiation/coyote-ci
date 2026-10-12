@@ -29,8 +29,29 @@ func (s *BuildService) persistBuildStatus(ctx context.Context, id string, toStat
 		return domain.Build{}, err
 	}
 	s.notifySCMBuildStatus(ctx, build)
-	s.notifyTerminalBuild(ctx, build)
+	s.postTerminalBuild(ctx, build)
 	return build, nil
+}
+
+func (s *BuildService) postTerminalBuild(ctx context.Context, build domain.Build) {
+	if !domain.IsTerminalBuildStatus(build.Status) {
+		return
+	}
+	s.notifyTerminalBuild(ctx, build)
+	if s.releaseSnapshotter != nil {
+		if releaseErr := s.releaseSnapshotter.FailBuildRelease(ctx, build); releaseErr != nil {
+			log.Printf("WARNING: application release failure reconciliation failed: build_id=%s err=%v", build.ID, releaseErr)
+		}
+	}
+}
+
+func (s *BuildService) postTerminalBuildByID(ctx context.Context, buildID string) {
+	build, err := s.buildRepo.GetByID(ctx, buildID)
+	if err != nil {
+		log.Printf("WARNING: terminal build side effects skipped: build_id=%s reason=build_lookup_failed err=%v", buildID, err)
+		return
+	}
+	s.postTerminalBuild(ctx, build)
 }
 
 func (s *BuildService) notifySCMBuildStatus(ctx context.Context, build domain.Build) {
@@ -81,7 +102,7 @@ func (s *BuildService) CancelBuild(ctx context.Context, id string) (domain.Build
 			return domain.Build{}, mapRepoErr(cancelErr)
 		}
 		s.notifySCMBuildStatus(ctx, canceled)
-		s.notifyTerminalBuild(ctx, canceled)
+		s.postTerminalBuild(ctx, canceled)
 		if !cancelBuildIncludesExecutionJobs(s.buildRepo) {
 			s.cancelExecutionJobsForBuild(ctx, id, reason, now)
 		}

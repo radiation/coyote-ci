@@ -34,6 +34,7 @@ func TestClient_GetMeSendsBearerAndUserAgent(t *testing.T) {
 		if r.URL.Path != "/api/me" {
 			t.Fatalf("unexpected request path %q", r.URL.Path)
 		}
+
 		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
 			t.Fatalf("expected bearer header, got %q", got)
 		}
@@ -56,6 +57,38 @@ func TestClient_GetMeSendsBearerAndUserAgent(t *testing.T) {
 	}
 	if me.AuthMethod != "api_token" || me.User.ID != "user-1" {
 		t.Fatalf("unexpected response: %+v", me)
+	}
+}
+
+func TestClient_ApplicationReleaseMethods(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/application-releases/release-1":
+			if r.Method != http.MethodGet {
+				t.Fatalf("get method=%s, want GET", r.Method)
+			}
+		case "/api/application-releases/release-1/channels/stable":
+			if r.Method != http.MethodPost {
+				t.Fatalf("promote method=%s, want POST", r.Method)
+			}
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":"release-1","build_id":"build-1","project_id":"project-1","application_version":"1.2.3","status":"complete","outputs":[]}}`))
+	}))
+	defer server.Close()
+	client, newErr := New(server.URL, "token", "coyote/test", nil)
+	if newErr != nil {
+		t.Fatalf("new client: %v", newErr)
+	}
+	release, getErr := client.GetApplicationRelease(context.Background(), "release-1")
+	if getErr != nil || release.ID != "release-1" {
+		t.Fatalf("get application release=%+v err=%v", release, getErr)
+	}
+	promoted, promoteErr := client.PromoteApplicationReleaseStable(context.Background(), "release-1")
+	if promoteErr != nil || promoted.Status != "complete" {
+		t.Fatalf("promote application release=%+v err=%v", promoted, promoteErr)
 	}
 }
 

@@ -84,6 +84,7 @@ type BuildService struct {
 	scmStatusReporter         BuildSCMStatusReporter
 	scmStatusDeliveryRepo     repository.SCMStatusDeliveryRepository
 	artifactTriggerDispatcher ArtifactTriggerDispatcher
+	releaseSnapshotter        ReleaseSnapshotter
 
 	defaultExecutionImage string
 }
@@ -102,6 +103,11 @@ type BuildSCMStatusReporter interface {
 
 type ArtifactTriggerDispatcher interface {
 	DispatchArtifactTriggers(ctx context.Context, build domain.Build, artifact domain.BuildArtifact) error
+}
+
+type ReleaseSnapshotter interface {
+	EnsureSnapshot(context.Context, domain.Build) error
+	FailBuildRelease(context.Context, domain.Build) error
 }
 
 // BuildServiceConfig groups all optional dependencies for BuildService. Zero
@@ -128,6 +134,7 @@ type BuildServiceConfig struct {
 	SCMStatusReporter         BuildSCMStatusReporter
 	SCMStatusDeliveryRepo     repository.SCMStatusDeliveryRepository
 	ArtifactTriggerDispatcher ArtifactTriggerDispatcher
+	ReleaseSnapshotter        ReleaseSnapshotter
 }
 
 // NewBuildServiceFromConfig creates a fully-wired BuildService in one call.
@@ -153,6 +160,7 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.scmStatusReporter = cfg.SCMStatusReporter
 	svc.scmStatusDeliveryRepo = cfg.SCMStatusDeliveryRepo
 	svc.artifactTriggerDispatcher = cfg.ArtifactTriggerDispatcher
+	svc.releaseSnapshotter = cfg.ReleaseSnapshotter
 	if cfg.ArtifactLabelRepo != nil {
 		type artifactLabelRepoAware interface {
 			SetArtifactLabelRepository(repository.ArtifactLabelRepository)

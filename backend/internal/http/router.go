@@ -17,17 +17,22 @@ import (
 const maxRequestBodySize = 1 << 20 // 1 MiB
 
 type routerConfig struct {
-	authMiddleware           func(nethttp.Handler) nethttp.Handler
-	authHandler              *handler.AuthHandler
-	notificationHandler      *handler.NotificationHandler
-	userHandler              *handler.UserHandler
-	serverInfoHandler        *handler.ServerInfoHandler
-	apiTokenHandler          *handler.APITokenHandler
-	projectMembershipHandler *handler.ProjectMembershipHandler
-	workerHandler            *handler.WorkerHandler
-	workspaceHelperHandler   *handler.WorkspaceHelperHandler
-	scmHandler               *handler.SCMHandler
-	publicHandler            *handler.PublicHandler
+	authMiddleware            func(nethttp.Handler) nethttp.Handler
+	authHandler               *handler.AuthHandler
+	notificationHandler       *handler.NotificationHandler
+	userHandler               *handler.UserHandler
+	serverInfoHandler         *handler.ServerInfoHandler
+	apiTokenHandler           *handler.APITokenHandler
+	projectMembershipHandler  *handler.ProjectMembershipHandler
+	workerHandler             *handler.WorkerHandler
+	workspaceHelperHandler    *handler.WorkspaceHelperHandler
+	scmHandler                *handler.SCMHandler
+	publicHandler             *handler.PublicHandler
+	applicationReleaseHandler *handler.ApplicationReleaseHandler
+}
+
+func WithApplicationReleaseHandler(applicationReleaseHandler *handler.ApplicationReleaseHandler) RouterOption {
+	return func(cfg *routerConfig) { cfg.applicationReleaseHandler = applicationReleaseHandler }
 }
 
 type RouterOption func(*routerConfig)
@@ -275,6 +280,10 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 				r.Post("/{buildID}/cancel", buildHandler.CancelBuild)
 			})
 			r.Post("/artifact-trigger-deliveries/{deliveryID}/retry", buildHandler.RetryArtifactTriggerDelivery)
+			if cfg.applicationReleaseHandler != nil {
+				r.Get("/application-releases/{releaseID}", cfg.applicationReleaseHandler.Get)
+				r.Post("/application-releases/{releaseID}/channels/stable", cfg.applicationReleaseHandler.PromoteStable)
+			}
 
 			r.Route("/jobs", func(r chi.Router) {
 				r.Post("/", jobHandler.CreateJob)

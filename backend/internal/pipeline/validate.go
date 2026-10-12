@@ -48,13 +48,16 @@ func Validate(pf *PipelineFile) error {
 		} else if err := versioning.ValidateApplicationVersionConfig(config); err != nil {
 			errs = append(errs, ValidationError{Field: "pipeline.application_version", Message: err.Error()})
 		}
+
 	}
+	errs = append(errs, validateReleaseDef(pf)...)
 
 	// top-level env keys
 	for key := range pf.Env {
 		if !validEnvKey.MatchString(key) {
 			errs = append(errs, ValidationError{Field: "env", Message: fmt.Sprintf("invalid env key %q", key)})
 		}
+
 	}
 
 	for i, declaration := range declarationsForValidation(pf.Artifacts) {
@@ -138,6 +141,71 @@ func Validate(pf *PipelineFile) error {
 		return errs
 	}
 	return nil
+}
+
+func validateReleaseDef(pf *PipelineFile) ValidationErrors {
+	if pf.Pipeline.Release == nil {
+		return nil
+	}
+	var errs ValidationErrors
+	release := pf.Pipeline.Release
+	if pf.Pipeline.ApplicationVersion == nil {
+		errs = append(errs, ValidationError{Field: "pipeline.release", Message: "requires pipeline.application_version"})
+	}
+	if len(release.Artifacts) == 0 && len(release.Images) == 0 {
+		errs = append(errs, ValidationError{Field: "pipeline.release", Message: "must declare at least one artifact or image"})
+	}
+	artifactNames := map[string]domain.ArtifactDeclaration{}
+	for _, declaration := range declarationsForValidation(pf.Artifacts) {
+		if name := strings.TrimSpace(declaration.Name); name != "" {
+			artifactNames[name] = declaration
+		}
+	}
+	seen := map[string]struct{}{}
+	for index, name := range release.Artifacts {
+		field := fmt.Sprintf("pipeline.release.artifacts[%d]", index)
+		name = strings.TrimSpace(name)
+		declaration, ok := artifactNames[name]
+		if name == "" || !ok {
+			errs = append(errs, ValidationError{Field: field, Message: "must reference a named top-level artifact declaration"})
+			continue
+		}
+		if pathPatternHasWildcard(declaration.Path) {
+			errs = append(errs, ValidationError{Field: field, Message: "must reference an exact non-glob artifact path"})
+		}
+		if _, duplicate := seen["artifact:"+name]; duplicate {
+			errs = append(errs, ValidationError{Field: field, Message: "duplicate release artifact"})
+		}
+		seen["artifact:"+name] = struct{}{}
+	}
+	imageSteps := map[string]struct{}{}
+	collectImageStepNames(pf.Steps, imageSteps)
+	for index, name := range release.Images {
+		field := fmt.Sprintf("pipeline.release.images[%d]", index)
+		name = strings.TrimSpace(name)
+		if _, ok := imageSteps[name]; name == "" || !ok {
+			errs = append(errs, ValidationError{Field: field, Message: "must reference an image_build step"})
+			continue
+		}
+		if _, duplicate := seen["image:"+name]; duplicate {
+			errs = append(errs, ValidationError{Field: field, Message: "duplicate release image"})
+		}
+		seen["image:"+name] = struct{}{}
+	}
+	if channel := strings.TrimSpace(release.AutoChannel); channel != "" && channel != "latest" {
+		errs = append(errs, ValidationError{Field: "pipeline.release.auto_channel", Message: "only latest may advance automatically"})
+	}
+	return errs
+}
+
+func collectImageStepNames(steps []StepDef, names map[string]struct{}) {
+	for _, step := range steps {
+		if step.Group != nil {
+			collectImageStepNames(step.Group.Steps, names)
+		} else if step.ImageBuild != nil {
+			names[strings.TrimSpace(step.Name)] = struct{}{}
+		}
+	}
 }
 
 type stepDependencyRef struct {

@@ -13,10 +13,17 @@ type ResolvedPipeline struct {
 	Image              string
 	Env                map[string]string
 	ApplicationVersion versioning.ApplicationVersionConfig
+	Release            *ResolvedRelease
 	Steps              []ResolvedStep
 	Plan               ExecutionPlan
 	Artifacts          ResolvedArtifacts
 	Cache              *domain.StepCacheConfig
+}
+
+type ResolvedRelease struct {
+	Artifacts   []string
+	Images      []string
+	AutoChannel string
 }
 
 // ResolvedStep is a single normalized step ready for conversion to a canonical build step.

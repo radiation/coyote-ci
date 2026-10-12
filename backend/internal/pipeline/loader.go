@@ -120,11 +120,33 @@ func Resolve(pf *PipelineFile) *ResolvedPipeline {
 		Image:              strings.TrimSpace(pf.Pipeline.Image),
 		Env:                mergedPipelineEnv,
 		ApplicationVersion: resolveApplicationVersion(pf.Pipeline.ApplicationVersion),
+		Release:            resolveRelease(pf.Pipeline.Release),
 		Steps:              steps,
 		Plan:               ExecutionPlan{Nodes: nodes},
 		Artifacts:          ResolvedArtifacts{Paths: append([]string{}, pf.Artifacts.Paths...), Declarations: append([]domain.ArtifactDeclaration(nil), pf.Artifacts.Declarations...)},
 		Cache:              pipelineCache.Clone(),
 	}
+}
+
+func resolveRelease(def *ReleaseDef) *ResolvedRelease {
+	if def == nil {
+		return nil
+	}
+	return &ResolvedRelease{
+		Artifacts:   trimStrings(def.Artifacts),
+		Images:      trimStrings(def.Images),
+		AutoChannel: strings.TrimSpace(def.AutoChannel),
+	}
+}
+
+func trimStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func resolveApplicationVersion(def *ApplicationVersionDef) versioning.ApplicationVersionConfig {

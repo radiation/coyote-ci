@@ -343,6 +343,17 @@ func (s *BuildService) PrepareBuildExecution(ctx context.Context, id string) (do
 	build = resolvedBuild
 	if build.ApplicationVersion != nil {
 		s.emitBuildPreparationLog(ctx, buildID, fmt.Sprintf("Resolved application version: %s", *build.ApplicationVersion))
+		if s.releaseSnapshotter != nil {
+			if snapshotErr := s.releaseSnapshotter.EnsureSnapshot(ctx, build); snapshotErr != nil {
+				message := fmt.Sprintf("application release initialization failed: %v", snapshotErr)
+				failed, updateErr := s.persistBuildStatus(ctx, buildID, domain.BuildStatusFailed, &message)
+				if updateErr != nil {
+					return domain.Build{}, mapRepoErr(updateErr)
+				}
+				_ = s.releaseSnapshotter.FailBuildRelease(ctx, failed)
+				return failed, nil
+			}
+		}
 	}
 	s.emitBuildPreparationLog(ctx, buildID, "Build workspace ready")
 

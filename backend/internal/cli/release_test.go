@@ -3,11 +3,15 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/radiation/coyote-ci/backend/internal/cli/config"
+	"github.com/radiation/coyote-ci/backend/internal/cli/credentials"
 	releases "github.com/radiation/coyote-ci/backend/internal/release"
 )
 
@@ -102,6 +106,84 @@ func TestReleaseOutputHelper(t *testing.T) {
 	}
 	if overlayErr := writeReleaseOverlay(filepath.Join(blockedParent, "resolved.yaml"), releases.Resolved{}); overlayErr == nil {
 		t.Fatal("expected blocked output error")
+	}
+}
+
+func TestApplicationReleaseCommands(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/application-releases/release-1":
+			if r.Method != http.MethodGet {
+				t.Fatalf("show method=%s, want GET", r.Method)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":"release-1","build_id":"build-1","project_id":"project-1","application_version":"1.2.3","status":"complete","outputs":[]}}`))
+		case "/api/application-releases/release-1/channels/stable":
+			if r.Method != http.MethodPost {
+				t.Fatalf("promote method=%s, want POST", r.Method)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":"release-1","build_id":"build-1","project_id":"project-1","application_version":"1.2.3","status":"complete","outputs":[]}}`))
+		case "/api/application-releases/pending/channels/stable":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":{"code":"release_incomplete","message":"only complete releases can be promoted"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configStore := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	if saveErr := configStore.Save(config.File{CurrentContext: "local", Contexts: map[string]config.Context{
+		"local": {Name: "local", ServerURL: server.URL, CredentialRef: "context:local"},
+	}}); saveErr != nil {
+		t.Fatalf("save config: %v", saveErr)
+	}
+	credentialsStore := credentials.NewMemoryStore()
+	if setErr := credentialsStore.Set("context:local", "token"); setErr != nil {
+		t.Fatalf("set token: %v", setErr)
+	}
+	dependencies := Dependencies{ConfigStore: configStore, Credentials: credentialsStore}
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	dependencies.Stdout, dependencies.Stderr, dependencies.Args = stdout, stderr, []string{"release", "show", "release-1"}
+	if code := Run(dependencies); code != 0 {
+		t.Fatalf("release show exit=%d stderr=%s", code, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "Release: release-1") || !strings.Contains(got, "Version: 1.2.3") {
+		t.Fatalf("unexpected show output: %s", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	dependencies.Stdout, dependencies.Stderr, dependencies.Args = stdout, stderr, []string{"release", "show", "release-1", "--json"}
+	if code := Run(dependencies); code != 0 {
+		t.Fatalf("release show JSON exit=%d stderr=%s", code, stderr.String())
+	}
+	var shown map[string]any
+	if decodeErr := json.Unmarshal(stdout.Bytes(), &shown); decodeErr != nil {
+		t.Fatalf("decode show JSON: %v", decodeErr)
+	}
+	if shown["id"] != "release-1" || shown["status"] != "complete" {
+		t.Fatalf("unexpected show JSON: %+v", shown)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	dependencies.Stdout, dependencies.Stderr, dependencies.Args = stdout, stderr, []string{"release", "promote", "release-1", "--channel", "stable"}
+	if code := Run(dependencies); code != 0 {
+		t.Fatalf("release promote exit=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Promoted release release-1 to stable") {
+		t.Fatalf("unexpected promote output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	dependencies.Stdout, dependencies.Stderr, dependencies.Args = stdout, stderr, []string{"release", "promote", "pending", "--channel", "stable"}
+	if code := Run(dependencies); code != 2 {
+		t.Fatalf("pending promotion exit=%d, want 2 stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "only complete releases can be promoted") {
+		t.Fatalf("missing server error: %s", stderr.String())
 	}
 }
 
