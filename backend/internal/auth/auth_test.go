@@ -104,6 +104,7 @@ func TestMiddleware_BearerTokenAuthenticatesAsOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create user failed: %v", err)
 	}
+
 	tokenService := service.NewAPITokenService(tokenRepo, userRepo)
 	created, err := tokenService.CreateAPIToken(ctx, service.CreateAPITokenInput{UserID: user.ID, Name: "cli"})
 	if err != nil {
@@ -149,6 +150,27 @@ func TestMiddleware_BearerTokenAuthenticatesAsOwner(t *testing.T) {
 	}
 	if len(token.Scopes) != 0 {
 		t.Fatalf("expected empty scopes by default, got %v", token.Scopes)
+	}
+}
+
+func TestPrincipalFromContextPreservesAPITokenIdentity(t *testing.T) {
+	user := domain.User{ID: "user-1", Email: "user@example.com"}
+	ctx := WithUser(context.Background(), user)
+	ctx = WithAuthMethod(ctx, MethodAPIToken)
+	ctx = WithAuthenticatedAPIToken(ctx, "token-1", []domain.APITokenScope{domain.APITokenScopeBuildRead})
+
+	principal, err := PrincipalFromContext(ctx)
+	if err != nil {
+		t.Fatalf("principal from context failed: %v", err)
+	}
+	if principal.User.ID != user.ID {
+		t.Fatalf("expected user %q, got %q", user.ID, principal.User.ID)
+	}
+	if principal.APIToken == nil || principal.APIToken.ID != "token-1" {
+		t.Fatalf("expected token identity, got %+v", principal.APIToken)
+	}
+	if !domain.HasAPITokenScope(principal.APIToken.Scopes, domain.APITokenScopeBuildRead) {
+		t.Fatalf("expected copied token scope, got %v", principal.APIToken.Scopes)
 	}
 }
 

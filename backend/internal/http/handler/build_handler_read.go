@@ -11,6 +11,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
 	"github.com/radiation/coyote-ci/backend/internal/auth"
+	"github.com/radiation/coyote-ci/backend/internal/authorization"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
@@ -140,16 +141,27 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
 		return
 	}
+	if h.buildReader == nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "build authorization is not configured")
+		return
+	}
 
-	build, err := h.buildService.GetBuild(r.Context(), id)
+	principal := authorization.Principal{}
+	if normalizedAuthMode(h.authMode) != auth.ModeDisabled {
+		var principalErr error
+		principal, principalErr = auth.PrincipalFromContext(r.Context())
+		if principalErr != nil {
+			h.writeBuildReadAuthorizationError(w, principalErr)
+			return
+		}
+	}
+
+	build, err := h.buildReader.GetBuild(r.Context(), principal, id)
 	if err != nil {
+		if h.writeBuildReadAuthorizationError(w, err) {
+			return
+		}
 		h.writeServiceError(w, err)
-		return
-	}
-	if !authorizeProject(w, r, h.authMode, h.projectRoles, build.ProjectID, auth.CanReadProjectResources, "project membership is required") {
-		return
-	}
-	if !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
 		return
 	}
 
@@ -187,6 +199,26 @@ func (h *BuildHandler) GetBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeDataJSON(w, http.StatusOK, resp)
+}
+
+func (h *BuildHandler) writeBuildReadAuthorizationError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, authorization.ErrUnauthenticated):
+		writeErrorJSON(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+	case errors.Is(err, authorization.ErrProjectIDRequired):
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "project id is required")
+	case errors.Is(err, authorization.ErrForbidden):
+		writeErrorJSON(w, http.StatusForbidden, "forbidden", "project membership is required")
+	case errors.Is(err, authorization.ErrAPITokenIdentityUnavailable), errors.Is(err, authorization.ErrProjectAuthorizationNotConfigured):
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+	default:
+		var scopeErr *authorization.MissingAPITokenScopeError
+		if !errors.As(err, &scopeErr) {
+			return false
+		}
+		writeErrorJSON(w, http.StatusForbidden, "missing_token_scope", scopeErr.Error())
+	}
+	return true
 }
 
 func (h *BuildHandler) resolveProjectFilter(w http.ResponseWriter, r *http.Request) (string, bool) {

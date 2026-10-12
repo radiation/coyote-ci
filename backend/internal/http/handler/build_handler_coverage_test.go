@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -411,6 +412,7 @@ func TestBuildHandlerGetBuildHandlesJobAndStepLookupFailures(t *testing.T) {
 
 	t.Run("job lookup failure returns internal error", func(t *testing.T) {
 		h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{build: build}, nil, nil))
+		h.SetAuthorization(auth.ModeDisabled, nil)
 		h.SetJobService(service.NewJobService(&failingGetByIDsJobRepo{JobRepository: repositorymemory.NewJobRepository(), err: errors.New("job lookup failed")}, nil))
 
 		req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1", nil), "build-1")
@@ -427,6 +429,7 @@ func TestBuildHandlerGetBuildHandlesJobAndStepLookupFailures(t *testing.T) {
 
 	t.Run("step lookup failure maps through service error handling", func(t *testing.T) {
 		h := NewBuildHandler(buildsvc.NewBuildService(&stepLookupFailRepo{fakeRepo: &fakeRepo{build: build}, stepsErr: errors.New("step lookup failed")}, nil, nil))
+		h.SetAuthorization(auth.ModeDisabled, nil)
 
 		req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1", nil), "build-1")
 		res := httptest.NewRecorder()

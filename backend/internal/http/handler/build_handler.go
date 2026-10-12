@@ -2,6 +2,7 @@ package handler
 
 import (
 	"github.com/radiation/coyote-ci/backend/internal/auth"
+	"github.com/radiation/coyote-ci/backend/internal/authorization"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
@@ -14,6 +15,7 @@ type BuildHandler struct {
 	jobs         *service.JobService
 	authMode     auth.Mode
 	projectRoles auth.ProjectRoleLookup
+	buildReader  *buildsvc.AuthorizedReader
 }
 
 func NewBuildHandler(buildService *buildsvc.BuildService) *BuildHandler {
@@ -37,4 +39,5 @@ func (h *BuildHandler) SetJobService(jobs *service.JobService) {
 func (h *BuildHandler) SetAuthorization(mode auth.Mode, projectRoles auth.ProjectRoleLookup) {
 	h.authMode = mode
 	h.projectRoles = projectRoles
+	h.buildReader = buildsvc.NewAuthorizedReader(h.buildService, authorization.NewAuthorizer(normalizedAuthMode(mode) == auth.ModeDisabled, projectRoles))
 }

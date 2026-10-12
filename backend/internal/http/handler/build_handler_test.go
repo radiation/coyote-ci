@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/logs"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -1374,6 +1375,7 @@ func TestBuildHandler_GetBuild_IncludesProjectContext(t *testing.T) {
 	}
 
 	h := NewBuildHandler(buildsvc.NewBuildService(&fakeRepo{build: domain.Build{ID: "build-1", ProjectID: project.ID, Status: domain.BuildStatusQueued, CreatedAt: now, CurrentStepIndex: 2}}, nil, nil))
+	h.SetAuthorization(auth.ModeDisabled, nil)
 	h.SetProjectService(projectService)
 	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1", nil), "build-1")
 	rr := httptest.NewRecorder()
@@ -1445,6 +1447,7 @@ func TestBuildHandler_GetBuild(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := NewBuildHandler(buildsvc.NewBuildService(tc.repo, nil, nil))
+			h.SetAuthorization(auth.ModeDisabled, nil)
 			req := httptest.NewRequest(http.MethodGet, "/builds/"+tc.buildID, nil)
 			req = addBuildIDParam(req, tc.buildID)
 			rr := httptest.NewRecorder()
@@ -1505,6 +1508,7 @@ func TestBuildHandler_GetBuildIncludesJobNameAndCurrentSteps(t *testing.T) {
 		},
 	}
 	h := NewBuildHandler(buildsvc.NewBuildService(repo, nil, nil))
+	h.SetAuthorization(auth.ModeDisabled, nil)
 	h.SetProjectService(service.NewProjectService(projectRepo))
 	h.SetJobService(jobService)
 
@@ -1564,6 +1568,7 @@ func TestBuildHandler_GetBuildIncludesSCMStatusAndDoesNotLeakClaims(t *testing.T
 
 	buildService := buildsvc.NewBuildServiceFromConfig(&fakeRepo{build: build}, nil, nil, buildsvc.BuildServiceConfig{SCMStatusReporter: noopSCMBuildReporter{}, SCMStatusDeliveryRepo: deliveryRepo})
 	h := NewBuildHandler(buildService)
+	h.SetAuthorization(auth.ModeDisabled, nil)
 	h.SetProjectService(projectService)
 	h.SetJobService(service.NewJobService(jobRepo, nil).WithProjectRepository(projectRepo))
 
@@ -1608,6 +1613,7 @@ func TestBuildHandler_GetBuildReturnsInternalErrorWhenSCMVisibilityLookupFails(t
 	build := domain.Build{ID: "build-1", ProjectID: project.ID, JobID: &jobID, Status: domain.BuildStatusFailed, AttemptNumber: 1, CreatedAt: now, CommitSHA: stringPtr("deadbeefcafebabe"), Trigger: domain.BuildTrigger{SCMProvider: &provider, RepositoryOwner: &repoOwner, RepositoryName: &repoName}}
 	buildService := buildsvc.NewBuildServiceFromConfig(&fakeRepo{build: build}, nil, nil, buildsvc.BuildServiceConfig{SCMStatusReporter: noopSCMBuildReporter{}, SCMStatusDeliveryRepo: &failingSCMStatusDeliveryRepo{err: errors.New("lookup failed")}})
 	h := NewBuildHandler(buildService)
+	h.SetAuthorization(auth.ModeDisabled, nil)
 	h.SetProjectService(projectService)
 
 	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/build-1", nil), "build-1")

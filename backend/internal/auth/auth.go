@@ -3,13 +3,12 @@ package auth
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/radiation/coyote-ci/backend/internal/api"
+	"github.com/radiation/coyote-ci/backend/internal/authorization"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
-	"github.com/radiation/coyote-ci/backend/internal/repository"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 )
 
@@ -188,6 +187,27 @@ func CurrentAuthenticatedAPIToken(ctx context.Context) (AuthenticatedAPIToken, b
 	return token, true
 }
 
+func PrincipalFromContext(ctx context.Context) (authorization.Principal, error) {
+	user, ok := CurrentUser(ctx)
+	if !ok {
+		return authorization.Principal{}, authorization.ErrUnauthenticated
+	}
+	principal := authorization.Principal{User: user}
+	method, ok := CurrentAuthMethod(ctx)
+	if !ok || method != MethodAPIToken {
+		return principal, nil
+	}
+	token, ok := CurrentAuthenticatedAPIToken(ctx)
+	if !ok {
+		return authorization.Principal{}, authorization.ErrAPITokenIdentityUnavailable
+	}
+	principal.APIToken = &authorization.APITokenIdentity{
+		ID:     token.ID,
+		Scopes: domain.CloneAPITokenScopes(token.Scopes),
+	}
+	return principal, nil
+}
+
 func bearerToken(r *http.Request) (string, bool) {
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 	if authorization == "" {
@@ -214,7 +234,7 @@ func DisabledModeUser() domain.User {
 }
 
 func IsGlobalAdmin(user domain.User) bool {
-	return user.GlobalRole == domain.GlobalRoleAdmin
+	return authorization.IsGlobalAdmin(user)
 }
 
 func CanManageUsers(mode Mode, user domain.User) bool {
@@ -224,19 +244,10 @@ func CanManageUsers(mode Mode, user domain.User) bool {
 	return IsGlobalAdmin(user)
 }
 
-type ProjectRoleLookup interface {
-	GetProjectMembership(ctx context.Context, projectID string, userID string) (domain.ProjectMembership, error)
-}
+type ProjectRoleLookup = authorization.ProjectRoleLookup
 
 func HasProjectRole(ctx context.Context, lookup ProjectRoleLookup, user domain.User, projectID string, minimum domain.ProjectMemberRole) (bool, error) {
-	membership, err := lookup.GetProjectMembership(ctx, projectID, user.ID)
-	if err != nil {
-		if errors.Is(err, repository.ErrProjectMembershipNotFound) {
-			return false, nil
-		}
-		return false, err
-	}
-	return projectRoleRank(membership.Role) >= projectRoleRank(minimum), nil
+	return authorization.HasProjectRole(ctx, lookup, user, projectID, minimum)
 }
 
 func CanViewProjectMembers(ctx context.Context, lookup ProjectRoleLookup, mode Mode, user domain.User, projectID string) (bool, error) {
@@ -295,26 +306,8 @@ func CanManageCredentials(mode Mode, user domain.User) bool {
 }
 
 func canAccessProject(ctx context.Context, lookup ProjectRoleLookup, mode Mode, user domain.User, projectID string, minimum domain.ProjectMemberRole) (bool, error) {
-	if mode == ModeDisabled {
-		return true, nil
-	}
-	if IsGlobalAdmin(user) {
-		return true, nil
-	}
-	return HasProjectRole(ctx, lookup, user, projectID, minimum)
-}
-
-func projectRoleRank(role domain.ProjectMemberRole) int {
-	switch role {
-	case domain.ProjectMemberRoleOwner:
-		return 3
-	case domain.ProjectMemberRoleMaintainer:
-		return 2
-	case domain.ProjectMemberRoleViewer:
-		return 1
-	default:
-		return 0
-	}
+	authorizer := authorization.NewAuthorizer(mode == ModeDisabled, lookup)
+	return authorizer.CanAccessProject(ctx, authorization.Principal{User: user}, projectID, minimum)
 }
 
 func writeUnauthorized(w http.ResponseWriter, message string) {
