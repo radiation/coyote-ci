@@ -804,6 +804,7 @@ func TestNewRouter_BuildRoutes(t *testing.T) {
 	jobRepo := repositorymemory.NewJobRepository()
 	buildSvc := buildsvc.NewBuildService(buildRepo, nil, nil)
 	h := handler.NewBuildHandler(buildSvc)
+	h.SetAuthorization(auth.ModeDisabled, nil)
 	jobSvc := service.NewJobService(jobRepo, buildSvc).WithArtifactTriggerDeliveryRepository(repositorymemory.NewArtifactTriggerDeliveryRepository())
 	h.SetJobService(jobSvc)
 	jh := handler.NewJobHandler(jobSvc)
