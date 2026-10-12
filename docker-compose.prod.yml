@@ -67,6 +67,31 @@ services:
       - workspace_revision_data:/var/lib/coyote-workspaces
       - ${COYOTE_WORKSPACE_HELPER_KUBECONFIG_HOST_PATH:-./secrets/gke-verifier-kubeconfig}:/etc/coyote/gke-verifier-kubeconfig:ro
 
+  mcp:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: source-runtime-mcp
+      args:
+        GO_VERSION: ${GO_VERSION}
+    container_name: coyote-ci-mcp
+    profiles: ["mcp"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      MCP_LISTEN_ADDR: "0.0.0.0:8081"
+      MCP_ALLOW_DISABLED_AUTH: "false"
+      AUTH_MODE: ${MCP_AUTH_MODE:-header}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
   frontend:
     build:
       context: ./frontend

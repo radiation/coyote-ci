@@ -29,6 +29,51 @@ See [backend/docs/state-machine.md](backend/docs/state-machine.md) for the full 
 - Layered architecture (domain, repository, service, handlers)
 - Docker Compose local development
 
+## Optional MCP server
+
+The read-only MCP server is packaged separately from the REST server and is
+disabled by default in both Compose configurations. It accepts Coyote API
+tokens and exposes only the currently registered read-only tools.
+
+### Manual local smoke test
+
+This is a manual end-to-end workflow; automated MCP tests do not create a
+real user, PAT, or build fixture in Docker Compose.
+
+1. Configure a non-disabled Coyote auth mode and start the database,
+   migrations, REST server, and optional MCP service. The example uses header
+   mode; use OIDC instead when that is your configured local authentication
+   path.
+
+```bash
+AUTH_MODE=header MCP_AUTH_MODE=header \
+  docker compose --profile mcp up --build -d db migrate server mcp
+```
+
+2. Sign in or otherwise provision an authenticated Coyote user through the
+   configured server auth flow.
+3. Create or supply a PAT for that user with `build:read`.
+4. Create or identify a build in a project the PAT owner can view.
+5. Verify readiness at `http://127.0.0.1:8081/readyz`, then connect an MCP
+   client to `http://127.0.0.1:8081/mcp` with the PAT as its bearer token.
+6. List tools and confirm `coyote_get_build`, then call it with the accessible
+   build ID.
+7. Repeat with a PAT lacking either project membership or `build:read` and
+   confirm it fails without returning build metadata.
+
+An unauthenticated request to `/mcp` returns HTTP 401. Stop only the services
+started for this smoke test when finished:
+
+```bash
+docker compose --profile mcp stop mcp server migrate db
+```
+
+The container deliberately binds to `0.0.0.0:8081` only inside the Compose
+network; the host port remains loopback-only. Do not set
+`MCP_AUTH_MODE=disabled` for the container: the MCP binary rejects
+auth-disabled operation on a non-loopback listener, and
+`MCP_ALLOW_DISABLED_AUTH` remains false in both Compose files.
+
 ## Persistence model
 
 - PostgreSQL is the supported durable production database.

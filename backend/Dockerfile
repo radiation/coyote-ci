@@ -26,14 +26,21 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-FROM base AS source-builder
+FROM base AS source
 
 COPY . .
 ARG COYOTE_VERSION=dev
 ARG COYOTE_COMMIT=unknown
 ARG COYOTE_BUILD_DATE=
+
+FROM source AS source-builder
+
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o server ./cmd/server
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o worker ./cmd/worker
+
+FROM source AS mcp-builder
+
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o mcp ./cmd/mcp
 
 FROM base AS migration-builder
 
@@ -56,6 +63,24 @@ COPY . .
 EXPOSE 8080
 
 CMD ["air", "-c", ".air.toml"]
+
+FROM runtime-base AS source-runtime-mcp
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --system coyote \
+  && useradd --system --gid coyote --home-dir /app --shell /usr/sbin/nologin coyote
+
+COPY --from=mcp-builder --chown=coyote:coyote /app/mcp /app/mcp
+
+USER coyote
+
+EXPOSE 8081
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=6 CMD ["curl", "--fail", "--silent", "http://127.0.0.1:8081/readyz"]
+
+ENTRYPOINT ["/app/mcp"]
 
 FROM runtime-base AS source-runtime
 
