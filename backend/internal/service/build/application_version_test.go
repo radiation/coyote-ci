@@ -9,8 +9,35 @@ import (
 	"testing"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	releasesvc "github.com/radiation/coyote-ci/backend/internal/service/release"
 )
+
+type legacyReleaseRepository struct{ createCalls int }
+
+func (r *legacyReleaseRepository) Create(context.Context, domain.ApplicationRelease) (domain.ApplicationRelease, error) {
+	r.createCalls++
+	return domain.ApplicationRelease{}, nil
+}
+func (*legacyReleaseRepository) GetByBuildID(context.Context, string) (domain.ApplicationRelease, error) {
+	return domain.ApplicationRelease{}, repository.ErrApplicationReleaseNotFound
+}
+func (*legacyReleaseRepository) GetByID(context.Context, string) (domain.ApplicationRelease, error) {
+	return domain.ApplicationRelease{}, repository.ErrApplicationReleaseNotFound
+}
+func (*legacyReleaseRepository) ListPending(context.Context, int) ([]domain.ApplicationRelease, error) {
+	return nil, nil
+}
+func (*legacyReleaseRepository) Reconcile(context.Context, string) (domain.ApplicationRelease, error) {
+	return domain.ApplicationRelease{}, nil
+}
+func (*legacyReleaseRepository) FailBuildRelease(context.Context, string, string) (domain.ApplicationRelease, error) {
+	return domain.ApplicationRelease{}, repository.ErrApplicationReleaseNotFound
+}
+func (*legacyReleaseRepository) PromoteStable(context.Context, string, *string) (domain.ApplicationRelease, error) {
+	return domain.ApplicationRelease{}, nil
+}
 
 func TestPrepareBuildExecution_ResolvesAndPersistsApplicationVersionTemplate(t *testing.T) {
 	pipelineYAML := `
@@ -41,13 +68,37 @@ steps:
 	if !slices.Contains(logSink.lines, "Resolved application version: 0.4.137") {
 		t.Fatalf("expected application version preparation log, got %#v", logSink.lines)
 	}
-
 	reprepared, repeatErr := svc.resolveApplicationVersionForBuild(context.Background(), "build-1")
 	if repeatErr != nil {
 		t.Fatalf("repeat resolution: %v", repeatErr)
 	}
 	if reprepared.ApplicationVersion == nil || *reprepared.ApplicationVersion != "0.4.137" {
 		t.Fatalf("repeat application version=%v, want 0.4.137", reprepared.ApplicationVersion)
+	}
+}
+
+func TestPrepareBuildExecution_ApplicationVersionWithoutReleaseDoesNotCreateRelease(t *testing.T) {
+	pipelineYAML := `
+version: 1
+pipeline:
+  application_version:
+    template: "1.2.{build_number}"
+steps:
+  - name: build
+    run: true
+`
+	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-legacy", BuildNumber: 2, Status: domain.BuildStatusQueued, PipelineConfigYAML: &pipelineYAML}}
+	releaseRepo := &legacyReleaseRepository{}
+	service := NewBuildServiceFromConfig(buildRepo, nil, nil, BuildServiceConfig{ReleaseSnapshotter: releasesvc.NewService(releaseRepo)})
+	build, err := service.PrepareBuildExecution(context.Background(), "build-legacy")
+	if err != nil {
+		t.Fatalf("PrepareBuildExecution() error = %v", err)
+	}
+	if build.Status != domain.BuildStatusRunning || build.ApplicationVersion == nil || *build.ApplicationVersion != "1.2.2" {
+		t.Fatalf("prepared build = %#v, want running build with resolved application version", build)
+	}
+	if releaseRepo.createCalls != 0 {
+		t.Fatalf("release snapshot creations = %d, want 0", releaseRepo.createCalls)
 	}
 }
 

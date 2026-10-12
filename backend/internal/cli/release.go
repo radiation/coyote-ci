@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/radiation/coyote-ci/backend/internal/cli/output"
 	releases "github.com/radiation/coyote-ci/backend/internal/release"
 )
 
@@ -17,6 +19,56 @@ func (a *app) newReleaseCommand() *cobra.Command {
 	command := &cobra.Command{Use: "release", Short: "Resolve and publish Coyote software releases"}
 	command.AddCommand(a.newReleaseResolveCommand())
 	command.AddCommand(a.newReleasePublishCommand())
+	command.AddCommand(a.newApplicationReleaseShowCommand())
+	command.AddCommand(a.newApplicationReleasePromoteCommand())
+	return command
+}
+
+func (a *app) newApplicationReleaseShowCommand() *cobra.Command {
+	return &cobra.Command{Use: "show <release-id>", Short: "Show a generic application release", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		target, err := a.resolveTarget()
+		if err != nil {
+			return err
+		}
+		client, err := a.newClient(target)
+		if err != nil {
+			return &ExitError{Code: 3, Err: err}
+		}
+		release, err := client.GetApplicationRelease(cmd.Context(), args[0])
+		if err != nil {
+			return mapCommandError(err)
+		}
+		return output.Write(target.OutputMode, a.stdout, func(w io.Writer) error {
+			_, err := fmt.Fprintf(w, "Release: %s\nVersion: %s\nStatus:  %s\n", release.ID, release.ApplicationVersion, release.Status)
+			return err
+		}, release)
+	}}
+}
+
+func (a *app) newApplicationReleasePromoteCommand() *cobra.Command {
+	var channel string
+	command := &cobra.Command{Use: "promote <release-id>", Short: "Promote a complete generic application release", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if channel != "stable" {
+			return &ExitError{Code: 2, Err: errors.New("only --channel stable is supported")}
+		}
+		target, err := a.resolveTarget()
+		if err != nil {
+			return err
+		}
+		client, err := a.newClient(target)
+		if err != nil {
+			return &ExitError{Code: 3, Err: err}
+		}
+		release, err := client.PromoteApplicationReleaseStable(cmd.Context(), args[0])
+		if err != nil {
+			return mapCommandError(err)
+		}
+		return output.Write(target.OutputMode, a.stdout, func(w io.Writer) error {
+			_, err := fmt.Fprintf(w, "Promoted release %s to stable\n", release.ID)
+			return err
+		}, release)
+	}}
+	command.Flags().StringVar(&channel, "channel", "stable", "Channel to promote")
 	return command
 }
 

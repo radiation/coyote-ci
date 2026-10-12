@@ -99,6 +99,22 @@ func (c *Client) GetMe(ctx context.Context) (api.MeResponse, error) {
 	return envelope.Data, nil
 }
 
+func (c *Client) GetApplicationRelease(ctx context.Context, releaseID string) (api.ApplicationReleaseResponse, error) {
+	var envelope api.ApplicationReleaseEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, "api/application-releases/"+url.PathEscape(strings.TrimSpace(releaseID)), nil, &envelope); err != nil {
+		return api.ApplicationReleaseResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
+func (c *Client) PromoteApplicationReleaseStable(ctx context.Context, releaseID string) (api.ApplicationReleaseResponse, error) {
+	var envelope api.ApplicationReleaseEnvelope
+	if err := c.doJSON(ctx, http.MethodPost, "api/application-releases/"+url.PathEscape(strings.TrimSpace(releaseID))+"/channels/stable", nil, &envelope); err != nil {
+		return api.ApplicationReleaseResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
 func (c *Client) GetServerInfo(ctx context.Context) (api.ServerInfoResponse, error) {
 	var envelope api.ServerInfoEnvelope
 	if err := c.doJSON(ctx, http.MethodGet, "api/info", nil, &envelope); err != nil {

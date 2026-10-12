@@ -23,12 +23,21 @@ type PipelineMeta struct {
 	Image              string                 `yaml:"image"`
 	Cache              *CacheDef              `yaml:"cache,omitempty"`
 	ApplicationVersion *ApplicationVersionDef `yaml:"application_version,omitempty"`
+	Release            *ReleaseDef            `yaml:"release,omitempty"`
 }
 
 type ApplicationVersionDef struct {
 	Value    string `yaml:"value,omitempty"`
 	Template string `yaml:"template,omitempty"`
 	File     string `yaml:"file,omitempty"`
+}
+
+// ReleaseDef declares the immutable outputs that must publish before an
+// application version can advance a generic application channel.
+type ReleaseDef struct {
+	Artifacts   []string `yaml:"artifacts,omitempty"`
+	Images      []string `yaml:"images,omitempty"`
+	AutoChannel string   `yaml:"auto_channel,omitempty"`
 }
 
 // StepDef is the YAML-facing definition for a single step.

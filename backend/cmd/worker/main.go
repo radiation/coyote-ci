@@ -41,6 +41,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 	executionsvc "github.com/radiation/coyote-ci/backend/internal/service/execution"
+	releasesvc "github.com/radiation/coyote-ci/backend/internal/service/release"
 	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	workersvc "github.com/radiation/coyote-ci/backend/internal/service/worker"
 	"github.com/radiation/coyote-ci/backend/internal/source"
@@ -127,6 +128,7 @@ func main() {
 	notificationSubscriptionRepo := repositorypostgres.NewNotificationSubscriptionRepository(db)
 	notificationPreferenceRepo := repositorypostgres.NewUserNotificationPreferenceRepository(db)
 	externalImageBuildRepo := repositorypostgres.NewExternalImageBuildRepository(db)
+	applicationReleaseRepo := repositorypostgres.NewApplicationReleaseRepository(db)
 	userSlackIdentityRepo := repositorypostgres.NewUserSlackIdentityRepository(db)
 	slackWorkspaceIntegrationRepo := repositorypostgres.NewSlackWorkspaceIntegrationRepository(db)
 	notificationMetrics := observability.NewExpvarNotificationDeliveryMetrics()
@@ -172,6 +174,7 @@ func main() {
 	if sourceArchiveErr != nil {
 		log.Fatalf("failed to configure source archive preparer: %v", sourceArchiveErr)
 	}
+	applicationReleaseService := releasesvc.NewService(applicationReleaseRepo)
 	buildService := buildsvc.NewBuildServiceFromConfig(buildRepo, stepRunner, logSink, newWorkerBuildServiceConfig(cfg, buildsvc.BuildServiceConfig{
 		ExecutionJobRepo:    executionJobRepo,
 		ExecutionOutputRepo: executionJobOutputRepo,
@@ -186,6 +189,7 @@ func main() {
 		ArtifactLabelRepo:   artifactLabelRepo,
 		ArtifactResolver:    artifactResolver,
 		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,
+		ReleaseSnapshotter:  applicationReleaseService,
 	}, workspaceRevisionRepo, workspaceRevisionStore))
 	jobService := service.NewJobService(jobRepo, buildService).
 		WithProjectRepository(projectRepo).

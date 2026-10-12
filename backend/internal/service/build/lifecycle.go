@@ -30,6 +30,11 @@ func (s *BuildService) persistBuildStatus(ctx context.Context, id string, toStat
 	}
 	s.notifySCMBuildStatus(ctx, build)
 	s.notifyTerminalBuild(ctx, build)
+	if s.releaseSnapshotter != nil && domain.IsTerminalBuildStatus(build.Status) {
+		if releaseErr := s.releaseSnapshotter.FailBuildRelease(ctx, build); releaseErr != nil {
+			log.Printf("WARNING: application release failure reconciliation failed: build_id=%s err=%v", build.ID, releaseErr)
+		}
+	}
 	return build, nil
 }
 
