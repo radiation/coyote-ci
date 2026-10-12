@@ -1,0 +1,419 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/radiation/coyote-ci/backend/internal/authorization"
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+)
+
+func TestAuthenticatedMCPGetBuildTool(t *testing.T) {
+	fixture := newAuthenticatedMCPFixture(t)
+	server := httptest.NewServer(fixture.handler(t, false))
+	defer server.Close()
+
+	tests := []struct {
+		name      string
+		token     string
+		wantError string
+	}{
+		{name: "viewer", token: fixture.tokens["viewer"]},
+		{name: "maintainer", token: fixture.tokens["maintainer"]},
+		{name: "owner", token: fixture.tokens["owner"]},
+		{name: "global admin", token: fixture.tokens["admin"]},
+		{name: "missing project membership", token: fixture.tokens["outsider"], wantError: "forbidden"},
+		{name: "missing build scope", token: fixture.tokens["missing_scope"], wantError: "missing_token_scope"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			session := connectMCPClient(t, server.URL+Path, tc.token)
+			defer func() { _ = session.Close() }()
+
+			tools, listErr := session.ListTools(context.Background(), nil)
+			if listErr != nil {
+				t.Fatalf("list tools failed: %v", listErr)
+			}
+			if !containsTool(tools.Tools, GetBuildToolName) {
+				t.Fatalf("expected %q in tool list: %+v", GetBuildToolName, tools.Tools)
+			}
+
+			result, callErr := session.CallTool(context.Background(), &sdkmcp.CallToolParams{
+				Name:      GetBuildToolName,
+				Arguments: map[string]any{"build_id": fixture.build.ID},
+			})
+			if callErr != nil {
+				t.Fatalf("call tool failed: %v", callErr)
+			}
+			if tc.wantError != "" {
+				if !result.IsError || toolResultText(result) != tc.wantError {
+					t.Fatalf("expected tool error %q, got %+v", tc.wantError, result)
+				}
+				return
+			}
+			if result.IsError {
+				t.Fatalf("expected success, got %+v", result)
+			}
+			structuredJSON, structuredErr := json.Marshal(result.StructuredContent)
+			if structuredErr != nil {
+				t.Fatalf("marshal structured output: %v", structuredErr)
+			}
+			var output GetBuildOutput
+			if decodeErr := json.Unmarshal(structuredJSON, &output); decodeErr != nil {
+				t.Fatalf("decode structured output: %v", decodeErr)
+			}
+			if output.BuildID != fixture.build.ID || output.ProjectID != fixture.build.ProjectID || output.Status != fixture.build.Status {
+				t.Fatalf("unexpected output: %+v", output)
+			}
+			encoded, marshalErr := json.Marshal(output)
+			if marshalErr != nil {
+				t.Fatalf("marshal output: %v", marshalErr)
+			}
+			if strings.Contains(string(encoded), "pipeline-secret") || strings.Contains(string(encoded), "workspace-path") {
+				t.Fatalf("unsafe output fields leaked: %s", encoded)
+			}
+		})
+	}
+}
+
+func TestAuthenticatedMCPRejectsInvalidCredentials(t *testing.T) {
+	fixture := newAuthenticatedMCPFixture(t)
+	handler := fixture.handler(t, false)
+	tests := []struct {
+		name  string
+		token string
+	}{
+		{name: "missing"},
+		{name: "malformed", token: "Bearer invalid"},
+		{name: "invalid", token: "Bearer coyote_pat_not-a-real-token"},
+		{name: "expired", token: "Bearer " + fixture.expiredToken},
+		{name: "revoked", token: "Bearer " + fixture.revokedToken},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, Path, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"test"}}}`))
+			request.Header.Set("Content-Type", "application/json")
+			if tc.token != "" {
+				request.Header.Set("Authorization", tc.token)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("expected status %d, got %d body=%s", http.StatusUnauthorized, response.Code, response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), fixture.revokedToken) || strings.Contains(response.Body.String(), fixture.expiredToken) {
+				t.Fatalf("authentication response leaked token material: %q", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestPATAuthenticationPreservesPrincipalIdentityAndScopes(t *testing.T) {
+	fixture := newAuthenticatedMCPFixture(t)
+	var principal authorization.Principal
+	handler := withPATAuthentication(fixture.apiTokens)(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		var ok bool
+		principal, ok = currentPrincipal(request.Context())
+		if !ok {
+			t.Fatal("expected principal in request context")
+		}
+	}))
+	request := httptest.NewRequest(http.MethodPost, Path, nil)
+	request.Header.Set("Authorization", "Bearer "+fixture.tokens["viewer"])
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if principal.User.ID != "viewer-1" || principal.APIToken == nil {
+		t.Fatalf("unexpected principal: %+v", principal)
+	}
+	if !domain.HasAPITokenScope(principal.APIToken.Scopes, domain.APITokenScopeBuildRead) {
+		t.Fatalf("expected build:read scope, got %v", principal.APIToken.Scopes)
+	}
+	principal.APIToken.Scopes[0] = domain.APITokenScopeBuildLogs
+	authenticated, err := fixture.apiTokens.AuthenticateAPIToken(context.Background(), fixture.tokens["viewer"])
+	if err != nil {
+		t.Fatalf("reauthenticate token: %v", err)
+	}
+	if !domain.HasAPITokenScope(authenticated.Token.Scopes, domain.APITokenScopeBuildRead) {
+		t.Fatalf("request principal mutation altered persisted token scopes: %v", authenticated.Token.Scopes)
+	}
+}
+
+func TestAuthenticatedMCPGetBuildToolReturnsSafeErrors(t *testing.T) {
+	fixture := newAuthenticatedMCPFixture(t)
+	server := httptest.NewServer(fixture.handler(t, false))
+	defer server.Close()
+
+	session := connectMCPClient(t, server.URL+Path, fixture.tokens["viewer"])
+	defer func() { _ = session.Close() }()
+	for _, tc := range []struct {
+		name      string
+		arguments map[string]any
+		want      string
+	}{
+		{name: "missing build ID", arguments: map[string]any{}},
+		{name: "unknown build", arguments: map[string]any{"build_id": "missing"}, want: "not_found"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := session.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: GetBuildToolName, Arguments: tc.arguments})
+			if err != nil {
+				t.Fatalf("call tool failed: %v", err)
+			}
+			if !result.IsError {
+				t.Fatalf("expected tool error, got %+v", result)
+			}
+			if tc.want != "" && toolResultText(result) != tc.want {
+				t.Fatalf("expected safe tool error %q, got %+v", tc.want, result)
+			}
+		})
+	}
+}
+
+func TestAuthenticatedMCPRequestsRemainPrincipalScoped(t *testing.T) {
+	fixture := newAuthenticatedMCPFixture(t)
+	server := httptest.NewServer(fixture.handler(t, false))
+	defer server.Close()
+
+	var wg sync.WaitGroup
+	results := make(chan string, 2)
+	for _, token := range []string{fixture.tokens["viewer"], fixture.tokens["outsider"]} {
+		token := token
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			session := connectMCPClient(t, server.URL+Path, token)
+			defer func() { _ = session.Close() }()
+			result, err := session.CallTool(context.Background(), &sdkmcp.CallToolParams{
+				Name:      GetBuildToolName,
+				Arguments: map[string]any{"build_id": fixture.build.ID},
+			})
+			if err != nil {
+				results <- "client_error"
+				return
+			}
+			if result.IsError {
+				results <- toolResultText(result)
+				return
+			}
+			results <- "success"
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	got := map[string]bool{}
+	for result := range results {
+		got[result] = true
+	}
+	if !got["success"] || !got["forbidden"] {
+		t.Fatalf("expected separately scoped results, got %v", got)
+	}
+}
+
+func TestAuthenticatedMCPDisabledModeRequiresExplicitDependency(t *testing.T) {
+	fixture := newAuthenticatedMCPFixture(t)
+	server := httptest.NewServer(fixture.handler(t, true))
+	defer server.Close()
+
+	session := connectMCPClient(t, server.URL+Path, "")
+	defer func() { _ = session.Close() }()
+	result, err := session.CallTool(context.Background(), &sdkmcp.CallToolParams{
+		Name:      GetBuildToolName,
+		Arguments: map[string]any{"build_id": fixture.build.ID},
+	})
+	if err != nil {
+		t.Fatalf("call tool failed: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected explicit disabled mode to permit local development access: %+v", result)
+	}
+}
+
+type authenticatedMCPFixture struct {
+	build        domain.Build
+	tokens       map[string]string
+	expiredToken string
+	revokedToken string
+	apiTokens    *service.APITokenService
+	buildService *buildsvc.BuildService
+	reader       *buildsvc.AuthorizedReader
+}
+
+func newAuthenticatedMCPFixture(t *testing.T) authenticatedMCPFixture {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	jobRepo := repositorymemory.NewJobRepository()
+	projectRepo := repositorymemory.NewProjectRepository(jobRepo)
+	userRepo := repositorymemory.NewUserRepository()
+	membershipRepo := repositorymemory.NewProjectMembershipRepository(projectRepo, userRepo)
+	tokenRepo := repositorymemory.NewAPITokenRepository()
+	buildRepo := repositorymemory.NewBuildRepository()
+	if _, projectErr := projectRepo.Create(ctx, domain.Project{ID: "project-1", Name: "Project", Slug: "project", CreatedAt: now, UpdatedAt: now}); projectErr != nil {
+		t.Fatalf("create project failed: %v", projectErr)
+	}
+
+	users := map[string]domain.User{
+		"viewer":        {ID: "viewer-1", Email: "viewer@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
+		"maintainer":    {ID: "maintainer-1", Email: "maintainer@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
+		"owner":         {ID: "owner-1", Email: "owner@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
+		"outsider":      {ID: "outsider-1", Email: "outsider@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
+		"admin":         {ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin, CreatedAt: now, UpdatedAt: now},
+		"missing_scope": {ID: "missing-scope-1", Email: "scope@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
+	}
+	for name, user := range users {
+		if _, userErr := userRepo.Create(ctx, user); userErr != nil {
+			t.Fatalf("create %s user failed: %v", name, userErr)
+		}
+	}
+	for name, role := range map[string]domain.ProjectMemberRole{
+		"viewer": domain.ProjectMemberRoleViewer, "maintainer": domain.ProjectMemberRoleMaintainer, "owner": domain.ProjectMemberRoleOwner, "missing_scope": domain.ProjectMemberRoleViewer,
+	} {
+		if _, membershipErr := membershipRepo.Upsert(ctx, domain.ProjectMembership{ProjectID: "project-1", UserID: users[name].ID, Role: role, CreatedAt: now, UpdatedAt: now}); membershipErr != nil {
+			t.Fatalf("create %s membership failed: %v", name, membershipErr)
+		}
+	}
+	build := domain.Build{
+		ID:                 "build-1",
+		BuildNumber:        42,
+		ProjectID:          "project-1",
+		Status:             domain.BuildStatusFailed,
+		CreatedAt:          now,
+		ErrorMessage:       stringPointer("pipeline-secret workspace-path"),
+		PipelineConfigYAML: stringPointer("pipeline-secret"),
+	}
+	if _, buildErr := buildRepo.Create(ctx, build); buildErr != nil {
+		t.Fatalf("create build failed: %v", buildErr)
+	}
+
+	apiTokens := service.NewAPITokenService(tokenRepo, userRepo)
+	tokens := make(map[string]string)
+	for _, name := range []string{"viewer", "maintainer", "owner", "outsider", "admin"} {
+		created, tokenErr := apiTokens.CreateAPIToken(ctx, service.CreateAPITokenInput{UserID: users[name].ID, Name: name, Scopes: []string{string(domain.APITokenScopeBuildRead)}})
+		if tokenErr != nil {
+			t.Fatalf("create %s token failed: %v", name, tokenErr)
+		}
+		tokens[name] = created.PlaintextToken
+	}
+	missingScope, tokenErr := apiTokens.CreateAPIToken(ctx, service.CreateAPITokenInput{UserID: users["missing_scope"].ID, Name: "missing scope", Scopes: []string{string(domain.APITokenScopeBuildLogs)}})
+	if tokenErr != nil {
+		t.Fatalf("create missing scope token failed: %v", tokenErr)
+	}
+	tokens["missing_scope"] = missingScope.PlaintextToken
+
+	expiredToken := "coyote_pat_expired-token"
+	expiredAt := now.Add(-time.Minute)
+	if _, createExpiredErr := tokenRepo.Create(ctx, domain.APIToken{ID: "expired-token", UserID: users["viewer"].ID, Name: "expired", TokenHash: service.HashAPIToken(expiredToken), TokenPrefix: service.DisplayAPITokenPrefix(expiredToken), ExpiresAt: &expiredAt, CreatedAt: now, UpdatedAt: now}); createExpiredErr != nil {
+		t.Fatalf("create expired token failed: %v", createExpiredErr)
+	}
+	revoked, tokenErr := apiTokens.CreateAPIToken(ctx, service.CreateAPITokenInput{UserID: users["viewer"].ID, Name: "revoked", Scopes: []string{string(domain.APITokenScopeBuildRead)}})
+	if tokenErr != nil {
+		t.Fatalf("create revoked token failed: %v", tokenErr)
+	}
+	if revokeErr := apiTokens.RevokeAPIToken(ctx, users["viewer"].ID, revoked.Token.ID); revokeErr != nil {
+		t.Fatalf("revoke token failed: %v", revokeErr)
+	}
+
+	membershipService := service.NewProjectMembershipService(projectRepo, membershipRepo)
+	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	reader := buildsvc.NewAuthorizedReader(buildService, authorization.NewAuthorizer(false, membershipService))
+	return authenticatedMCPFixture{
+		build:        build,
+		tokens:       tokens,
+		expiredToken: expiredToken,
+		revokedToken: revoked.PlaintextToken,
+		apiTokens:    apiTokens,
+		buildService: buildService,
+		reader:       reader,
+	}
+}
+
+func (f authenticatedMCPFixture) handler(t *testing.T, disabled bool) http.Handler {
+	t.Helper()
+	reader := f.reader
+	if disabled {
+		reader = buildsvc.NewAuthorizedReader(
+			f.buildService,
+			authorization.NewAuthorizer(true, nil),
+		)
+	}
+	handler, err := NewAuthenticatedHandler(testConfig(), nil, testImplementation(), Dependencies{
+		APITokens:    f.apiTokens,
+		BuildReader:  reader,
+		AuthDisabled: disabled,
+	})
+	if err != nil {
+		t.Fatalf("new authenticated handler failed: %v", err)
+	}
+	return handler
+}
+
+func connectMCPClient(t *testing.T, endpoint string, token string) *sdkmcp.ClientSession {
+	t.Helper()
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	transport := &sdkmcp.StreamableClientTransport{
+		Endpoint:             endpoint,
+		DisableStandaloneSSE: true,
+		HTTPClient: &http.Client{Transport: authorizationRoundTripper{
+			token: token,
+			base:  http.DefaultTransport,
+		}},
+	}
+	session, err := client.Connect(context.Background(), transport, nil)
+	if err != nil {
+		t.Fatalf("connect MCP client failed: %v", err)
+	}
+	return session
+}
+
+type authorizationRoundTripper struct {
+	token string
+	base  http.RoundTripper
+}
+
+func (t authorizationRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	copyRequest := request.Clone(request.Context())
+	if t.token != "" {
+		copyRequest.Header.Set("Authorization", "Bearer "+t.token)
+	}
+	return t.base.RoundTrip(copyRequest)
+}
+
+func containsTool(tools []*sdkmcp.Tool, name string) bool {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func toolResultText(result *sdkmcp.CallToolResult) string {
+	if len(result.Content) == 0 {
+		return ""
+	}
+	if text, ok := result.Content[0].(*sdkmcp.TextContent); ok {
+		return text.Text
+	}
+	return ""
+}
+
+func stringPointer(value string) *string {
+	return &value
+}

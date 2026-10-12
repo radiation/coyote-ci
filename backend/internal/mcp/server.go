@@ -8,6 +8,9 @@ import (
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/radiation/coyote-ci/backend/internal/service"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
 const (
@@ -34,7 +37,9 @@ func NewHandler(cfg Config, readiness ReadinessChecker, implementation *sdkmcp.I
 	if err != nil {
 		return nil, err
 	}
-	protectedMCP, err := protectMCP(protocolHandler, cfg)
+	protectedMCP, err := protectMCP(protocolHandler, cfg, func(next http.Handler) http.Handler {
+		return requireAuthentication(next)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -46,12 +51,48 @@ func NewHandler(cfg Config, readiness ReadinessChecker, implementation *sdkmcp.I
 	return mux, nil
 }
 
-func newProtocolHandler(cfg Config, implementation *sdkmcp.Implementation) (http.Handler, error) {
+type Dependencies struct {
+	APITokens    *service.APITokenService
+	BuildReader  *buildsvc.AuthorizedReader
+	AuthDisabled bool
+}
+
+func NewAuthenticatedHandler(cfg Config, readiness ReadinessChecker, implementation *sdkmcp.Implementation, dependencies Dependencies) (http.Handler, error) {
+	if dependencies.BuildReader == nil {
+		return nil, errors.New("MCP build reader is required")
+	}
+	if !dependencies.AuthDisabled && dependencies.APITokens == nil {
+		return nil, errors.New("MCP API token service is required")
+	}
+	protocolHandler, err := newProtocolHandler(cfg, implementation, dependencies.BuildReader)
+	if err != nil {
+		return nil, err
+	}
+
+	authenticate := withDisabledAuthentication
+	if !dependencies.AuthDisabled {
+		authenticate = withPATAuthentication(dependencies.APITokens)
+	}
+	protectedMCP, err := protectMCP(protocolHandler, cfg, authenticate)
+	if err != nil {
+		return nil, err
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc(HealthPath, health)
+	mux.HandleFunc(ReadyPath, ready(readiness))
+	mux.Handle(Path, protectedMCP)
+	return mux, nil
+}
+
+func newProtocolHandler(cfg Config, implementation *sdkmcp.Implementation, buildReaders ...*buildsvc.AuthorizedReader) (http.Handler, error) {
 	if implementation == nil {
 		return nil, errors.New("MCP implementation is required")
 	}
 
 	server := sdkmcp.NewServer(implementation, nil)
+	if len(buildReaders) > 0 && buildReaders[0] != nil {
+		registerBuildTools(server, buildReaders[0])
+	}
 	return sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
 		return server
 	}, &sdkmcp.StreamableHTTPOptions{
@@ -62,7 +103,7 @@ func newProtocolHandler(cfg Config, implementation *sdkmcp.Implementation) (http
 	}), nil
 }
 
-func protectMCP(next http.Handler, cfg Config) (http.Handler, error) {
+func protectMCP(next http.Handler, cfg Config, authenticate func(http.Handler) http.Handler) (http.Handler, error) {
 	protection := http.NewCrossOriginProtection()
 	for _, origin := range cfg.AllowedOrigins {
 		if err := protection.AddTrustedOrigin(origin); err != nil {
@@ -70,7 +111,7 @@ func protectMCP(next http.Handler, cfg Config) (http.Handler, error) {
 		}
 	}
 
-	handler := requireAuthentication(next)
+	handler := authenticate(next)
 	handler = requestTimeout(cfg.RequestTimeout, handler)
 	handler = limitRequestBody(cfg.MaxRequestBodyBytes, handler)
 	handler = requirePost(handler)

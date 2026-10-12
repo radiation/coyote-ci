@@ -49,6 +49,7 @@ func TestConcreteRepositoryImportsStayInCompositionRoots(t *testing.T) {
 		backendModulePath + "/cmd/server": {},
 		backendModulePath + "/cmd/worker": {},
 		backendModulePath + "/cmd/coyote": {},
+		backendModulePath + "/cmd/mcp":    {},
 	}
 	concreteAdapters := map[string]struct{}{
 		backendModulePath + "/internal/repository/postgres": {},
@@ -88,6 +89,7 @@ func backendDependencyRules() []*configuration.DependenciesRule {
 		backendModulePath + "/cmd/server",
 		backendModulePath + "/cmd/worker",
 		backendModulePath + "/cmd/coyote",
+		backendModulePath + "/cmd/mcp",
 	}
 	concreteRepositoryDeps := []string{
 		backendModulePath + "/internal/repository/postgres",
@@ -99,6 +101,7 @@ func backendDependencyRules() []*configuration.DependenciesRule {
 		backendModulePath + "/internal/http/handler",
 		backendModulePath + "/cmd/server",
 		backendModulePath + "/cmd/worker",
+		backendModulePath + "/cmd/mcp",
 	}
 
 	rules := make([]*configuration.DependenciesRule, 0, 16)
@@ -111,7 +114,7 @@ func backendDependencyRules() []*configuration.DependenciesRule {
 	)...)
 	rules = append(rules, exactAndDescendantRules(
 		backendModulePath+"/internal/http/handler",
-		append(append([]string{}, concreteRepositoryDeps...), backendModulePath+"/cmd/server", backendModulePath+"/cmd/worker")...,
+		append(append(append([]string{}, concreteRepositoryDeps...), backendModulePath+"/cmd/server", backendModulePath+"/cmd/worker"), backendModulePath+"/cmd/mcp")...,
 	)...)
 	rules = append(rules, exactAndDescendantRules(
 		backendModulePath+"/internal/service",
