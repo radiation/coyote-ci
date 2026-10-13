@@ -10,6 +10,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	artifactsvc "github.com/radiation/coyote-ci/backend/internal/service/artifact"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
@@ -52,9 +53,10 @@ func NewHandler(cfg Config, readiness ReadinessChecker, implementation *sdkmcp.I
 }
 
 type Dependencies struct {
-	APITokens    *service.APITokenService
-	BuildReader  *buildsvc.AuthorizedReader
-	AuthDisabled bool
+	APITokens      *service.APITokenService
+	BuildReader    *buildsvc.AuthorizedReader
+	ArtifactReader *artifactsvc.AuthorizedReader
+	AuthDisabled   bool
 }
 
 func NewAuthenticatedHandler(cfg Config, readiness ReadinessChecker, implementation *sdkmcp.Implementation, dependencies Dependencies) (http.Handler, error) {
@@ -64,7 +66,7 @@ func NewAuthenticatedHandler(cfg Config, readiness ReadinessChecker, implementat
 	if !dependencies.AuthDisabled && dependencies.APITokens == nil {
 		return nil, errors.New("MCP API token service is required")
 	}
-	protocolHandler, err := newProtocolHandler(cfg, implementation, dependencies.BuildReader)
+	protocolHandler, err := newAuthenticatedProtocolHandler(cfg, implementation, dependencies.BuildReader, dependencies.ArtifactReader)
 	if err != nil {
 		return nil, err
 	}
@@ -84,14 +86,21 @@ func NewAuthenticatedHandler(cfg Config, readiness ReadinessChecker, implementat
 	return mux, nil
 }
 
-func newProtocolHandler(cfg Config, implementation *sdkmcp.Implementation, buildReaders ...*buildsvc.AuthorizedReader) (http.Handler, error) {
+func newProtocolHandler(cfg Config, implementation *sdkmcp.Implementation) (http.Handler, error) {
+	return newAuthenticatedProtocolHandler(cfg, implementation, nil, nil)
+}
+
+func newAuthenticatedProtocolHandler(cfg Config, implementation *sdkmcp.Implementation, buildReader *buildsvc.AuthorizedReader, artifactReader *artifactsvc.AuthorizedReader) (http.Handler, error) {
 	if implementation == nil {
 		return nil, errors.New("MCP implementation is required")
 	}
 
 	server := sdkmcp.NewServer(implementation, nil)
-	if len(buildReaders) > 0 && buildReaders[0] != nil {
-		registerBuildTools(server, buildReaders[0])
+	if buildReader != nil {
+		registerBuildTools(server, buildReader)
+	}
+	if artifactReader != nil {
+		registerArtifactTools(server, artifactReader)
 	}
 	return sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
 		return server

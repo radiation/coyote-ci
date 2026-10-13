@@ -44,6 +44,10 @@ tokens and exposes only the currently registered read-only tools:
   it does not cap the total serialized MCP response size. A chunk that cannot
   fit the requested budget returns `chunk_exceeds_limit` rather than advancing
   the cursor past unseen output.
+- `coyote_list_artifact_versions`, `coyote_get_artifact_version`, and
+  `coyote_get_version_provenance` require `artifact:read` plus viewer access
+  to the owning project. They return metadata only, never artifact bytes,
+  download URLs, or storage locations.
 
 Step logs are persisted execution output. Redaction is best-effort only, so
 grant `build:logs` only to principals permitted to read the underlying build

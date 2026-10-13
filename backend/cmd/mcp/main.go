@@ -24,7 +24,9 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/platform/dbopen"
 	repositorypostgres "github.com/radiation/coyote-ci/backend/internal/repository/postgres"
 	"github.com/radiation/coyote-ci/backend/internal/service"
+	artifactsvc "github.com/radiation/coyote-ci/backend/internal/service/artifact"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
+	versiontagsvc "github.com/radiation/coyote-ci/backend/internal/service/versiontag"
 	"github.com/radiation/coyote-ci/backend/internal/versioninfo"
 )
 
@@ -64,6 +66,9 @@ func run(ctx context.Context, appConfig config.Config, mcpConfig coyotemcp.Confi
 	}()
 
 	buildRepo := repositorypostgres.NewBuildRepository(db)
+	artifactRepo := repositorypostgres.NewArtifactRepository(db)
+	artifactLabelRepo := repositorypostgres.NewArtifactLabelRepository(db)
+	versionTagRepo := repositorypostgres.NewVersionTagRepository(db)
 	projectRepo := repositorypostgres.NewProjectRepository(db)
 	userRepo := repositorypostgres.NewUserRepository(db)
 	apiTokenRepo := repositorypostgres.NewAPITokenRepository(db)
@@ -75,13 +80,19 @@ func run(ctx context.Context, appConfig config.Config, mcpConfig coyotemcp.Confi
 		buildsvc.NewBuildService(buildRepo, nil, logs.NewPostgresSink(db)),
 		authorization.NewAuthorizer(authDisabled, projectMembershipService),
 	)
+	artifactReader := artifactsvc.NewAuthorizedReader(
+		artifactsvc.NewService(artifactRepo),
+		versiontagsvc.NewService(versionTagRepo).WithArtifactLabels(artifactLabelRepo),
+		authorization.NewAuthorizer(authDisabled, projectMembershipService),
+	)
 	handler, handlerErr := coyotemcp.NewAuthenticatedHandler(mcpConfig, coyotemcp.NewDatabaseReadiness(db), &sdkmcp.Implementation{
 		Name:    "coyote-mcp",
 		Version: versioninfo.Current().Version,
 	}, coyotemcp.Dependencies{
-		APITokens:    apiTokenService,
-		BuildReader:  buildReader,
-		AuthDisabled: authDisabled,
+		APITokens:      apiTokenService,
+		BuildReader:    buildReader,
+		ArtifactReader: artifactReader,
+		AuthDisabled:   authDisabled,
 	})
 	if handlerErr != nil {
 		return fmt.Errorf("failed to configure MCP server: %w", handlerErr)

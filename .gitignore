@@ -50,6 +50,7 @@ frontend/node_modules/
 
 # Misc
 *.diff
+graphiy-out/
 
 # Binaries
 backend/mcp
