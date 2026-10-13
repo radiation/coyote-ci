@@ -193,6 +193,10 @@ func validateReleaseDef(pf *PipelineFile) ValidationErrors {
 		}
 		seen["image:"+name] = struct{}{}
 		outputKey := normalizedReleaseImageIdentity(name)
+		if outputKey == "" {
+			errs = append(errs, ValidationError{Field: field, Message: "must normalize to a non-empty release image output key"})
+			continue
+		}
 		if existing, collision := imageOutputKeys[outputKey]; collision && existing != name {
 			errs = append(errs, ValidationError{Field: field, Message: fmt.Sprintf("release image output key %q collides with %q", outputKey, existing)})
 		}
