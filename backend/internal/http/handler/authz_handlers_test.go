@@ -366,6 +366,7 @@ func TestBuildHandler_HeaderModeAuthorizationAndFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create viewer build failed: %v", err)
 	}
+
 	if _, createOtherBuildErr := fixture.buildService.CreateBuild(context.Background(), buildsvc.CreateBuildInput{
 		ProjectID: fixture.projectOther.ID,
 		Steps:     []buildsvc.CreateBuildStepInput{{Name: "test", Command: "go", Args: []string{"test", "./..."}}},
@@ -468,6 +469,127 @@ func TestBuildHandler_HeaderModeAuthorizationAndFiltering(t *testing.T) {
 	h.CancelBuild(cancelRes, cancelReq)
 	if cancelRes.Code != http.StatusForbidden {
 		t.Fatalf("expected viewer cancel status %d, got %d", http.StatusForbidden, cancelRes.Code)
+	}
+}
+
+func TestBuildHandlerGetBuildUsesSharedAuthorization(t *testing.T) {
+	fixture := newHandlerAuthzFixture(t)
+	build, err := fixture.buildService.CreateBuild(context.Background(), buildsvc.CreateBuildInput{
+		ProjectID: fixture.projectViewer.ID,
+		Steps:     []buildsvc.CreateBuildStepInput{{Name: "test", Command: "sh", Args: []string{"-c", "echo ok"}}},
+	})
+	if err != nil {
+		t.Fatalf("create fixture build failed: %v", err)
+	}
+
+	h := NewBuildHandler(fixture.buildService)
+	h.SetAuthorization(auth.ModeHeader, fixture.membershipService)
+	tests := []struct {
+		name      string
+		ctx       context.Context
+		wantCode  int
+		errorCode string
+	}{
+		{name: "viewer can read", ctx: auth.WithUser(context.Background(), fixture.viewer), wantCode: http.StatusOK},
+		{name: "maintainer can read", ctx: auth.WithUser(context.Background(), fixture.maintainer), wantCode: http.StatusOK},
+		{name: "owner can read", ctx: auth.WithUser(context.Background(), fixture.owner), wantCode: http.StatusOK},
+		{name: "global admin can read", ctx: auth.WithUser(context.Background(), fixture.admin), wantCode: http.StatusOK},
+		{name: "missing membership is forbidden", ctx: auth.WithUser(context.Background(), fixture.outsider), wantCode: http.StatusForbidden, errorCode: "forbidden"},
+		{
+			name: "token with scope can read",
+			ctx: withScopedAPIToken(
+				httptest.NewRequest(http.MethodGet, "/builds/"+build.ID, nil),
+				fixture.viewer,
+				domain.APITokenScopeBuildRead,
+			).Context(),
+			wantCode: http.StatusOK,
+		},
+		{
+			name: "token missing scope is forbidden",
+			ctx: withScopedAPIToken(
+				httptest.NewRequest(http.MethodGet, "/builds/"+build.ID, nil),
+				fixture.viewer,
+				domain.APITokenScopeBuildLogs,
+			).Context(),
+			wantCode:  http.StatusForbidden,
+			errorCode: "missing_token_scope",
+		},
+		{
+			name: "token scope does not bypass membership",
+			ctx: withScopedAPIToken(
+				httptest.NewRequest(http.MethodGet, "/builds/"+build.ID, nil),
+				fixture.outsider,
+				domain.APITokenScopeBuildRead,
+			).Context(),
+			wantCode:  http.StatusForbidden,
+			errorCode: "forbidden",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID, nil).WithContext(tc.ctx), build.ID)
+			res := httptest.NewRecorder()
+			h.GetBuild(res, req)
+			if res.Code != tc.wantCode {
+				t.Fatalf("expected status %d, got %d body=%s", tc.wantCode, res.Code, res.Body.String())
+			}
+			if tc.errorCode != "" {
+				if got := decodeErrorResponse(t, res).Error.Code; got != tc.errorCode {
+					t.Fatalf("expected error code %q, got %q", tc.errorCode, got)
+				}
+				return
+			}
+			data := decodeDataMap(t, res)
+			if got, ok := data["id"].(string); !ok || got != build.ID {
+				t.Fatalf("expected build response id %q, got %v", build.ID, data["id"])
+			}
+		})
+	}
+}
+
+func TestBuildHandlerGetBuildAllowsDisabledAuth(t *testing.T) {
+	fixture := newHandlerAuthzFixture(t)
+	build, err := fixture.buildService.CreateBuild(context.Background(), buildsvc.CreateBuildInput{
+		ProjectID: fixture.projectViewer.ID,
+		Steps:     []buildsvc.CreateBuildStepInput{{Name: "test", Command: "sh", Args: []string{"-c", "echo ok"}}},
+	})
+	if err != nil {
+		t.Fatalf("create fixture build failed: %v", err)
+	}
+
+	h := NewBuildHandler(fixture.buildService)
+	h.SetAuthorization(auth.ModeDisabled, nil)
+	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID, nil), build.ID)
+	res := httptest.NewRecorder()
+	h.GetBuild(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected disabled auth status %d, got %d body=%s", http.StatusOK, res.Code, res.Body.String())
+	}
+}
+
+func TestBuildHandlerGetBuildFailsClosedWithoutAuthorizationConfiguration(t *testing.T) {
+	fixture := newHandlerAuthzFixture(t)
+	build, err := fixture.buildService.CreateBuild(context.Background(), buildsvc.CreateBuildInput{
+		ProjectID: fixture.projectViewer.ID,
+		Steps:     []buildsvc.CreateBuildStepInput{{Name: "test", Command: "sh", Args: []string{"-c", "echo ok"}}},
+	})
+	if err != nil {
+		t.Fatalf("create fixture build failed: %v", err)
+	}
+
+	h := NewBuildHandler(fixture.buildService)
+	req := addBuildIDParam(httptest.NewRequest(http.MethodGet, "/builds/"+build.ID, nil), build.ID)
+	res := httptest.NewRecorder()
+	h.GetBuild(res, req)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("expected unconfigured handler status %d, got %d body=%s", http.StatusInternalServerError, res.Code, res.Body.String())
+	}
+	if got := decodeErrorResponse(t, res).Error.Code; got != "internal_error" {
+		t.Fatalf("expected internal_error code, got %q", got)
 	}
 }
 

@@ -106,7 +106,7 @@ func (s *PostgresSink) ListStepLogChunks(ctx context.Context, buildID string, st
 		WHERE build_id = $1
 		  AND step_index = $2
 		  AND sequence_no > $3
-		ORDER BY created_at ASC, id ASC
+		ORDER BY sequence_no ASC
 		LIMIT $4
 	`
 

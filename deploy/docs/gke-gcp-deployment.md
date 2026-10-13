@@ -163,13 +163,15 @@ tags cannot contain `@sha256:...`.
 ```sh
 unset COYOTE_SERVER_IMAGE
 unset COYOTE_MIGRATE_IMAGE
+unset COYOTE_MCP_IMAGE
 unset COYOTE_FRONTEND_IMAGE
 make gke-control-plane-image-build
 ```
 
 The command prints immutable values for `COYOTE_SERVER_IMAGE`,
-`COYOTE_MIGRATE_IMAGE`, and `COYOTE_FRONTEND_IMAGE`. Export the printed values
-before deployment.
+`COYOTE_MIGRATE_IMAGE`, `COYOTE_MCP_IMAGE`, and `COYOTE_FRONTEND_IMAGE`.
+Export the server, migration, and frontend values before raw deployment. The
+MCP value is used only by the optional Helm MCP deployment.
 
 ```sh
 make gke-control-plane-deploy

@@ -29,6 +29,88 @@ See [backend/docs/state-machine.md](backend/docs/state-machine.md) for the full 
 - Layered architecture (domain, repository, service, handlers)
 - Docker Compose local development
 
+## Optional MCP server
+
+The read-only MCP server is packaged separately from the REST server and is
+disabled by default in both Compose configurations. It accepts Coyote API
+tokens and exposes only the currently registered read-only tools:
+
+- `coyote_get_build` requires `build:read`.
+- `coyote_get_build_failures` requires `build:read` and returns failed-step
+  metadata without raw logs.
+- `coyote_get_step_logs` requires both `build:read` and `build:logs`; it uses
+  a sequence cursor and server-enforced entry and byte limits. Its `max_bytes`
+  input is the maximum combined UTF-8 byte length of returned raw chunk text;
+  it does not cap the total serialized MCP response size. A chunk that cannot
+  fit the requested budget returns `chunk_exceeds_limit` rather than advancing
+  the cursor past unseen output.
+- `coyote_list_artifact_versions`, `coyote_get_artifact_version`, and
+  `coyote_get_version_provenance` require `artifact:read` plus viewer access
+  to the owning project. They return metadata only, never artifact bytes,
+  download URLs, or storage locations.
+
+Step logs are persisted execution output. Redaction is best-effort only, so
+grant `build:logs` only to principals permitted to read the underlying build
+output.
+
+### Manual local smoke test
+
+This is a manual end-to-end workflow; automated MCP tests do not create a
+real user, PAT, or build fixture in Docker Compose.
+
+1. Configure a non-disabled Coyote auth mode and start the database,
+   migrations, REST server, and optional MCP service. The example uses header
+   mode; use OIDC instead when that is your configured local authentication
+   path.
+
+```bash
+AUTH_MODE=header MCP_AUTH_MODE=header \
+  docker compose --profile mcp up --build -d db migrate server mcp
+```
+
+2. Sign in or otherwise provision an authenticated Coyote user through the
+   configured server auth flow.
+3. Create or supply a PAT for that user with `build:read`. Add `build:logs`
+   when testing bounded raw step-log retrieval.
+4. Create or identify a build in a project the PAT owner can view.
+5. Verify readiness at `http://127.0.0.1:8081/readyz`, then connect an MCP
+   client to `http://127.0.0.1:8081/mcp` with the PAT as its bearer token.
+6. List tools and confirm `coyote_get_build`, then call it with the accessible
+   build ID. For a failed build, also call `coyote_get_build_failures`; a PAT
+   with `build:logs` can call `coyote_get_step_logs` with a valid step index.
+7. Repeat with a PAT lacking either project membership or `build:read` and
+   confirm it fails without returning build metadata.
+
+An unauthenticated request to `/mcp` returns HTTP 401. Stop only the services
+started for this smoke test when finished:
+
+```bash
+docker compose --profile mcp stop mcp server migrate db
+```
+
+The container deliberately binds to `0.0.0.0:8081` only inside the Compose
+network; the host port remains loopback-only. Do not set
+`MCP_AUTH_MODE=disabled` for the container: the MCP binary rejects
+auth-disabled operation on a non-loopback listener, and
+`MCP_ALLOW_DISABLED_AUTH` remains false in both Compose files.
+
+### Private Kubernetes port-forward testing
+
+Before testing a private MCP Service, check that the selected local port is
+not already in use. An existing listener can make an MCP client reach the
+wrong local service even when `kubectl port-forward` is running. Verify the
+exact address and port printed by `kubectl`, or use a dedicated IPv4 loopback
+port:
+
+```bash
+lsof -nP -iTCP:18081 -sTCP:LISTEN
+kubectl -n coyote-ci port-forward --address 127.0.0.1 svc/coyote-mcp 18081:8081
+```
+
+Connect MCP Inspector to `http://127.0.0.1:18081/mcp`. Supply credentials
+through the client or a credential store; do not include tokens in shell
+commands, saved configuration, or logs.
+
 ## Persistence model
 
 - PostgreSQL is the supported durable production database.

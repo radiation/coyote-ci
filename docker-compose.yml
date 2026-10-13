@@ -140,6 +140,39 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/coyote-builds:/tmp/coyote-builds
 
+  mcp:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: source-runtime-mcp
+      args:
+        GO_VERSION: ${GO_VERSION}
+    container_name: coyote-ci-mcp
+    profiles: ["mcp"]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      MCP_LISTEN_ADDR: "0.0.0.0:8081"
+      MCP_ALLOW_DISABLED_AUTH: "false"
+      AUTH_MODE: ${MCP_AUTH_MODE:-header}
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: coyote
+      DB_PASSWORD: coyote
+      DB_NAME: coyote_ci
+      DB_SSLMODE: disable
+    ports:
+      - "127.0.0.1:8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
   mailpit:
     image: axllent/mailpit
     container_name: coyote-ci-mailpit

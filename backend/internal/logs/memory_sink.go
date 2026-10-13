@@ -87,14 +87,14 @@ func (s *MemorySink) ListStepLogChunks(_ context.Context, buildID string, stepIn
 			continue
 		}
 		out = append(out, chunk)
-		if len(out) >= limit {
-			break
-		}
 	}
 
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].SequenceNo < out[j].SequenceNo
 	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
 
 	return out, nil
 }

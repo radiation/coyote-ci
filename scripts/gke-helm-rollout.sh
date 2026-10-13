@@ -55,6 +55,22 @@ external_replica_value() {
   ' "$values" "$section"
 }
 
+mcp_enabled() {
+  ruby -ryaml -e '
+    values = YAML.load_file(ARGV.fetch(0))
+    puts values.fetch("mcp", {}).fetch("enabled", false) == true
+  ' "$control_values"
+}
+
+mcp_deployment_exists() {
+  local deployment
+  if ! deployment="$(kubectl -n "$control_namespace" get deployment/coyote-mcp --ignore-not-found -o name)"; then
+    echo "failed to determine whether MCP deployment exists" >&2
+    return 2
+  fi
+  [[ -n "$deployment" ]]
+}
+
 scale_deployment() {
   local namespace="$1"
   local deployment="$2"
@@ -65,6 +81,12 @@ scale_deployment() {
 server_replicas="$(external_replica_value "$control_values" server)"
 frontend_replicas="$(external_replica_value "$control_values" frontend)"
 worker_replicas="$(external_replica_value "$worker_values" worker)"
+mcp_replicas=""
+mcp_is_desired=false
+if [[ "$(mcp_enabled)" == "true" ]]; then
+  mcp_is_desired=true
+  mcp_replicas="$(external_replica_value "$control_values" mcp)"
+fi
 
 # Rendering validates the supplied digest-pinned images and chart-required inputs before mutation.
 helm template "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" >/dev/null
@@ -82,12 +104,28 @@ helm status "$worker_release" --namespace "$worker_namespace" >/dev/null || {
   exit 1
 }
 
+mcp_exists=false
+if mcp_deployment_exists; then
+  mcp_exists=true
+else
+  mcp_lookup_status=$?
+  if [[ "$mcp_lookup_status" -ne 1 ]]; then
+    exit "$mcp_lookup_status"
+  fi
+fi
+
 echo "Phase A: scale all Helm-managed database consumers to zero before migration"
 scale_deployment "$control_namespace" coyote-server 0
 scale_deployment "$control_namespace" coyote-frontend 0
+if [[ "$mcp_exists" == "true" ]]; then
+  scale_deployment "$control_namespace" coyote-mcp 0
+fi
 scale_deployment "$worker_namespace" coyote-kubernetes-worker-staging 0
 run kubectl -n "$control_namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
 run kubectl -n "$control_namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
+if [[ "$mcp_exists" == "true" ]]; then
+  run kubectl -n "$control_namespace" rollout status deployment/coyote-mcp --timeout="${timeout_seconds}s"
+fi
 run kubectl -n "$worker_namespace" rollout status deployment/coyote-kubernetes-worker-staging --timeout="${timeout_seconds}s"
 
 echo "Phase B: apply and wait for migration Job $migration_job"
@@ -111,8 +149,14 @@ echo "Phase C: restore the desired control-plane replicas"
 run helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" --wait --timeout "${timeout_seconds}s"
 scale_deployment "$control_namespace" coyote-server "$server_replicas"
 scale_deployment "$control_namespace" coyote-frontend "$frontend_replicas"
+if [[ "$mcp_is_desired" == "true" ]]; then
+  scale_deployment "$control_namespace" coyote-mcp "$mcp_replicas"
+fi
 run kubectl -n "$control_namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
 run kubectl -n "$control_namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
+if [[ "$mcp_is_desired" == "true" ]]; then
+  run kubectl -n "$control_namespace" rollout status deployment/coyote-mcp --timeout="${timeout_seconds}s"
+fi
 
 echo "Phase D: restore the desired worker replicas"
 run helm upgrade "$worker_release" "$worker_chart" --namespace "$worker_namespace" --values "$worker_values" --wait --timeout "${timeout_seconds}s"

@@ -12,6 +12,7 @@ images:
   server: ""
   frontend: ""
   migrate: ""
+  mcp: ""
   cloudSqlProxy: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.4@sha256:88501f0a695a586988add1b8a206fdf3f29f9a1a3deeb9b45ef2b1481ea6be83
 release:
   version: ""
@@ -24,6 +25,9 @@ serviceAccounts:
     gsaEmail: ""
   migrate:
     name: coyote-migrate
+    gsaEmail: ""
+  mcp:
+    name: coyote-mcp
     gsaEmail: ""
   workspaceHelperName: coyote-workspace-helper
 
@@ -80,6 +84,20 @@ migration:
   resources:
     requests: {cpu: 250m, memory: 256Mi, ephemeral-storage: 128Mi}
     limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 256Mi}
+
+mcp:
+  enabled: false
+  replicas: 1
+  replicasManagedExternally: false
+  terminationGracePeriodSeconds: 30
+  service:
+    port: 8081
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  auth:
+    allowedOrigins: []
+    allowDisabledAuth: false
 
 gateway:
   enabled: false
