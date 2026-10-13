@@ -21,6 +21,33 @@ scripts/helm-render-parity.sh
 scripts/helm-schema-test.sh
 ```
 
+## Optional MCP deployment
+
+The MCP Deployment is disabled by default and has no Gateway or public ingress
+route. Enable it only after publishing the dedicated MCP image:
+
+```sh
+make gke-control-plane-image-build
+# Export the emitted digest-pinned COYOTE_MCP_IMAGE value.
+```
+
+Set `mcp.enabled: true`, `images.mcp: <COYOTE_MCP_IMAGE>`, and a dedicated
+`serviceAccounts.mcp.gsaEmail` in the environment-specific control-plane
+values. When using `gke-helm-rollout.sh`, also set
+`mcp.replicasManagedExternally: true` so the wrapper can scale MCP to zero
+before migrations and restore the configured `mcp.replicas` afterward. The MCP
+GSA needs Cloud SQL Client and read access only to the
+database-url secret. It does not need worker, artifact-storage, or Kubernetes
+API permissions. Its service-account token is mounted only because the Cloud
+SQL Auth Proxy requires it for GKE Workload Identity; the MCP KSA receives no
+Kubernetes RBAC. The chart mounts only that database secret and runs a local
+Cloud SQL Auth Proxy sidecar. It currently reuses the control-plane database
+account for compatibility; a future dedicated restricted database role can be
+introduced through a separate MCP database-url secret.
+
+MCP remains ClusterIP-only; add an authenticated TLS gateway integration only
+after selecting a suitable private ingress policy and explicit allowed origins.
+
 The raw manifests and deployment scripts remain the current deployment path.
 The migration Job is excluded from ordinary chart renders and Helm release
 ownership. It is rendered explicitly for a unique rollout run and applied by

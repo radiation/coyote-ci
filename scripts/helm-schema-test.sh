@@ -56,6 +56,78 @@ gateway:
 EOF
 expect_template_failure coyote-ci "$repo_root/deploy/helm/coyote-ci" coyote-ci "$control_values" "$temp_dir/incomplete-gateway.yaml"
 
+cat >"$temp_dir/invalid-mcp-image.yaml" <<'EOF'
+mcp:
+  enabled: true
+images:
+  mcp: example.invalid/coyote-mcp:mutable
+serviceAccounts:
+  mcp:
+    name: coyote-mcp
+    gsaEmail: coyote-gke-mcp@example-project.iam.gserviceaccount.com
+EOF
+expect_template_failure coyote-ci "$repo_root/deploy/helm/coyote-ci" coyote-ci "$control_values" "$temp_dir/invalid-mcp-image.yaml"
+
+cat >"$temp_dir/invalid-mcp-auth.yaml" <<'EOF'
+mcp:
+  enabled: true
+  auth:
+    allowDisabledAuth: true
+images:
+  mcp: example.invalid/coyote-mcp@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+serviceAccounts:
+  mcp:
+    name: coyote-mcp
+    gsaEmail: coyote-gke-mcp@example-project.iam.gserviceaccount.com
+EOF
+expect_template_failure coyote-ci "$repo_root/deploy/helm/coyote-ci" coyote-ci "$control_values" "$temp_dir/invalid-mcp-auth.yaml"
+
+cat >"$temp_dir/disabled-auth-mcp.yaml" <<'EOF'
+auth:
+  mode: disabled
+mcp:
+  enabled: true
+images:
+  mcp: example.invalid/coyote-mcp@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+serviceAccounts:
+  mcp:
+    name: coyote-mcp
+    gsaEmail: coyote-gke-mcp@example-project.iam.gserviceaccount.com
+EOF
+expect_template_failure coyote-ci "$repo_root/deploy/helm/coyote-ci" coyote-ci "$control_values" "$temp_dir/disabled-auth-mcp.yaml"
+
+cat >"$temp_dir/mcp-enabled.yaml" <<'EOF'
+mcp:
+  enabled: true
+  replicas: 2
+  auth:
+    allowedOrigins: ["https://mcp.example.invalid"]
+images:
+  mcp: example.invalid/coyote-mcp@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+serviceAccounts:
+  mcp:
+    name: coyote-mcp
+    gsaEmail: coyote-gke-mcp@example-project.iam.gserviceaccount.com
+EOF
+helm template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci --values "$control_values" --values "$temp_dir/mcp-enabled.yaml" >"$temp_dir/mcp-enabled-render.yaml"
+ruby -ryaml - "$temp_dir/mcp-enabled-render.yaml" <<'RUBY'
+documents = YAML.load_stream(File.read(ARGV.fetch(0))).compact
+index = documents.each_with_object({}) { |document, result| result[[document.fetch("kind"), document.dig("metadata", "name")]] = document }
+deployment = index.fetch(["Deployment", "coyote-mcp"])
+service = index.fetch(["Service", "coyote-mcp"])
+account = index.fetch(["ServiceAccount", "coyote-mcp"])
+secrets = index.fetch(["SecretProviderClass", "coyote-mcp-secrets"])
+abort "MCP replicas did not render" unless deployment.dig("spec", "replicas") == 2
+abort "MCP image is not digest-pinned" unless deployment.dig("spec", "template", "spec", "containers", 0, "image")&.include?("@sha256:")
+abort "MCP service must be ClusterIP without session affinity" unless service.dig("spec", "type") == "ClusterIP" && service.dig("spec", "sessionAffinity") == "None"
+abort "MCP probes are missing" unless deployment.dig("spec", "template", "spec", "containers", 0, "livenessProbe", "httpGet", "path") == "/healthz" && deployment.dig("spec", "template", "spec", "containers", 0, "readinessProbe", "httpGet", "path") == "/readyz"
+abort "MCP pod must mount its service-account token for Workload Identity" unless deployment.dig("spec", "template", "spec", "automountServiceAccountToken") == true
+abort "MCP security context is incomplete" unless deployment.dig("spec", "template", "spec", "containers", 0, "securityContext", "readOnlyRootFilesystem") == true
+abort "MCP service account was not rendered" unless account.dig("metadata", "annotations", "iam.gke.io/gcp-service-account")
+abort "MCP secret provider must only mount the database URL" unless YAML.load(secrets.dig("spec", "parameters", "secrets")).map { |item| item["path"] } == ["database-url"]
+abort "MCP must not render Kubernetes RBAC" if documents.any? { |document| ["Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding"].include?(document["kind"]) && document.dig("metadata", "name")&.include?("mcp") }
+RUBY
+
 cat >"$temp_dir/invalid-concurrency.yaml" <<'EOF'
 worker:
   maxInFlightJobs: 0

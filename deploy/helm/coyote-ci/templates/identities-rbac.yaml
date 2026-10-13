@@ -17,6 +17,18 @@ metadata:
   annotations:
     iam.gke.io/gcp-service-account: {{ .Values.serviceAccounts.migrate.gsaEmail | quote }}
   {{- end }}
+{{- if .Values.mcp.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccounts.mcp.name }}
+  namespace: {{ .Values.namespace }}
+  {{- if and .Values.gke.enabled .Values.gke.workloadIdentity.enabled }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ .Values.serviceAccounts.mcp.gsaEmail | quote }}
+  {{- end }}
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
