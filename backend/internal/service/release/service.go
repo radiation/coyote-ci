@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
@@ -112,6 +113,10 @@ func (s *Service) Get(ctx context.Context, releaseID string) (domain.Application
 	return s.releases.GetByID(ctx, releaseID)
 }
 
+func (s *Service) GetByBuildID(ctx context.Context, buildID string) (domain.ApplicationRelease, error) {
+	return s.releases.GetByBuildID(ctx, buildID)
+}
+
 func (s *Service) PromoteStable(ctx context.Context, releaseID string, actorUserID *string) (domain.ApplicationRelease, error) {
 	return s.releases.PromoteStable(ctx, releaseID, actorUserID)
 }
@@ -151,7 +156,24 @@ func releaseOutputs(resolved *pipeline.ResolvedPipeline, build domain.Build) ([]
 		if err != nil {
 			return nil, err
 		}
-		outputs = append(outputs, domain.ApplicationReleaseOutput{ID: uuid.NewString(), Kind: domain.ApplicationReleaseOutputImage, OutputKey: "image:" + step.NodeID, DisplayName: name, DefinitionJSON: string(definition), CreatedAt: time.Now().UTC()})
+		outputs = append(outputs, domain.ApplicationReleaseOutput{ID: uuid.NewString(), Kind: domain.ApplicationReleaseOutputImage, OutputKey: "image:" + releaseImageOutputIdentity(name), DisplayName: name, DefinitionJSON: string(definition), CreatedAt: time.Now().UTC()})
 	}
 	return outputs, nil
+}
+
+func releaseImageOutputIdentity(name string) string {
+	var result strings.Builder
+	separator := false
+	for _, character := range strings.ToLower(strings.TrimSpace(name)) {
+		if unicode.IsLetter(character) || unicode.IsDigit(character) {
+			if separator && result.Len() > 0 {
+				result.WriteByte('-')
+			}
+			result.WriteRune(character)
+			separator = false
+			continue
+		}
+		separator = true
+	}
+	return result.String()
 }

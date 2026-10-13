@@ -4,6 +4,12 @@ pipeline:
   image: golang:1.27.2
   application_version:
     template: "0.0.{build_number}"
+  release:
+    images:
+      - Coyote Server Image
+      - Coyote Frontend Image
+      - Coyote Worker Image
+      - Coyote Migrate Image
 steps:
   - name: Backend Format Check
     depends_on: []
@@ -109,7 +115,7 @@ steps:
       preset: node
       policy: pull-push
 
-  - name: Backend Image
+  - name: Coyote Server Image
     depends_on:
       - Backend Format Check
       - Backend Build Server
@@ -117,20 +123,37 @@ steps:
     image_build:
       context: backend
       dockerfile: backend/Dockerfile
-      target: artifact-runtime
-      artifacts:
-        - name: coyote-server
-          destination: dist/coyote-server
-        - name: coyote-worker
-          destination: dist/coyote-worker
-      image: coyote-ci/backend
+      target: source-runtime
+      image: coyote-server
     timeout_seconds: 600
 
-  - name: Frontend Image
+  - name: Coyote Frontend Image
     depends_on:
       - Frontend Build
     image_build:
       context: frontend
       dockerfile: frontend/Dockerfile
-      image: coyote-ci/frontend
+      image: coyote-frontend
+    timeout_seconds: 600
+
+  - name: Coyote Worker Image
+    depends_on:
+      - Backend Format Check
+      - Backend Build Server
+      - Backend Build Worker
+    image_build:
+      context: backend
+      dockerfile: backend/Dockerfile
+      target: source-runtime
+      image: coyote-worker
+    timeout_seconds: 600
+
+  - name: Coyote Migrate Image
+    depends_on:
+      - Backend Format Check
+    image_build:
+      context: backend
+      dockerfile: backend/Dockerfile
+      target: migrate-runtime
+      image: coyote-migrate
     timeout_seconds: 600

@@ -67,6 +67,7 @@ func TestValidate_ReleaseDefinition(t *testing.T) {
 		{name: "accepts nested image build", release: &ReleaseDef{Images: []string{"image"}}, version: &ApplicationVersionDef{Value: "1.2.3"}, steps: []StepDef{{Group: &StepGroupDef{Name: "publish", Steps: []StepDef{validImage}}}}},
 		{name: "accepts valid release", release: &ReleaseDef{Artifacts: []string{"binary"}, Images: []string{"image"}, AutoChannel: "latest"}, version: &ApplicationVersionDef{Value: "1.2.3"}, artifact: validArtifact, steps: []StepDef{validImage}},
 	}
+
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			pipelineFile := &PipelineFile{Version: 1, Pipeline: PipelineMeta{ApplicationVersion: testCase.version, Release: testCase.release}, Steps: testCase.steps}

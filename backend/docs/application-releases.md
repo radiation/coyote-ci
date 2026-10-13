@@ -43,3 +43,21 @@ from the V2A artifact and V2B image publication records.
 Jobless Builds may create coordinated releases without channels. Generic
 `latest` and `stable` require a job-backed application stream: jobless Builds
 must not configure `auto_channel`, and cannot be manually promoted.
+
+## Coyote dogfood release bridge
+
+Coyote's own pipeline declares four image outputs—server, frontend, worker,
+and migrate—and uses generic release completion only as an immutable output
+gate. It does not configure generic `latest` or `stable`.
+
+After a generic release is complete, a trusted release environment can publish
+the separate Coyote product manifest:
+
+```sh
+coyote release publish-coyote --build <build-id> \
+  --release-source <release-store> --channel latest
+```
+
+This command validates the four digest-pinned generic outputs and reuses the
+existing Coyote product manifest and channel system. Generic completion does
+not imply Coyote product `latest` has advanced.

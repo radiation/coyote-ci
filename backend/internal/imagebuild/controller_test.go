@@ -65,6 +65,7 @@ func TestControllerPublishesPersistedApplicationVersionAndDigestReference(t *tes
 	if newErr != nil {
 		t.Fatalf("new controller: %v", newErr)
 	}
+
 	controller.WithPublicationInspector(inspector)
 
 	active, reconcileErr := controller.ReconcileClaimed(context.Background(), execution.step)

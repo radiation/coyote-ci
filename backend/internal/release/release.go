@@ -301,6 +301,7 @@ func (p *FilePublisher) PromoteChannel(ctx context.Context, channel, releaseVers
 	if channel != "latest" && channel != "stable" {
 		return fmt.Errorf("unsupported release channel %q", channel)
 	}
+
 	if !semVerPattern.MatchString(releaseVersion) || !digestPattern.MatchString(manifestDigest) {
 		return errors.New("channel promotion requires an exact release and manifest digest")
 	}

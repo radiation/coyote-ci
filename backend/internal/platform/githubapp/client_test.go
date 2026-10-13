@@ -966,6 +966,10 @@ func TestClient_GetFreshInstallationToken_ConcurrentFailureSharesRefreshErrorWit
 	client := NewClient(server.Client())
 	request := InstallationTokenRequest{AppRegistrationID: "registration-1", AppID: "12345", InstallationID: "999", APIBaseURL: server.URL, PrivateKeyPEM: privateKeyPEM, RepositoryIDs: []string{"1001"}}
 	client.cache[installationCacheKey(request)] = cachedInstallationToken{token: InstallationToken{Value: "stale-token", ExpiresAt: time.Now().Add(10 * time.Minute).UTC()}}
+	waitersJoined := make(chan struct{}, 2)
+	client.freshRefreshWaitHook = func() {
+		waitersJoined <- struct{}{}
+	}
 
 	results := make(chan struct {
 		token InstallationToken
@@ -981,6 +985,8 @@ func TestClient_GetFreshInstallationToken_ConcurrentFailureSharesRefreshErrorWit
 		}()
 	}
 	<-started
+	<-waitersJoined
+	<-waitersJoined
 	close(release)
 	for range 3 {
 		result := <-results

@@ -81,6 +81,10 @@ func (c *Controller) ReconcileClaimed(ctx context.Context, step workersvc.Worker
 	if build.ApplicationVersion != nil {
 		applicationVersion = strings.TrimSpace(*build.ApplicationVersion)
 	}
+	if applicationVersion != "" {
+		spec.RemoteImageBuild.BuildArgs = copyBuildArgs(spec.RemoteImageBuild.BuildArgs)
+		spec.RemoteImageBuild.BuildArgs["COYOTE_APPLICATION_VERSION"] = applicationVersion
+	}
 	publishedImageReference, targetErr := c.builder.ResolveTargetImageReference(spec.RemoteImageBuild.TargetImageReference, applicationVersion)
 	if targetErr != nil {
 		return false, c.complete(ctx, step, false, targetErr.Error(), nil)

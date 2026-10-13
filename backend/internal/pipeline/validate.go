@@ -180,6 +180,7 @@ func validateReleaseDef(pf *PipelineFile) ValidationErrors {
 	}
 	imageSteps := map[string]struct{}{}
 	collectImageStepNames(pf.Steps, imageSteps)
+	imageOutputKeys := map[string]string{}
 	for index, name := range release.Images {
 		field := fmt.Sprintf("pipeline.release.images[%d]", index)
 		name = strings.TrimSpace(name)
@@ -191,10 +192,21 @@ func validateReleaseDef(pf *PipelineFile) ValidationErrors {
 			errs = append(errs, ValidationError{Field: field, Message: "duplicate release image"})
 		}
 		seen["image:"+name] = struct{}{}
+		outputKey := normalizedReleaseImageIdentity(name)
+		if outputKey == "" {
+			errs = append(errs, ValidationError{Field: field, Message: "must normalize to a non-empty release image output key"})
+			continue
+		}
+		if existing, collision := imageOutputKeys[outputKey]; collision && existing != name {
+			errs = append(errs, ValidationError{Field: field, Message: fmt.Sprintf("release image output key %q collides with %q", outputKey, existing)})
+		}
+		imageOutputKeys[outputKey] = name
 	}
+
 	if channel := strings.TrimSpace(release.AutoChannel); channel != "" && channel != "latest" {
 		errs = append(errs, ValidationError{Field: "pipeline.release.auto_channel", Message: "only latest may advance automatically"})
 	}
+
 	return errs
 }
 

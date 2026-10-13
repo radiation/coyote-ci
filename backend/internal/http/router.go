@@ -265,6 +265,9 @@ func NewRouter(buildHandler *handler.BuildHandler, artifactHandler *handler.Arti
 				r.Post("/jobs/{jobID}/retry", buildHandler.RetryJob)
 				r.Get("/", buildHandler.ListBuilds)
 				r.Get("/{buildID}", buildHandler.GetBuild)
+				if cfg.applicationReleaseHandler != nil {
+					r.Get("/{buildID}/application-release", cfg.applicationReleaseHandler.GetByBuild)
+				}
 				r.Get("/{buildID}/artifact-triggers", buildHandler.GetBuildArtifactTriggers)
 				r.Post("/{buildID}/rerun", buildHandler.RerunBuild)
 				r.Get("/{buildID}/steps", buildHandler.GetBuildSteps)

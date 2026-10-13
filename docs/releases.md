@@ -22,3 +22,22 @@ coyote release resolve --release 2.5.1 --release-source ./release-store \
 
 Pass the generated file after the operator values file. Kubernetes then receives
 only immutable image digest references.
+
+## Publishing from a Coyote build
+
+Coyote's dogfood pipeline uses `Build.ApplicationVersion` as its canonical
+release version and completes a separate generic application release before a
+product manifest is published. From a trusted environment with API-token and
+release-source access:
+
+```sh
+coyote release publish-coyote --build <build-id> \
+  --release-source ./release-store --channel latest
+```
+
+The command requires a complete generic release with the four Coyote
+server/frontend/worker/migrate digest outputs. It publishes the existing
+immutable product manifest first, then advances product `latest` only when the
+candidate `0.0.<build_number>` release is not older than the current channel.
+Product `stable` remains an operator promotion; generic application channels
+are not used by the Coyote dogfood workflow.
