@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -42,6 +43,43 @@ func (h *ApplicationReleaseHandler) SetAuthorization(mode auth.Mode, roles auth.
 func (h *ApplicationReleaseHandler) Get(w http.ResponseWriter, r *http.Request) {
 	release, ok := h.loadAuthorized(w, r, false)
 	if !ok {
+		return
+	}
+	writeDataJSON(w, http.StatusOK, applicationReleaseResponse(release))
+}
+
+// GetByBuild godoc
+// @Summary Get application release for build
+// @Description Returns the generic application release associated with a build.
+// @Tags application-releases
+// @Produce json
+// @Param buildID path string true "Build ID"
+// @Success 200 {object} api.ApplicationReleaseEnvelope
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 403 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /builds/{buildID}/application-release [get]
+func (h *ApplicationReleaseHandler) GetByBuild(w http.ResponseWriter, r *http.Request) {
+	if h.releases == nil {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", "application release support is not configured")
+		return
+	}
+	buildID := strings.TrimSpace(chi.URLParam(r, "buildID"))
+	if buildID == "" {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid_request", "build id is required")
+		return
+	}
+	release, err := h.releases.GetByBuildID(r.Context(), buildID)
+	if errors.Is(err, repository.ErrApplicationReleaseNotFound) {
+		writeErrorJSON(w, http.StatusNotFound, "not_found", "application release not found")
+		return
+	}
+	if err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	if !authorizeProject(w, r, h.authMode, h.projectRoles, release.ProjectID, auth.CanReadProjectResources, "project membership is required") || !requireAPITokenScope(w, r, domain.APITokenScopeBuildRead) {
 		return
 	}
 	writeDataJSON(w, http.StatusOK, applicationReleaseResponse(release))
@@ -120,7 +158,16 @@ func (h *ApplicationReleaseHandler) loadAuthorized(w http.ResponseWriter, r *htt
 func applicationReleaseResponse(release domain.ApplicationRelease) api.ApplicationReleaseResponse {
 	outputs := make([]api.ApplicationReleaseOutputResponse, 0, len(release.Outputs))
 	for _, output := range release.Outputs {
-		outputs = append(outputs, api.ApplicationReleaseOutputResponse{ID: output.ID, Kind: string(output.Kind), Key: output.OutputKey, Name: output.DisplayName, Status: string(output.Status), ImmutableReference: output.ImmutableReference, FailureReason: output.FailureReason, ArtifactID: output.ArtifactID, ExecutionJobID: output.ExecutionJobID})
+		response := api.ApplicationReleaseOutputResponse{ID: output.ID, Kind: string(output.Kind), Key: output.OutputKey, Name: output.DisplayName, Status: string(output.Status), ImmutableReference: output.ImmutableReference, FailureReason: output.FailureReason, ArtifactID: output.ArtifactID, ExecutionJobID: output.ExecutionJobID}
+		if output.Kind == domain.ApplicationReleaseOutputImage {
+			var definition struct {
+				TargetImageReference string `json:"target_image_reference"`
+			}
+			if err := json.Unmarshal([]byte(output.DefinitionJSON), &definition); err == nil {
+				response.TargetImageReference = definition.TargetImageReference
+			}
+		}
+		outputs = append(outputs, response)
 	}
 	return api.ApplicationReleaseResponse{ID: release.ID, BuildID: release.BuildID, ProjectID: release.ProjectID, JobID: release.JobID, ApplicationVersion: release.ApplicationVersion, Status: string(release.Status), AutoChannel: release.AutoChannelName, FailureReason: release.FailureReason, Outputs: outputs}
 }

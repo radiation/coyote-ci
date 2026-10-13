@@ -55,17 +55,19 @@ func TestLoadAndResolve_RepositoryPipeline(t *testing.T) {
 		byName[step.Name] = step
 	}
 	wantDependencies := map[string][]string{
-		"Backend Format Check": nil,
-		"Backend Dependencies": nil,
-		"Frontend Install":     nil,
-		"Backend Vet":          {"node-001"},
-		"Backend Test":         {"node-001"},
-		"Frontend Test":        {"node-002"},
-		"Backend Build Server": {"node-003", "node-004"},
-		"Backend Build Worker": {"node-003", "node-004"},
-		"Frontend Build":       {"node-005"},
-		"Backend Image":        {"node-000", "node-006", "node-007"},
-		"Frontend Image":       {"node-008"},
+		"Backend Format Check":  nil,
+		"Backend Dependencies":  nil,
+		"Frontend Install":      nil,
+		"Backend Vet":           {"node-001"},
+		"Backend Test":          {"node-001"},
+		"Frontend Test":         {"node-002"},
+		"Backend Build Server":  {"node-003", "node-004"},
+		"Backend Build Worker":  {"node-003", "node-004"},
+		"Frontend Build":        {"node-005"},
+		"Coyote Server Image":   {"node-000", "node-006", "node-007"},
+		"Coyote Frontend Image": {"node-008"},
+		"Coyote Worker Image":   {"node-000", "node-006", "node-007"},
+		"Coyote Migrate Image":  {"node-000"},
 	}
 	for name, want := range wantDependencies {
 		step, found := byName[name]
@@ -86,9 +88,9 @@ func TestLoadAndResolve_RepositoryPipeline(t *testing.T) {
 			t.Fatalf("step %q cache=%#v, want Node preset", name, byName[name].Cache)
 		}
 	}
-	backendImage := byName["Backend Image"]
-	if len(backendImage.RemoteImageBuild.ArtifactInputs) != 2 || backendImage.RemoteImageBuild.ArtifactInputs[0].Name != "coyote-server" || backendImage.RemoteImageBuild.ArtifactInputs[1].Name != "coyote-worker" {
-		t.Fatalf("Backend Image artifact inputs=%#v, want coyote-server and coyote-worker", backendImage.RemoteImageBuild.ArtifactInputs)
+	serverImage := byName["Coyote Server Image"]
+	if len(serverImage.RemoteImageBuild.ArtifactInputs) != 0 {
+		t.Fatalf("Coyote Server Image artifact inputs=%#v, want none", serverImage.RemoteImageBuild.ArtifactInputs)
 	}
 	if _, found := byName["List Image Artifacts"]; found {
 		t.Fatal("repository pipeline retains redundant List Image Artifacts step")

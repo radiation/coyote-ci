@@ -107,6 +107,14 @@ func (c *Client) GetApplicationRelease(ctx context.Context, releaseID string) (a
 	return envelope.Data, nil
 }
 
+func (c *Client) GetBuildApplicationRelease(ctx context.Context, buildID string) (api.ApplicationReleaseResponse, error) {
+	var envelope api.ApplicationReleaseEnvelope
+	if err := c.doJSON(ctx, http.MethodGet, buildResourcePath(buildID, "/application-release"), nil, &envelope); err != nil {
+		return api.ApplicationReleaseResponse{}, err
+	}
+	return envelope.Data, nil
+}
+
 func (c *Client) PromoteApplicationReleaseStable(ctx context.Context, releaseID string) (api.ApplicationReleaseResponse, error) {
 	var envelope api.ApplicationReleaseEnvelope
 	if err := c.doJSON(ctx, http.MethodPost, "api/application-releases/"+url.PathEscape(strings.TrimSpace(releaseID))+"/channels/stable", nil, &envelope); err != nil {

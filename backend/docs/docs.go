@@ -732,6 +732,59 @@ const docTemplate = `{
                 }
             }
         },
+        "/builds/{buildID}/application-release": {
+            "get": {
+                "description": "Returns the generic application release associated with a build.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "application-releases"
+                ],
+                "summary": "Get application release for build",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Build ID",
+                        "name": "buildID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ApplicationReleaseEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/builds/{buildID}/artifact-triggers": {
             "get": {
                 "description": "Returns persisted producer-side artifact trigger delivery records for a build.",
@@ -4560,6 +4613,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                },
+                "target_image_reference": {
                     "type": "string"
                 }
             }

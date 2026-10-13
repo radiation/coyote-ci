@@ -63,6 +63,8 @@ definitions:
         type: string
       status:
         type: string
+      target_image_reference:
+        type: string
     type: object
   api.ApplicationReleaseResponse:
     properties:
@@ -2531,6 +2533,41 @@ paths:
       summary: Get build
       tags:
       - builds
+  /builds/{buildID}/application-release:
+    get:
+      description: Returns the generic application release associated with a build.
+      parameters:
+      - description: Build ID
+        in: path
+        name: buildID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ApplicationReleaseEnvelope'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Get application release for build
+      tags:
+      - application-releases
   /builds/{buildID}/artifact-triggers:
     get:
       description: Returns persisted producer-side artifact trigger delivery records
