@@ -17,6 +17,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/auth"
 	"github.com/radiation/coyote-ci/backend/internal/authorization"
+	"github.com/radiation/coyote-ci/backend/internal/logs"
 	coyotemcp "github.com/radiation/coyote-ci/backend/internal/mcp"
 	"github.com/radiation/coyote-ci/backend/internal/platform/config"
 	platformdb "github.com/radiation/coyote-ci/backend/internal/platform/db"
@@ -71,7 +72,7 @@ func run(ctx context.Context, appConfig config.Config, mcpConfig coyotemcp.Confi
 	projectMembershipService := service.NewProjectMembershipService(projectRepo, projectMembershipRepo)
 	authDisabled := auth.ParseMode(appConfig.AuthMode) == auth.ModeDisabled
 	buildReader := buildsvc.NewAuthorizedReader(
-		buildsvc.NewBuildService(buildRepo, nil, nil),
+		buildsvc.NewBuildService(buildRepo, nil, logs.NewPostgresSink(db)),
 		authorization.NewAuthorizer(authDisabled, projectMembershipService),
 	)
 	handler, handlerErr := coyotemcp.NewAuthenticatedHandler(mcpConfig, coyotemcp.NewDatabaseReadiness(db), &sdkmcp.Implementation{

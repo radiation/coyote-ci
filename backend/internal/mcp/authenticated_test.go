@@ -14,6 +14,8 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/authorization"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/logs"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 	repositorymemory "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	"github.com/radiation/coyote-ci/backend/internal/service"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
@@ -185,6 +187,130 @@ func TestAuthenticatedMCPGetBuildToolReturnsSafeErrors(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedMCPBuildInvestigationTools(t *testing.T) {
+	fixture := newAuthenticatedMCPFixture(t)
+	server := httptest.NewServer(fixture.handler(t, false))
+	defer server.Close()
+
+	logReader := connectMCPClient(t, server.URL+Path, fixture.tokens["log_reader"])
+	defer func() { _ = logReader.Close() }()
+	tools, listErr := logReader.ListTools(context.Background(), nil)
+	if listErr != nil {
+		t.Fatalf("list tools failed: %v", listErr)
+	}
+	for _, toolName := range []string{GetBuildFailuresToolName, GetStepLogsToolName} {
+		if !containsTool(tools.Tools, toolName) {
+			t.Fatalf("expected %q in tool list: %+v", toolName, tools.Tools)
+		}
+	}
+
+	failuresResult, failuresErr := logReader.CallTool(context.Background(), &sdkmcp.CallToolParams{
+		Name:      GetBuildFailuresToolName,
+		Arguments: map[string]any{"build_id": fixture.build.ID},
+	})
+	if failuresErr != nil {
+		t.Fatalf("call failures tool: %v", failuresErr)
+	}
+	if failuresResult.IsError {
+		t.Fatalf("expected failure metadata success, got %+v", failuresResult)
+	}
+	failuresJSON, marshalFailuresErr := json.Marshal(failuresResult.StructuredContent)
+	if marshalFailuresErr != nil {
+		t.Fatalf("marshal failures output: %v", marshalFailuresErr)
+	}
+	var failures GetBuildFailuresOutput
+	if decodeFailuresErr := json.Unmarshal(failuresJSON, &failures); decodeFailuresErr != nil {
+		t.Fatalf("decode failures output: %v", decodeFailuresErr)
+	}
+	if failures.Status != domain.BuildStatusFailed || len(failures.FailedSteps) != 1 || failures.FailedSteps[0].StepIndex != 0 {
+		t.Fatalf("unexpected failures output: %+v", failures)
+	}
+	encodedFailures, encodeFailuresErr := json.Marshal(failures)
+	if encodeFailuresErr != nil {
+		t.Fatalf("marshal decoded failures: %v", encodeFailuresErr)
+	}
+	if strings.Contains(string(encodedFailures), "pipeline-secret") || strings.Contains(string(encodedFailures), "first log") {
+		t.Fatalf("failure output leaked unsafe content: %s", encodedFailures)
+	}
+
+	logResult, logErr := logReader.CallTool(context.Background(), &sdkmcp.CallToolParams{
+		Name: GetStepLogsToolName,
+		Arguments: map[string]any{
+			"build_id":       fixture.build.ID,
+			"step_index":     0,
+			"limit":          1,
+			"max_bytes":      64,
+			"after_sequence": 0,
+		},
+	})
+	if logErr != nil {
+		t.Fatalf("call logs tool: %v", logErr)
+	}
+	if logResult.IsError {
+		t.Fatalf("expected logs success, got %+v", logResult)
+	}
+	logsJSON, marshalLogsErr := json.Marshal(logResult.StructuredContent)
+	if marshalLogsErr != nil {
+		t.Fatalf("marshal logs output: %v", marshalLogsErr)
+	}
+	var output GetStepLogsOutput
+	if decodeLogsErr := json.Unmarshal(logsJSON, &output); decodeLogsErr != nil {
+		t.Fatalf("decode logs output: %v", decodeLogsErr)
+	}
+	if len(output.Chunks) != 1 || output.Chunks[0].Text != "first log\n" || !output.HasMore || output.NextSequence != output.Chunks[0].Sequence {
+		t.Fatalf("unexpected paginated logs output: %+v", output)
+	}
+
+	viewer := connectMCPClient(t, server.URL+Path, fixture.tokens["viewer"])
+	defer func() { _ = viewer.Close() }()
+	missingScopeResult, missingScopeErr := viewer.CallTool(context.Background(), &sdkmcp.CallToolParams{
+		Name:      GetStepLogsToolName,
+		Arguments: map[string]any{"build_id": fixture.build.ID, "step_index": 0},
+	})
+	if missingScopeErr != nil {
+		t.Fatalf("call logs without scope: %v", missingScopeErr)
+	}
+	if !missingScopeResult.IsError || toolResultText(missingScopeResult) != "missing_token_scope" {
+		t.Fatalf("expected missing scope error, got %+v", missingScopeResult)
+	}
+
+	tooSmallResult, tooSmallErr := logReader.CallTool(context.Background(), &sdkmcp.CallToolParams{
+		Name:      GetStepLogsToolName,
+		Arguments: map[string]any{"build_id": fixture.build.ID, "step_index": 0, "max_bytes": 1},
+	})
+	if tooSmallErr != nil {
+		t.Fatalf("call logs with too-small byte budget: %v", tooSmallErr)
+	}
+	if !tooSmallResult.IsError || toolResultText(tooSmallResult) != "chunk_exceeds_limit" {
+		t.Fatalf("expected oversized chunk error, got %+v", tooSmallResult)
+	}
+}
+
+func TestAuthenticatedMCPStepLogsRejectInvalidInput(t *testing.T) {
+	fixture := newAuthenticatedMCPFixture(t)
+	server := httptest.NewServer(fixture.handler(t, false))
+	defer server.Close()
+
+	session := connectMCPClient(t, server.URL+Path, fixture.tokens["log_reader"])
+	defer func() { _ = session.Close() }()
+	for _, arguments := range []map[string]any{
+		{"build_id": fixture.build.ID},
+		{"build_id": fixture.build.ID, "step_index": -1},
+		{"build_id": fixture.build.ID, "step_index": 0, "after_sequence": -1},
+		{"build_id": fixture.build.ID, "step_index": 0, "limit": 501},
+		{"build_id": fixture.build.ID, "step_index": 0, "max_bytes": 262145},
+		{"build_id": fixture.build.ID, "step_index": 99},
+	} {
+		result, callErr := session.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: GetStepLogsToolName, Arguments: arguments})
+		if callErr != nil {
+			t.Fatalf("call logs tool: %v", callErr)
+		}
+		if !result.IsError {
+			t.Fatalf("expected invalid input error, got %+v", result)
+		}
+	}
+}
+
 func TestAuthenticatedMCPRequestsRemainPrincipalScoped(t *testing.T) {
 	fixture := newAuthenticatedMCPFixture(t)
 	server := httptest.NewServer(fixture.handler(t, false))
@@ -276,6 +402,7 @@ func newAuthenticatedMCPFixture(t *testing.T) authenticatedMCPFixture {
 		"outsider":      {ID: "outsider-1", Email: "outsider@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
 		"admin":         {ID: "admin-1", Email: "admin@example.com", GlobalRole: domain.GlobalRoleAdmin, CreatedAt: now, UpdatedAt: now},
 		"missing_scope": {ID: "missing-scope-1", Email: "scope@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
+		"log_reader":    {ID: "log-reader-1", Email: "logs@example.com", GlobalRole: domain.GlobalRoleUser, CreatedAt: now, UpdatedAt: now},
 	}
 	for name, user := range users {
 		if _, userErr := userRepo.Create(ctx, user); userErr != nil {
@@ -283,7 +410,7 @@ func newAuthenticatedMCPFixture(t *testing.T) authenticatedMCPFixture {
 		}
 	}
 	for name, role := range map[string]domain.ProjectMemberRole{
-		"viewer": domain.ProjectMemberRoleViewer, "maintainer": domain.ProjectMemberRoleMaintainer, "owner": domain.ProjectMemberRoleOwner, "missing_scope": domain.ProjectMemberRoleViewer,
+		"viewer": domain.ProjectMemberRoleViewer, "maintainer": domain.ProjectMemberRoleMaintainer, "owner": domain.ProjectMemberRoleOwner, "missing_scope": domain.ProjectMemberRoleViewer, "log_reader": domain.ProjectMemberRoleViewer,
 	} {
 		if _, membershipErr := membershipRepo.Upsert(ctx, domain.ProjectMembership{ProjectID: "project-1", UserID: users[name].ID, Role: role, CreatedAt: now, UpdatedAt: now}); membershipErr != nil {
 			t.Fatalf("create %s membership failed: %v", name, membershipErr)
@@ -298,14 +425,31 @@ func newAuthenticatedMCPFixture(t *testing.T) authenticatedMCPFixture {
 		ErrorMessage:       stringPointer("pipeline-secret workspace-path"),
 		PipelineConfigYAML: stringPointer("pipeline-secret"),
 	}
-	if _, buildErr := buildRepo.Create(ctx, build); buildErr != nil {
-		t.Fatalf("create build failed: %v", buildErr)
+	if _, buildErr := buildRepo.CreateQueuedBuild(ctx, build, []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusPending}}); buildErr != nil {
+		t.Fatalf("create queued build failed: %v", buildErr)
+	}
+	if _, statusErr := buildRepo.UpdateStatus(ctx, build.ID, domain.BuildStatusFailed, stringPointer("pipeline-secret workspace-path")); statusErr != nil {
+		t.Fatalf("mark build failed: %v", statusErr)
+	}
+	exitCode := 1
+	if _, stepErr := buildRepo.UpdateStepByIndex(ctx, build.ID, 0, repository.StepUpdate{
+		Status:       domain.BuildStepStatusFailed,
+		ExitCode:     &exitCode,
+		ErrorMessage: stringPointer("pipeline-secret"),
+		StartedAt:    &now,
+		FinishedAt:   &now,
+	}); stepErr != nil {
+		t.Fatalf("mark step failed: %v", stepErr)
 	}
 
 	apiTokens := service.NewAPITokenService(tokenRepo, userRepo)
 	tokens := make(map[string]string)
-	for _, name := range []string{"viewer", "maintainer", "owner", "outsider", "admin"} {
-		created, tokenErr := apiTokens.CreateAPIToken(ctx, service.CreateAPITokenInput{UserID: users[name].ID, Name: name, Scopes: []string{string(domain.APITokenScopeBuildRead)}})
+	for _, name := range []string{"viewer", "maintainer", "owner", "outsider", "admin", "log_reader"} {
+		scopes := []string{string(domain.APITokenScopeBuildRead)}
+		if name == "log_reader" {
+			scopes = append(scopes, string(domain.APITokenScopeBuildLogs))
+		}
+		created, tokenErr := apiTokens.CreateAPIToken(ctx, service.CreateAPITokenInput{UserID: users[name].ID, Name: name, Scopes: scopes})
 		if tokenErr != nil {
 			t.Fatalf("create %s token failed: %v", name, tokenErr)
 		}
@@ -331,7 +475,16 @@ func newAuthenticatedMCPFixture(t *testing.T) authenticatedMCPFixture {
 	}
 
 	membershipService := service.NewProjectMembershipService(projectRepo, membershipRepo)
-	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
+	logSink := logs.NewMemorySink()
+	for _, chunk := range []logs.StepLogChunk{
+		{BuildID: build.ID, StepID: "step-1", StepIndex: 0, StepName: "test", Stream: logs.StepLogStreamStdout, ChunkText: "first log\n", CreatedAt: now},
+		{BuildID: build.ID, StepID: "step-1", StepIndex: 0, StepName: "test", Stream: logs.StepLogStreamStderr, ChunkText: "second log\n", CreatedAt: now},
+	} {
+		if _, appendErr := logSink.AppendStepLogChunk(ctx, chunk); appendErr != nil {
+			t.Fatalf("append step log: %v", appendErr)
+		}
+	}
+	buildService := buildsvc.NewBuildService(buildRepo, nil, logSink)
 	reader := buildsvc.NewAuthorizedReader(buildService, authorization.NewAuthorizer(false, membershipService))
 	return authenticatedMCPFixture{
 		build:        build,

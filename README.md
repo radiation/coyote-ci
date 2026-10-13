@@ -33,7 +33,21 @@ See [backend/docs/state-machine.md](backend/docs/state-machine.md) for the full 
 
 The read-only MCP server is packaged separately from the REST server and is
 disabled by default in both Compose configurations. It accepts Coyote API
-tokens and exposes only the currently registered read-only tools.
+tokens and exposes only the currently registered read-only tools:
+
+- `coyote_get_build` requires `build:read`.
+- `coyote_get_build_failures` requires `build:read` and returns failed-step
+  metadata without raw logs.
+- `coyote_get_step_logs` requires both `build:read` and `build:logs`; it uses
+  a sequence cursor and server-enforced entry and byte limits. Its `max_bytes`
+  input is the maximum combined UTF-8 byte length of returned raw chunk text;
+  it does not cap the total serialized MCP response size. A chunk that cannot
+  fit the requested budget returns `chunk_exceeds_limit` rather than advancing
+  the cursor past unseen output.
+
+Step logs are persisted execution output. Redaction is best-effort only, so
+grant `build:logs` only to principals permitted to read the underlying build
+output.
 
 ### Manual local smoke test
 
@@ -52,12 +66,14 @@ AUTH_MODE=header MCP_AUTH_MODE=header \
 
 2. Sign in or otherwise provision an authenticated Coyote user through the
    configured server auth flow.
-3. Create or supply a PAT for that user with `build:read`.
+3. Create or supply a PAT for that user with `build:read`. Add `build:logs`
+   when testing bounded raw step-log retrieval.
 4. Create or identify a build in a project the PAT owner can view.
 5. Verify readiness at `http://127.0.0.1:8081/readyz`, then connect an MCP
    client to `http://127.0.0.1:8081/mcp` with the PAT as its bearer token.
 6. List tools and confirm `coyote_get_build`, then call it with the accessible
-   build ID.
+   build ID. For a failed build, also call `coyote_get_build_failures`; a PAT
+   with `build:logs` can call `coyote_get_step_logs` with a valid step index.
 7. Repeat with a PAT lacking either project membership or `build:read` and
    confirm it fails without returning build metadata.
 
