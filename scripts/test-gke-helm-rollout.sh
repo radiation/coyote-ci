@@ -20,8 +20,14 @@ EOF
 cat >"$temp_dir/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 printf 'kubectl %s\n' "$*" >>"$COMMAND_LOG"
-if [[ "$*" == *"get deployment/coyote-mcp"* && "${KUBECTL_MCP_DEPLOYMENT_EXISTS:-false}" != "true" ]]; then
-  exit 1
+if [[ "$*" == *"get deployment/coyote-mcp"* ]]; then
+  if [[ "${KUBECTL_MCP_LOOKUP_ERROR:-false}" == "true" ]]; then
+    exit 2
+  fi
+  if [[ "${KUBECTL_MCP_DEPLOYMENT_EXISTS:-false}" == "true" ]]; then
+    printf '%s\n' 'deployment.apps/coyote-mcp'
+  fi
+  exit 0
 fi
 if [[ "${KUBECTL_FAIL_WAIT:-false}" == "true" && "$*" == *"wait --for=condition=complete"* ]]; then
   exit 1
@@ -126,6 +132,34 @@ GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-value
 grep -q 'patch deployment/coyote-mcp .*replicas.:2' "$first_enable_log" || {
   echo "first-time MCP enablement did not restore the desired replica count" >&2
   cat "$first_enable_log" >&2
+  exit 1
+}
+
+lookup_error_log="$temp_dir/mcp-lookup-error-commands.log"
+if lookup_error_output="$(PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$lookup_error_log" \
+  KUBECTL_MCP_LOOKUP_ERROR=true \
+  HELM_ROLLOUT_ID=test-mcp-lookup-error \
+  GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$mcp_values" \
+  GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+  "$repo_root/scripts/gke-helm-rollout.sh" 2>&1)"; then
+  echo "MCP deployment lookup error must stop the rollout" >&2
+  exit 1
+fi
+[[ "$lookup_error_output" == *"failed to determine whether MCP deployment exists"* ]] || {
+  echo "MCP deployment lookup error did not report a safe diagnostic" >&2
+  printf '%s\n' "$lookup_error_output" >&2
+  exit 1
+}
+! grep -q ' patch deployment/' "$lookup_error_log" || {
+  echo "MCP deployment lookup error started scaling workloads" >&2
+  cat "$lookup_error_log" >&2
+  exit 1
+}
+! grep -q ' apply -f -' "$lookup_error_log" || {
+  echo "MCP deployment lookup error started the migration" >&2
+  cat "$lookup_error_log" >&2
   exit 1
 }
 

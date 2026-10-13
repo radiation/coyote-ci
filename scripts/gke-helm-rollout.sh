@@ -63,7 +63,12 @@ mcp_enabled() {
 }
 
 mcp_deployment_exists() {
-  kubectl -n "$control_namespace" get deployment/coyote-mcp >/dev/null 2>&1
+  local deployment
+  if ! deployment="$(kubectl -n "$control_namespace" get deployment/coyote-mcp --ignore-not-found -o name)"; then
+    echo "failed to determine whether MCP deployment exists" >&2
+    return 2
+  fi
+  [[ -n "$deployment" ]]
 }
 
 scale_deployment() {
@@ -102,6 +107,11 @@ helm status "$worker_release" --namespace "$worker_namespace" >/dev/null || {
 mcp_exists=false
 if mcp_deployment_exists; then
   mcp_exists=true
+else
+  mcp_lookup_status=$?
+  if [[ "$mcp_lookup_status" -ne 1 ]]; then
+    exit "$mcp_lookup_status"
+  fi
 fi
 
 echo "Phase A: scale all Helm-managed database consumers to zero before migration"

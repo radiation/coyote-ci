@@ -140,7 +140,7 @@ func (t buildTools) getBuildFailures(ctx context.Context, _ *sdkmcp.CallToolRequ
 	if err != nil {
 		return mapBuildToolError(err), GetBuildFailuresOutput{}, nil
 	}
-	return nil, toGetBuildFailuresOutput(failures), nil
+	return nil, toGetBuildFailuresOutput(failures, principal), nil
 }
 
 func (t buildTools) getStepLogs(ctx context.Context, _ *sdkmcp.CallToolRequest, input GetStepLogsInput) (*sdkmcp.CallToolResult, GetStepLogsOutput, error) {
@@ -212,7 +212,7 @@ func toGetBuildOutput(build domain.Build) GetBuildOutput {
 	}
 }
 
-func toGetBuildFailuresOutput(failures buildsvc.BuildFailures) GetBuildFailuresOutput {
+func toGetBuildFailuresOutput(failures buildsvc.BuildFailures, principal authorization.Principal) GetBuildFailuresOutput {
 	output := GetBuildFailuresOutput{
 		BuildID:     failures.Build.ID,
 		Status:      failures.Build.Status,
@@ -229,10 +229,14 @@ func toGetBuildFailuresOutput(failures buildsvc.BuildFailures) GetBuildFailuresO
 			ExitCode:   cloneInt(step.ExitCode),
 			StartedAt:  cloneTime(step.StartedAt),
 			FinishedAt: cloneTime(step.FinishedAt),
-			LogsTool:   true,
+			LogsTool:   canUseLogsTool(principal),
 		})
 	}
 	return output
+}
+
+func canUseLogsTool(principal authorization.Principal) bool {
+	return principal.APIToken == nil || domain.HasAPITokenScope(principal.APIToken.Scopes, domain.APITokenScopeBuildLogs)
 }
 
 func toGetStepLogsOutput(result buildsvc.StepLogs, stepIndex int) GetStepLogsOutput {

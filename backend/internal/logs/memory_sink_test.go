@@ -116,6 +116,44 @@ func TestMemorySink_ListStepLogChunks_LimitIsCapped(t *testing.T) {
 	}
 }
 
+func TestMemorySink_ListStepLogChunks_OrdersBeforeLimiting(t *testing.T) {
+	sink := NewMemorySink()
+	now := time.Now().UTC()
+	for _, chunk := range []StepLogChunk{
+		{SequenceNo: 3, BuildID: "build-1", StepID: "step-1", StepIndex: 0, StepName: "setup", Stream: StepLogStreamStdout, ChunkText: "third", CreatedAt: now.Add(-time.Second)},
+		{SequenceNo: 1, BuildID: "build-1", StepID: "step-1", StepIndex: 0, StepName: "setup", Stream: StepLogStreamStderr, ChunkText: "first", CreatedAt: now},
+		{SequenceNo: 2, BuildID: "build-1", StepID: "step-1", StepIndex: 0, StepName: "setup", Stream: StepLogStreamStdout, ChunkText: "second", CreatedAt: now.Add(time.Second)},
+	} {
+		if _, err := sink.AppendStepLogChunk(context.Background(), chunk); err != nil {
+			t.Fatalf("append chunk %d: %v", chunk.SequenceNo, err)
+		}
+	}
+
+	first, err := sink.ListStepLogChunks(context.Background(), "build-1", 0, 0, 1)
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first) != 1 || first[0].SequenceNo != 1 {
+		t.Fatalf("expected sequence 1 first, got %+v", first)
+	}
+
+	second, err := sink.ListStepLogChunks(context.Background(), "build-1", 0, first[0].SequenceNo, 1)
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second) != 1 || second[0].SequenceNo != 2 {
+		t.Fatalf("expected sequence 2 second, got %+v", second)
+	}
+
+	third, err := sink.ListStepLogChunks(context.Background(), "build-1", 0, second[0].SequenceNo, 1)
+	if err != nil {
+		t.Fatalf("list third page: %v", err)
+	}
+	if len(third) != 1 || third[0].SequenceNo != 3 {
+		t.Fatalf("expected sequence 3 third, got %+v", third)
+	}
+}
+
 func TestMemorySink_ListStepLogChunksTail(t *testing.T) {
 	sink := NewMemorySink()
 	for idx := 0; idx < 4; idx++ {

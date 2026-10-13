@@ -56,11 +56,11 @@ func TestPostgresSink_ListStepLogChunks(t *testing.T) {
 	sink := NewPostgresSink(db)
 	now := time.Now().UTC()
 
-	mock.ExpectQuery("SELECT sequence_no, build_id, step_id, step_index, step_name, stream, chunk_text, created_at").
+	mock.ExpectQuery("(?s)SELECT sequence_no, build_id, step_id, step_index, step_name, stream, chunk_text, created_at.*ORDER BY sequence_no ASC.*LIMIT \\$4").
 		WithArgs("build-1", 0, int64(0), 10).
 		WillReturnRows(sqlmock.NewRows([]string{"sequence_no", "build_id", "step_id", "step_index", "step_name", "stream", "chunk_text", "created_at"}).
-			AddRow(1, "build-1", "step-1", 0, "setup", "stdout", "line-1", now).
-			AddRow(2, "build-1", "step-1", 0, "setup", "stderr", "line-2", now.Add(time.Second)))
+			AddRow(1, "build-1", "step-1", 0, "setup", "stdout", "line-1", now.Add(time.Second)).
+			AddRow(2, "build-1", "step-1", 0, "setup", "stderr", "line-2", now))
 	mock.ExpectClose()
 
 	chunks, err := sink.ListStepLogChunks(context.Background(), "build-1", 0, 0, 10)
@@ -77,6 +77,36 @@ func TestPostgresSink_ListStepLogChunks(t *testing.T) {
 		t.Fatalf("failed to close db: %v", closeErr)
 	}
 
+	if expectErr := mock.ExpectationsWereMet(); expectErr != nil {
+		t.Fatalf("unmet sql expectations: %v", expectErr)
+	}
+}
+
+func TestPostgresSink_ListStepLogChunks_ValidationAndQueryError(t *testing.T) {
+	sink := NewPostgresSink(nil)
+	if _, listErr := sink.ListStepLogChunks(context.Background(), "", 0, 0, 1); listErr == nil {
+		t.Fatal("expected missing build ID error")
+	}
+	if _, listErr := sink.ListStepLogChunks(context.Background(), "build-1", -1, 0, 1); listErr == nil {
+		t.Fatal("expected invalid step index error")
+	}
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sql mock: %v", err)
+	}
+	sink = NewPostgresSink(db)
+	mock.ExpectQuery("ORDER BY sequence_no ASC").
+		WithArgs("build-1", 0, int64(0), 200).
+		WillReturnError(errors.New("query failed"))
+	mock.ExpectClose()
+
+	if _, listErr := sink.ListStepLogChunks(context.Background(), "build-1", 0, 0, 0); listErr == nil || listErr.Error() != "query failed" {
+		t.Fatalf("expected query error, got %v", listErr)
+	}
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("failed to close db: %v", closeErr)
+	}
 	if expectErr := mock.ExpectationsWereMet(); expectErr != nil {
 		t.Fatalf("unmet sql expectations: %v", expectErr)
 	}

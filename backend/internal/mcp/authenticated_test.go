@@ -450,6 +450,9 @@ func TestAuthenticatedMCPBuildInvestigationTools(t *testing.T) {
 	if failures.Status != domain.BuildStatusFailed || len(failures.FailedSteps) != 1 || failures.FailedSteps[0].StepIndex != 0 {
 		t.Fatalf("unexpected failures output: %+v", failures)
 	}
+	if !failures.FailedSteps[0].LogsTool {
+		t.Fatalf("expected logs tool availability for log-scoped token: %+v", failures)
+	}
 	encodedFailures, encodeFailuresErr := json.Marshal(failures)
 	if encodeFailuresErr != nil {
 		t.Fatalf("marshal decoded failures: %v", encodeFailuresErr)
@@ -488,6 +491,28 @@ func TestAuthenticatedMCPBuildInvestigationTools(t *testing.T) {
 
 	viewer := connectMCPClient(t, server.URL+Path, fixture.tokens["viewer"])
 	defer func() { _ = viewer.Close() }()
+	viewerFailuresResult, viewerFailuresErr := viewer.CallTool(context.Background(), &sdkmcp.CallToolParams{
+		Name:      GetBuildFailuresToolName,
+		Arguments: map[string]any{"build_id": fixture.build.ID},
+	})
+	if viewerFailuresErr != nil {
+		t.Fatalf("call failures without log scope: %v", viewerFailuresErr)
+	}
+	if viewerFailuresResult.IsError {
+		t.Fatalf("expected failure metadata success without log scope, got %+v", viewerFailuresResult)
+	}
+	viewerFailuresJSON, marshalViewerFailuresErr := json.Marshal(viewerFailuresResult.StructuredContent)
+	if marshalViewerFailuresErr != nil {
+		t.Fatalf("marshal failures output without log scope: %v", marshalViewerFailuresErr)
+	}
+	var viewerFailures GetBuildFailuresOutput
+	if decodeViewerFailuresErr := json.Unmarshal(viewerFailuresJSON, &viewerFailures); decodeViewerFailuresErr != nil {
+		t.Fatalf("decode failures output without log scope: %v", decodeViewerFailuresErr)
+	}
+	if len(viewerFailures.FailedSteps) != 1 || viewerFailures.FailedSteps[0].LogsTool {
+		t.Fatalf("expected unavailable logs tool without log scope, got %+v", viewerFailures)
+	}
+
 	missingScopeResult, missingScopeErr := viewer.CallTool(context.Background(), &sdkmcp.CallToolParams{
 		Name:      GetStepLogsToolName,
 		Arguments: map[string]any{"build_id": fixture.build.ID, "step_index": 0},
