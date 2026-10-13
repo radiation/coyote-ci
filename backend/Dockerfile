@@ -69,12 +69,12 @@ FROM runtime-base AS source-runtime-mcp
 RUN apt-get update \
   && apt-get install -y --no-install-recommends curl \
   && rm -rf /var/lib/apt/lists/* \
-  && groupadd --system coyote \
-  && useradd --system --gid coyote --home-dir /app --shell /usr/sbin/nologin coyote
+  && groupadd --gid 10001 --system coyote \
+  && useradd --uid 10001 --gid coyote --home-dir /app --shell /usr/sbin/nologin coyote
 
 COPY --from=mcp-builder --chown=coyote:coyote /app/mcp /app/mcp
 
-USER coyote
+USER 10001:10001
 
 EXPOSE 8081
 

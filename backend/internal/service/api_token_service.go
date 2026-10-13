@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -24,6 +25,12 @@ const apiTokenLastUsedUpdateInterval = 5 * time.Minute
 var ErrAPITokenNameRequired = errors.New("api token name is required")
 var ErrAPITokenInvalid = errors.New("api token is invalid")
 var ErrAPITokenExpirationInvalid = errors.New("expires_at must be in the future")
+var ErrAPITokenInvalidFormat = errors.New("api token format is invalid")
+var ErrAPITokenNotFound = errors.New("api token was not found")
+var ErrAPITokenRevoked = errors.New("api token is revoked")
+var ErrAPITokenExpired = errors.New("api token is expired")
+var ErrAPITokenRepositoryFailure = errors.New("api token repository failure")
+var ErrAPITokenOwnerResolutionFailure = errors.New("api token owner resolution failure")
 
 type APITokenService struct {
 	tokens repository.APITokenRepository
@@ -121,30 +128,34 @@ func (s *APITokenService) RevokeAPIToken(ctx context.Context, userID string, tok
 func (s *APITokenService) AuthenticateAPIToken(ctx context.Context, plaintext string) (AuthenticatedAPIToken, error) {
 	trimmed := strings.TrimSpace(plaintext)
 	if !strings.HasPrefix(trimmed, APITokenPrefix) {
-		return AuthenticatedAPIToken{}, ErrAPITokenInvalid
+		return AuthenticatedAPIToken{}, invalidAPITokenError(ErrAPITokenInvalidFormat)
 	}
 	token, err := s.tokens.GetByHash(ctx, HashAPIToken(trimmed))
 	if err != nil {
 		if errors.Is(err, repository.ErrAPITokenNotFound) {
-			return AuthenticatedAPIToken{}, ErrAPITokenInvalid
+			return AuthenticatedAPIToken{}, invalidAPITokenError(ErrAPITokenNotFound)
 		}
-		return AuthenticatedAPIToken{}, err
+		return AuthenticatedAPIToken{}, fmt.Errorf("%w: %w", ErrAPITokenRepositoryFailure, err)
 	}
 	now := s.now().UTC()
 	if token.RevokedAt != nil {
-		return AuthenticatedAPIToken{}, ErrAPITokenInvalid
+		return AuthenticatedAPIToken{}, invalidAPITokenError(ErrAPITokenRevoked)
 	}
 	if token.ExpiresAt != nil && !token.ExpiresAt.After(now) {
-		return AuthenticatedAPIToken{}, ErrAPITokenInvalid
+		return AuthenticatedAPIToken{}, invalidAPITokenError(ErrAPITokenExpired)
 	}
 	user, err := s.users.GetByID(ctx, token.UserID)
 	if err != nil {
-		return AuthenticatedAPIToken{}, err
+		return AuthenticatedAPIToken{}, fmt.Errorf("%w: %w", ErrAPITokenOwnerResolutionFailure, err)
 	}
 	if shouldTouchAPITokenLastUsed(token, now) {
 		_ = s.tokens.TouchLastUsed(ctx, token.ID, now)
 	}
 	return AuthenticatedAPIToken{User: user, Token: token}, nil
+}
+
+func invalidAPITokenError(reason error) error {
+	return fmt.Errorf("%w: %w", ErrAPITokenInvalid, reason)
 }
 
 func shouldTouchAPITokenLastUsed(token domain.APIToken, now time.Time) bool {

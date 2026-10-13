@@ -42,7 +42,7 @@ func TestDockerfileMCPRuntimeTarget(t *testing.T) {
 		"-o mcp ./cmd/mcp",
 		"FROM runtime-base AS source-runtime-mcp",
 		"COPY --from=mcp-builder --chown=coyote:coyote /app/mcp /app/mcp",
-		"USER coyote",
+		"USER 10001:10001",
 		"ENTRYPOINT [\"/app/mcp\"]",
 		"http://127.0.0.1:8081/readyz",
 	} {

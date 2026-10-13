@@ -1,8 +1,11 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -120,6 +123,228 @@ func TestAuthenticatedMCPRejectsInvalidCredentials(t *testing.T) {
 			}
 			if strings.Contains(response.Body.String(), fixture.revokedToken) || strings.Contains(response.Body.String(), fixture.expiredToken) {
 				t.Fatalf("authentication response leaked token material: %q", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuthenticatedMCPHandlerAuthenticationFailureDiagnostics(t *testing.T) {
+	fixture := newAuthenticatedMCPFixture(t)
+	const sensitiveToken = "coyote_pat_do_not_log_this_value"
+
+	repositoryFailure := errors.New("database query failed for coyote_pat_do_not_log_this_value")
+	repositoryFailureService := service.NewAPITokenService(failingGetByHashAPITokenRepository{
+		APITokenRepository: repositorymemory.NewAPITokenRepository(),
+		err:                repositoryFailure,
+	}, repositorymemory.NewUserRepository())
+
+	ownerTokenRepo := repositorymemory.NewAPITokenRepository()
+	now := time.Now().UTC()
+	_, createErr := ownerTokenRepo.Create(context.Background(), domain.APIToken{
+		ID:        "token-owner-missing",
+		UserID:    "owner-missing",
+		Name:      "owner-missing",
+		TokenHash: service.HashAPIToken(sensitiveToken),
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if createErr != nil {
+		t.Fatalf("create owner lookup token fixture: %v", createErr)
+	}
+	ownerFailureService := service.NewAPITokenService(ownerTokenRepo, repositorymemory.NewUserRepository())
+
+	tests := []struct {
+		name       string
+		tokens     *service.APITokenService
+		token      string
+		wantStatus int
+		wantBody   string
+		wantReason string
+	}{
+		{
+			name:       "valid token",
+			tokens:     fixture.apiTokens,
+			token:      fixture.tokens["viewer"],
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "invalid token",
+			tokens:     fixture.apiTokens,
+			token:      sensitiveToken,
+			wantStatus: http.StatusUnauthorized,
+			wantBody:   "invalid api token\n",
+			wantReason: string(apiTokenAuthenticationFailureTokenNotFound),
+		},
+		{
+			name:       "expired token",
+			tokens:     fixture.apiTokens,
+			token:      fixture.expiredToken,
+			wantStatus: http.StatusUnauthorized,
+			wantBody:   "invalid api token\n",
+			wantReason: string(apiTokenAuthenticationFailureTokenExpired),
+		},
+		{
+			name:       "revoked token",
+			tokens:     fixture.apiTokens,
+			token:      fixture.revokedToken,
+			wantStatus: http.StatusUnauthorized,
+			wantBody:   "invalid api token\n",
+			wantReason: string(apiTokenAuthenticationFailureTokenRevoked),
+		},
+		{
+			name:       "repository failure",
+			tokens:     repositoryFailureService,
+			token:      sensitiveToken,
+			wantStatus: http.StatusServiceUnavailable,
+			wantBody:   "authentication service unavailable\n",
+			wantReason: string(apiTokenAuthenticationFailureRepository),
+		},
+		{
+			name:       "owner resolution failure",
+			tokens:     ownerFailureService,
+			token:      sensitiveToken,
+			wantStatus: http.StatusServiceUnavailable,
+			wantBody:   "authentication service unavailable\n",
+			wantReason: string(apiTokenAuthenticationFailureOwner),
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			previousOutput := log.Writer()
+			log.SetOutput(&output)
+			defer log.SetOutput(previousOutput)
+
+			handler := fixture.handlerWithTokens(t, tc.tokens, false)
+			request := httptest.NewRequest(http.MethodPost, Path, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"test"}}}`))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Accept", "application/json, text/event-stream")
+			request.Header.Set("Authorization", "Bearer "+tc.token)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+
+			if response.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tc.wantStatus, response.Code, response.Body.String())
+			}
+			if tc.wantBody != "" && response.Body.String() != tc.wantBody {
+				t.Fatalf("expected body %q, got %q", tc.wantBody, response.Body.String())
+			}
+			logged := output.String()
+			if tc.wantReason == "" {
+				if logged != "" {
+					t.Fatalf("expected no success diagnostic, got %q", logged)
+				}
+			} else if !strings.Contains(logged, "MCP API token authentication failed: reason="+tc.wantReason) {
+				t.Fatalf("expected failure classification %q in logs, got %q", tc.wantReason, logged)
+			}
+			if strings.Contains(logged, tc.token) || strings.Contains(logged, sensitiveToken) || strings.Contains(logged, repositoryFailure.Error()) {
+				t.Fatalf("authentication diagnostics leaked sensitive material: %q", logged)
+			}
+		})
+	}
+}
+
+func TestPATAuthenticationMapsAuthenticationFailuresSafely(t *testing.T) {
+	const sensitiveToken = "coyote_pat_do_not_log_this_value"
+	repositoryFailure := errors.New("database query failed for coyote_pat_do_not_log_this_value")
+	tokenRepo := failingGetByHashAPITokenRepository{
+		APITokenRepository: repositorymemory.NewAPITokenRepository(),
+		err:                repositoryFailure,
+	}
+	repositoryFailureService := service.NewAPITokenService(tokenRepo, repositorymemory.NewUserRepository())
+
+	ownerTokenRepo := repositorymemory.NewAPITokenRepository()
+	now := time.Now().UTC()
+	_, createErr := ownerTokenRepo.Create(context.Background(), domain.APIToken{
+		ID:        "token-owner-missing",
+		UserID:    "owner-missing",
+		Name:      "owner-missing",
+		TokenHash: service.HashAPIToken(sensitiveToken),
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if createErr != nil {
+		t.Fatalf("create owner lookup token fixture: %v", createErr)
+	}
+	ownerFailureService := service.NewAPITokenService(ownerTokenRepo, repositorymemory.NewUserRepository())
+
+	tests := []struct {
+		name       string
+		tokens     *service.APITokenService
+		wantStatus int
+		wantBody   string
+		wantLog    apiTokenAuthenticationFailure
+	}{
+		{
+			name:       "repository failure",
+			tokens:     repositoryFailureService,
+			wantStatus: http.StatusServiceUnavailable,
+			wantBody:   "authentication service unavailable\n",
+			wantLog:    apiTokenAuthenticationFailureRepository,
+		},
+		{
+			name:       "owner resolution failure",
+			tokens:     ownerFailureService,
+			wantStatus: http.StatusServiceUnavailable,
+			wantBody:   "authentication service unavailable\n",
+			wantLog:    apiTokenAuthenticationFailureOwner,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			previousOutput := log.Writer()
+			log.SetOutput(&logs)
+			defer log.SetOutput(previousOutput)
+
+			handler := withPATAuthentication(tc.tokens)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Fatal("expected authentication to stop the request")
+			}))
+			request := httptest.NewRequest(http.MethodPost, Path, nil)
+			request.Header.Set("Authorization", "Bearer "+sensitiveToken)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+
+			if response.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d", tc.wantStatus, response.Code)
+			}
+			if response.Body.String() != tc.wantBody {
+				t.Fatalf("expected safe response %q, got %q", tc.wantBody, response.Body.String())
+			}
+			if !strings.Contains(logs.String(), "reason="+string(tc.wantLog)) {
+				t.Fatalf("expected classification %q in logs, got %q", tc.wantLog, logs.String())
+			}
+			if strings.Contains(response.Body.String(), sensitiveToken) || strings.Contains(logs.String(), sensitiveToken) {
+				t.Fatal("authentication failure leaked token material")
+			}
+		})
+	}
+}
+
+func TestClassifyAPITokenAuthenticationFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want apiTokenAuthenticationFailure
+	}{
+		{name: "invalid format", err: service.ErrAPITokenInvalidFormat, want: apiTokenAuthenticationFailureInvalidFormat},
+		{name: "not found", err: service.ErrAPITokenNotFound, want: apiTokenAuthenticationFailureTokenNotFound},
+		{name: "revoked", err: service.ErrAPITokenRevoked, want: apiTokenAuthenticationFailureTokenRevoked},
+		{name: "expired", err: service.ErrAPITokenExpired, want: apiTokenAuthenticationFailureTokenExpired},
+		{name: "repository", err: service.ErrAPITokenRepositoryFailure, want: apiTokenAuthenticationFailureRepository},
+		{name: "owner", err: service.ErrAPITokenOwnerResolutionFailure, want: apiTokenAuthenticationFailureOwner},
+		{name: "unexpected", err: errors.New("unexpected"), want: apiTokenAuthenticationFailureUnexpected},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyAPITokenAuthenticationFailure(tc.err); got != tc.want {
+				t.Fatalf("expected classification %q, got %q", tc.want, got)
 			}
 		})
 	}
@@ -498,6 +723,10 @@ func newAuthenticatedMCPFixture(t *testing.T) authenticatedMCPFixture {
 }
 
 func (f authenticatedMCPFixture) handler(t *testing.T, disabled bool) http.Handler {
+	return f.handlerWithTokens(t, f.apiTokens, disabled)
+}
+
+func (f authenticatedMCPFixture) handlerWithTokens(t *testing.T, tokens *service.APITokenService, disabled bool) http.Handler {
 	t.Helper()
 	reader := f.reader
 	if disabled {
@@ -507,7 +736,7 @@ func (f authenticatedMCPFixture) handler(t *testing.T, disabled bool) http.Handl
 		)
 	}
 	handler, err := NewAuthenticatedHandler(testConfig(), nil, testImplementation(), Dependencies{
-		APITokens:    f.apiTokens,
+		APITokens:    tokens,
 		BuildReader:  reader,
 		AuthDisabled: disabled,
 	})
@@ -538,6 +767,15 @@ func connectMCPClient(t *testing.T, endpoint string, token string) *sdkmcp.Clien
 type authorizationRoundTripper struct {
 	token string
 	base  http.RoundTripper
+}
+
+type failingGetByHashAPITokenRepository struct {
+	repository.APITokenRepository
+	err error
+}
+
+func (r failingGetByHashAPITokenRepository) GetByHash(context.Context, string) (domain.APIToken, error) {
+	return domain.APIToken{}, r.err
 }
 
 func (t authorizationRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {

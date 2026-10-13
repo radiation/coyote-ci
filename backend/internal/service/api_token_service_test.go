@@ -121,8 +121,14 @@ func TestAPITokenService_AuthenticateAndRejectInvalidStates(t *testing.T) {
 	if _, err := tokenService.AuthenticateAPIToken(ctx, APITokenPrefix+"missing"); !errors.Is(err, ErrAPITokenInvalid) {
 		t.Fatalf("expected invalid token error, got %v", err)
 	}
+	if _, err := tokenService.AuthenticateAPIToken(ctx, APITokenPrefix+"missing"); !errors.Is(err, ErrAPITokenNotFound) {
+		t.Fatalf("expected missing token classification, got %v", err)
+	}
 	if _, err := tokenService.AuthenticateAPIToken(ctx, "not-a-coyote-token"); !errors.Is(err, ErrAPITokenInvalid) {
 		t.Fatalf("expected invalid prefix error, got %v", err)
+	}
+	if _, err := tokenService.AuthenticateAPIToken(ctx, "not-a-coyote-token"); !errors.Is(err, ErrAPITokenInvalidFormat) {
+		t.Fatalf("expected invalid format classification, got %v", err)
 	}
 }
 
@@ -149,6 +155,9 @@ func TestAPITokenService_RevokedAndExpiredTokensAreRejected(t *testing.T) {
 	if _, authErr := tokenService.AuthenticateAPIToken(ctx, created.PlaintextToken); !errors.Is(authErr, ErrAPITokenInvalid) {
 		t.Fatalf("expected revoked token to be invalid, got %v", authErr)
 	}
+	if _, authErr := tokenService.AuthenticateAPIToken(ctx, created.PlaintextToken); !errors.Is(authErr, ErrAPITokenRevoked) {
+		t.Fatalf("expected revoked token classification, got %v", authErr)
+	}
 
 	expiresAt := now.Add(time.Hour)
 	expiring, err := tokenService.CreateAPIToken(ctx, CreateAPITokenInput{UserID: user.ID, Name: "short-lived", ExpiresAt: &expiresAt})
@@ -158,6 +167,9 @@ func TestAPITokenService_RevokedAndExpiredTokensAreRejected(t *testing.T) {
 	tokenService.now = func() time.Time { return now.Add(2 * time.Hour) }
 	if _, authErr := tokenService.AuthenticateAPIToken(ctx, expiring.PlaintextToken); !errors.Is(authErr, ErrAPITokenInvalid) {
 		t.Fatalf("expected expired token to be invalid, got %v", authErr)
+	}
+	if _, authErr := tokenService.AuthenticateAPIToken(ctx, expiring.PlaintextToken); !errors.Is(authErr, ErrAPITokenExpired) {
+		t.Fatalf("expected expired token classification, got %v", authErr)
 	}
 
 	past := now.Add(-time.Minute)
@@ -243,7 +255,7 @@ func TestAPITokenService_AuthenticateDependencyErrors(t *testing.T) {
 		t.Fatalf("create token fixture failed: %v", err)
 	}
 	missingUserService := NewAPITokenService(missingUserTokenRepo, memory.NewUserRepository())
-	if _, authErr := missingUserService.AuthenticateAPIToken(ctx, plaintext); !errors.Is(authErr, repository.ErrUserNotFound) {
+	if _, authErr := missingUserService.AuthenticateAPIToken(ctx, plaintext); !errors.Is(authErr, repository.ErrUserNotFound) || !errors.Is(authErr, ErrAPITokenOwnerResolutionFailure) {
 		t.Fatalf("expected missing owner error, got %v", authErr)
 	}
 
@@ -261,6 +273,24 @@ func TestAPITokenService_AuthenticateDependencyErrors(t *testing.T) {
 	if authenticated.User.ID != user.ID {
 		t.Fatalf("expected authenticated user %q, got %q", user.ID, authenticated.User.ID)
 	}
+
+	repositoryFailure := errors.New("repository unavailable")
+	failingRepositoryService := NewAPITokenService(getByHashErrorAPITokenRepository{
+		APITokenRepository: memory.NewAPITokenRepository(),
+		err:                repositoryFailure,
+	}, userRepo)
+	if _, authErr := failingRepositoryService.AuthenticateAPIToken(ctx, plaintext); !errors.Is(authErr, ErrAPITokenRepositoryFailure) || !errors.Is(authErr, repositoryFailure) {
+		t.Fatalf("expected token repository failure, got %v", authErr)
+	}
+}
+
+type getByHashErrorAPITokenRepository struct {
+	repository.APITokenRepository
+	err error
+}
+
+func (r getByHashErrorAPITokenRepository) GetByHash(context.Context, string) (domain.APIToken, error) {
+	return domain.APIToken{}, r.err
 }
 
 type touchErrorAPITokenRepository struct {

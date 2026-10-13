@@ -94,6 +94,23 @@ network; the host port remains loopback-only. Do not set
 auth-disabled operation on a non-loopback listener, and
 `MCP_ALLOW_DISABLED_AUTH` remains false in both Compose files.
 
+### Private Kubernetes port-forward testing
+
+Before testing a private MCP Service, check that the selected local port is
+not already in use. An existing listener can make an MCP client reach the
+wrong local service even when `kubectl port-forward` is running. Verify the
+exact address and port printed by `kubectl`, or use a dedicated IPv4 loopback
+port:
+
+```bash
+lsof -nP -iTCP:18081 -sTCP:LISTEN
+kubectl -n coyote-ci port-forward --address 127.0.0.1 svc/coyote-mcp 18081:8081
+```
+
+Connect MCP Inspector to `http://127.0.0.1:18081/mcp`. Supply credentials
+through the client or a credential store; do not include tokens in shell
+commands, saved configuration, or logs.
+
 ## Persistence model
 
 - PostgreSQL is the supported durable production database.
