@@ -16,8 +16,8 @@ require (
 	github.com/swaggo/swag v1.16.6
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/oauth2 v0.37.0
-	golang.org/x/sys v0.48.0
-	golang.org/x/term v0.46.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/term v0.47.0
 	golang.org/x/tools v0.51.0
 	google.golang.org/api v0.300.0
 	gopkg.in/yaml.v3 v3.0.1
