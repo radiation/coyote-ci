@@ -27,19 +27,21 @@ cloudSql:
 secrets: {project: "", databaseUrl: ""}
 storage:
   project: ""
-  artifacts: {bucket: "", prefix: builds}
+  artifacts: {bucket: "", prefix: builds, strict: true}
 cloudBuild:
   project: ""
   location: ""
   runtimeServiceAccount: ""
   artifactRegistryRepository: ""
-  source: {bucket: "", prefix: coyote-sources}
+  source: {bucket: "", prefix: coyote-sources, includePrefix: true}
 worker:
   name: coyote-kubernetes-worker-staging
   configMapName: coyote-gke-staging-worker
   databaseSecretProviderClass: coyote-staging-worker-database-secrets
   internalAPIURL: ""
   helperImage: ""
+  legacyEnvironmentLayout: false
+  legacyCloudSqlProxyResources: {}
   replicas: 1
   replicasManagedExternally: false
   maxInFlightJobs: 1

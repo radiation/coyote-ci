@@ -347,6 +347,7 @@ replicas_managed_externally() {
   case "$release/$name" in
     "$control_release/coyote-server") values="$control_values"; section="server" ;;
     "$control_release/coyote-frontend") values="$control_values"; section="frontend" ;;
+    "$control_release/coyote-mcp") values="$control_values"; section="mcp" ;;
     "$worker_release/$worker_deployment") values="$worker_values"; section="worker" ;;
     *) printf 'false\n'; return ;;
   esac

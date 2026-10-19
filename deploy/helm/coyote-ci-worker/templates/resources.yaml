@@ -104,8 +104,19 @@ spec:
             - {name: CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT, value: {{ .Values.cloudBuild.runtimeServiceAccount | quote }}}
             - {name: CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY, value: {{ .Values.cloudBuild.artifactRegistryRepository | quote }}}
             - {name: CLOUD_BUILD_SOURCE_BUCKET, value: {{ .Values.cloudBuild.source.bucket | quote }}}
-            - {name: CLOUD_BUILD_SOURCE_PREFIX, value: {{ .Values.cloudBuild.source.prefix | quote }}}
+            {{- if .Values.worker.legacyEnvironmentLayout }}
             - {name: WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS, value: {{ .Values.worker.maxInFlightJobs | quote }}}
+            - {name: ARTIFACT_STORAGE_PROVIDER, value: gcs}
+            - {name: ARTIFACT_GCS_BUCKET, value: {{ .Values.storage.artifacts.bucket | quote }}}
+            - {name: ARTIFACT_GCS_PREFIX, value: {{ .Values.storage.artifacts.prefix | quote }}}
+            - {name: ARTIFACT_GCS_PROJECT, value: {{ .Values.storage.project | quote }}}
+            - {name: ARTIFACT_STORAGE_STRICT, value: {{ .Values.storage.artifacts.strict | quote }}}
+            {{- else }}
+            {{- if .Values.cloudBuild.source.includePrefix }}
+            - {name: CLOUD_BUILD_SOURCE_PREFIX, value: {{ .Values.cloudBuild.source.prefix | quote }}}
+            {{- end }}
+            - {name: WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS, value: {{ .Values.worker.maxInFlightJobs | quote }}}
+            {{- end }}
             - {name: WORKER_KUBERNETES_HELPER_IMAGE, value: {{ default .Values.images.worker .Values.worker.helperImage | quote }}}
             - name: WORKER_KUBERNETES_INTERNAL_API_URL
               valueFrom: {configMapKeyRef: {name: {{ .Values.worker.configMapName }}, key: WORKER_KUBERNETES_INTERNAL_API_URL}}
@@ -113,11 +124,13 @@ spec:
             - {name: COYOTE_KUBERNETES_CACHE_HELPER_ENABLED, value: "true"}
             - {name: COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED, value: "true"}
             - {name: WORKER_STEP_LEASE_SECONDS, value: "45"}
+            {{- if not .Values.worker.legacyEnvironmentLayout }}
             - {name: ARTIFACT_STORAGE_PROVIDER, value: gcs}
-            - {name: ARTIFACT_STORAGE_STRICT, value: "true"}
+            - {name: ARTIFACT_STORAGE_STRICT, value: {{ .Values.storage.artifacts.strict | quote }}}
             - {name: ARTIFACT_GCS_BUCKET, value: {{ .Values.storage.artifacts.bucket | quote }}}
             - {name: ARTIFACT_GCS_PREFIX, value: {{ .Values.storage.artifacts.prefix | quote }}}
             - {name: ARTIFACT_GCS_PROJECT, value: {{ .Values.storage.project | quote }}}
+            {{- end }}
             - {name: EMAIL_NOTIFICATIONS_ENABLED, value: "false"}
           {{- if and .Values.gke.enabled .Values.gke.secretManagerCSI.enabled }}
           volumeMounts: [{name: database-url, mountPath: /var/run/secrets/coyote, readOnly: true}]
@@ -127,7 +140,7 @@ spec:
           args: [{{ printf "--address=%s" .Values.cloudSql.proxy.address | quote }}, {{ printf "--port=%v" .Values.cloudSql.proxy.port | quote }}, {{ .Values.cloudSql.connectionName | quote }}]
           ports: [{name: postgres, containerPort: 5432}]
           securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}, seccompProfile: {type: RuntimeDefault}}
-          resources: {{- toYaml .Values.cloudSql.proxy.resources | nindent 12 }}
+          resources: {{- toYaml (default .Values.cloudSql.proxy.resources .Values.worker.legacyCloudSqlProxyResources) | nindent 12 }}
       volumes:
         {{- if and .Values.gke.enabled .Values.gke.secretManagerCSI.enabled }}
         - name: database-url

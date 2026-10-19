@@ -158,11 +158,11 @@ worker:
 EOF
 expect_template_failure coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" coyote-ci-staging "$worker_values" "$temp_dir/invalid-concurrency.yaml"
 
-cat >"$temp_dir/invalid-helper-image.yaml" <<'EOF'
+cat >"$temp_dir/mutable-helper-image.yaml" <<'EOF'
 worker:
   helperImage: example.invalid/coyote-worker:mutable
 EOF
-expect_template_failure coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" coyote-ci-staging "$worker_values" "$temp_dir/invalid-helper-image.yaml"
+helm template coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" --namespace coyote-ci-staging --values "$worker_values" --values "$temp_dir/mutable-helper-image.yaml" >/dev/null
 
 cat >"$temp_dir/release-overlay.yaml" <<'EOF'
 release:

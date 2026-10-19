@@ -118,7 +118,11 @@ spec:
             - {name: AUTH_MODE, value: {{ .Values.auth.mode | quote }}}
             - {name: DATABASE_URL_FILE, value: /var/run/secrets/coyote/database-url}
             - {name: MCP_LISTEN_ADDR, value: "0.0.0.0:8081"}
+            {{- if and .Values.mcp.auth.omitEmptyAllowedOrigins (not .Values.mcp.auth.allowedOrigins) }}
+            - {name: MCP_ALLOWED_ORIGINS}
+            {{- else }}
             - {name: MCP_ALLOWED_ORIGINS, value: {{ join "," .Values.mcp.auth.allowedOrigins | quote }}}
+            {{- end }}
             - {name: MCP_ALLOW_DISABLED_AUTH, value: "false"}
           ports: [{name: http, containerPort: 8081}]
           startupProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5, failureThreshold: 24}

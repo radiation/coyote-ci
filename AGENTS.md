@@ -53,3 +53,15 @@ Defer unless explicitly requested:
 - DORA dashboards
 - CVE/secret scanning
 - complex enterprise RBAC
+
+## Repository code intelligence
+
+Coyote CI uses **CodeGraph** for repository code intelligence and dependency exploration.
+
+- Use CodeGraph before broad repository scans when investigating code relationships.
+- Do not invoke Graphify or initialize Graphify indexes in this repository.
+- Do not create `graphify-out/` directories or other Graphify-generated files.
+- If CodeGraph is unavailable, fall back to targeted file inspection and standard repository search tools.
+- Do not install or switch code intelligence tools without explicit approval.
+
+The separate Coyote MCP Gateway project may use different tooling. Its conventions do not apply to this repository.
