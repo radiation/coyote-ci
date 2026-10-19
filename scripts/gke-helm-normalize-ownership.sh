@@ -39,6 +39,14 @@ external_replica_value() {
   ' "$values" "$section"
 }
 
+worker_deployment_name() {
+  ruby -ryaml -e '
+    name = YAML.load_file(ARGV.fetch(0)).fetch("worker").fetch("name")
+    abort "worker.name must be a Kubernetes-safe name" unless name.match?(/\A[a-z0-9]([-a-z0-9]*[a-z0-9])?\z/)
+    puts name
+  ' "$worker_values"
+}
+
 run() {
   printf '+'
   printf ' %q' "$@"
@@ -88,11 +96,12 @@ GKE_HELM_ADOPT_VERIFY_ONLY=true \
 server_replicas="$(external_replica_value "$control_values" server)"
 frontend_replicas="$(external_replica_value "$control_values" frontend)"
 worker_replicas="$(external_replica_value "$worker_values" worker)"
+worker_deployment="$(worker_deployment_name)"
 
 echo "One-time Helm replica relinquishment normalization: replicas remain externally managed through the scale subresource."
 scale_deployment "$control_namespace" coyote-server "$server_replicas"
 scale_deployment "$control_namespace" coyote-frontend "$frontend_replicas"
-scale_deployment "$worker_namespace" coyote-kubernetes-worker-staging "$worker_replicas"
+scale_deployment "$worker_namespace" "$worker_deployment" "$worker_replicas"
 
 run helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" --wait --timeout "${timeout_seconds}s"
 run helm upgrade "$worker_release" "$worker_chart" --namespace "$worker_namespace" --values "$worker_values" --wait --timeout "${timeout_seconds}s"
@@ -100,10 +109,10 @@ run helm upgrade "$worker_release" "$worker_chart" --namespace "$worker_namespac
 if [[ "$apply" == "true" ]]; then
   helm_has_relinquished_replicas "$control_namespace" coyote-server "$server_replicas" || { echo "Helm replica relinquishment verification failed for coyote-server" >&2; exit 1; }
   helm_has_relinquished_replicas "$control_namespace" coyote-frontend "$frontend_replicas" || { echo "Helm replica relinquishment verification failed for coyote-frontend" >&2; exit 1; }
-  helm_has_relinquished_replicas "$worker_namespace" coyote-kubernetes-worker-staging "$worker_replicas" || { echo "Helm replica relinquishment verification failed for coyote-kubernetes-worker-staging" >&2; exit 1; }
+  helm_has_relinquished_replicas "$worker_namespace" "$worker_deployment" "$worker_replicas" || { echo "Helm replica relinquishment verification failed for $worker_deployment" >&2; exit 1; }
   kubectl -n "$control_namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
   kubectl -n "$control_namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
-  kubectl -n "$worker_namespace" rollout status deployment/coyote-kubernetes-worker-staging --timeout="${timeout_seconds}s"
+  kubectl -n "$worker_namespace" rollout status "deployment/$worker_deployment" --timeout="${timeout_seconds}s"
   echo "Helm replica relinquishment normalization completed."
 else
   echo "Dry run only. Set GKE_HELM_NORMALIZE_APPLY=true for the reviewed one-time normalization."

@@ -118,6 +118,8 @@ render_dir="$temp_dir/renders"
 mkdir "$render_dir"
 "$REAL_HELM" template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci --values "$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" >"$render_dir/control.yaml"
 "$REAL_HELM" template coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" --namespace coyote-ci-staging --values "$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" >"$render_dir/worker.yaml"
+"$REAL_HELM" template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci --values "$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml" >"$render_dir/production-control.yaml"
+"$REAL_HELM" template coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" --namespace coyote-ci --values "$repo_root/deploy/helm/examples/gke-production-worker-values.yaml" >"$render_dir/production-worker.yaml"
 
 run_adopter() {
   env PATH="$temp_dir/bin:$PATH" COMMAND_LOG="$log" ADOPTION_RENDERS="$render_dir/control.yaml:$render_dir/worker.yaml" \
@@ -125,6 +127,16 @@ run_adopter() {
     MOCK_HELM_STATE="$temp_dir/mock-helm-state" \
     GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
     GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" "$@"
+}
+
+run_production_adopter() {
+  env PATH="$temp_dir/bin:$PATH" COMMAND_LOG="$log" ADOPTION_RENDERS="$render_dir/production-control.yaml:$render_dir/production-worker.yaml" \
+    MOCK_STATE_DIR="$temp_dir/mock-state" \
+    MOCK_HELM_STATE="$temp_dir/mock-helm-state" \
+    GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml" \
+    GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-production-worker-values.yaml" \
+    GKE_HELM_CONTROL_PLANE_NAMESPACE=coyote-ci \
+    GKE_HELM_WORKER_NAMESPACE=coyote-ci "$@"
 }
 
 reset_mock_state() {
@@ -141,6 +153,29 @@ if grep -Eq '^kubectl .* (namespace/|job/coyote-migrate)' "$log"; then
   echo "adoption must not include Namespace or migration Job" >&2
   exit 1
 fi
+
+: >"$log"
+reset_mock_state
+run_production_adopter GKE_HELM_ADOPT_DRY_RUN=true bash "$repo_root/scripts/gke-helm-adopt.sh" >/dev/null
+verifier_reads="$(grep -c 'role/coyote-server-workspace-verifier' "$log" || true)"
+if [[ "$verifier_reads" -ne 1 ]]; then
+  echo "shared-namespace worker adoption must include verifier RBAC only once for the control plane; got $verifier_reads" >&2
+  exit 1
+fi
+for resource in \
+  deployment/coyote-kubernetes-worker \
+  serviceaccount/coyote-kubernetes-worker \
+  role/coyote-kubernetes-worker \
+  rolebinding/coyote-kubernetes-worker \
+  role/coyote-workspace-helper \
+  rolebinding/coyote-workspace-helper \
+  configmap/coyote-gke-production-worker \
+  secretproviderclass/coyote-production-worker-database-secrets; do
+  grep -q "$resource" "$log" || {
+    echo "shared-namespace worker adoption omitted $resource" >&2
+    exit 1
+  }
+done
 
 : >"$log"
 reset_mock_state

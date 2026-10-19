@@ -1,5 +1,6 @@
 namespace: ""
 executionNamespace: ""
+allowSharedExecutionNamespace: false
 
 gke:
   enabled: true

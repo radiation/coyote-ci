@@ -6,6 +6,7 @@ control_chart="$repo_root/deploy/helm/coyote-ci"
 worker_chart="$repo_root/deploy/helm/coyote-ci-worker"
 control_values="${GKE_HELM_CONTROL_PLANE_VALUES:-$repo_root/.local/helm/gke-staging-control-plane-values.yaml}"
 worker_values="${GKE_HELM_WORKER_VALUES:-$repo_root/.local/helm/gke-staging-worker-values.yaml}"
+release_values="${GKE_HELM_RELEASE_VALUES:-}"
 control_namespace="${GKE_HELM_CONTROL_PLANE_NAMESPACE:-coyote-ci}"
 worker_namespace="${GKE_HELM_WORKER_NAMESPACE:-coyote-ci-staging}"
 control_release="${GKE_HELM_CONTROL_PLANE_RELEASE:-coyote-ci}"
@@ -33,6 +34,7 @@ require_command kubectl
 require_command ruby
 [[ -f "$control_values" ]] || { echo "control-plane values file does not exist: $control_values" >&2; exit 1; }
 [[ -f "$worker_values" ]] || { echo "worker values file does not exist: $worker_values" >&2; exit 1; }
+[[ -z "$release_values" || -f "$release_values" ]] || { echo "release values file does not exist: $release_values" >&2; exit 1; }
 [[ "$control_namespace" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "invalid control-plane namespace: $control_namespace" >&2; exit 1; }
 [[ "$worker_namespace" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "invalid worker namespace: $worker_namespace" >&2; exit 1; }
 [[ "$control_release" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "invalid control-plane release: $control_release" >&2; exit 1; }
@@ -55,6 +57,15 @@ external_replica_value() {
   ' "$values" "$section"
 }
 
+worker_deployment_name() {
+  ruby -ryaml -e '
+    values = YAML.load_file(ARGV.fetch(0))
+    name = values.fetch("worker").fetch("name")
+    abort "worker.name must be a Kubernetes-safe name" unless name.match?(/\A[a-z0-9]([-a-z0-9]*[a-z0-9])?\z/)
+    puts name
+  ' "$worker_values"
+}
+
 mcp_enabled() {
   ruby -ryaml -e '
     values = YAML.load_file(ARGV.fetch(0))
@@ -62,13 +73,26 @@ mcp_enabled() {
   ' "$control_values"
 }
 
-mcp_deployment_exists() {
+mcp_deployment_state() {
   local deployment
-  if ! deployment="$(kubectl -n "$control_namespace" get deployment/coyote-mcp --ignore-not-found -o name)"; then
-    echo "failed to determine whether MCP deployment exists" >&2
+  if ! deployment="$(kubectl -n "$control_namespace" get deployment/coyote-mcp --ignore-not-found -o json)"; then
+    echo "failed to determine coyote-mcp ownership" >&2
     return 2
   fi
-  [[ -n "$deployment" ]]
+  if [[ -z "$deployment" ]]; then
+    printf '%s\n' absent
+    return
+  fi
+  ruby -rjson -e '
+    metadata = JSON.parse(STDIN.read).fetch("metadata", {})
+    actual = [
+      metadata.fetch("labels", {})["app.kubernetes.io/managed-by"],
+      metadata.fetch("annotations", {})["meta.helm.sh/release-name"],
+      metadata.fetch("annotations", {})["meta.helm.sh/release-namespace"]
+    ]
+    expected = ["Helm", ARGV.fetch(0), ARGV.fetch(1)]
+    puts actual == expected ? "managed" : actual.all?(&:nil?) ? "unowned" : "other"
+  ' "$control_release" "$control_namespace" <<<"$deployment"
 }
 
 scale_deployment() {
@@ -81,6 +105,13 @@ scale_deployment() {
 server_replicas="$(external_replica_value "$control_values" server)"
 frontend_replicas="$(external_replica_value "$control_values" frontend)"
 worker_replicas="$(external_replica_value "$worker_values" worker)"
+worker_deployment="$(worker_deployment_name)"
+control_values_args=(--values "$control_values")
+worker_values_args=(--values "$worker_values")
+if [[ -n "$release_values" ]]; then
+  control_values_args+=(--values "$release_values")
+  worker_values_args+=(--values "$release_values")
+fi
 mcp_replicas=""
 mcp_is_desired=false
 if [[ "$(mcp_enabled)" == "true" ]]; then
@@ -89,10 +120,10 @@ if [[ "$(mcp_enabled)" == "true" ]]; then
 fi
 
 # Rendering validates the supplied digest-pinned images and chart-required inputs before mutation.
-helm template "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" >/dev/null
-helm template "$worker_release" "$worker_chart" --namespace "$worker_namespace" --values "$worker_values" >/dev/null
-gateway_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" --show-only templates/gateway.yaml)"
-migration_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" --show-only templates/migration-job.yaml --set migration.render=true --set "migration.runID=$rollout_id")"
+helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" >/dev/null
+helm template "$worker_release" "$worker_chart" --namespace "$worker_namespace" "${worker_values_args[@]}" >/dev/null
+gateway_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" --show-only templates/gateway.yaml)"
+migration_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" --show-only templates/migration-job.yaml --set migration.render=true --set "migration.runID=$rollout_id")"
 [[ -n "$migration_manifest" ]] || { echo "migration render did not produce a Job" >&2; exit 1; }
 
 helm status "$control_release" --namespace "$control_namespace" >/dev/null || {
@@ -104,29 +135,34 @@ helm status "$worker_release" --namespace "$worker_namespace" >/dev/null || {
   exit 1
 }
 
-mcp_exists=false
-if mcp_deployment_exists; then
-  mcp_exists=true
-else
-  mcp_lookup_status=$?
-  if [[ "$mcp_lookup_status" -ne 1 ]]; then
-    exit "$mcp_lookup_status"
-  fi
-fi
+mcp_state="$(mcp_deployment_state)" || exit $?
+case "$mcp_state:$mcp_is_desired" in
+  managed:false)
+    echo "coyote-mcp is owned by Helm release $control_release but mcp.enabled is false; refusing a rollout that would delete it" >&2
+    exit 1
+    ;;
+  unowned:true|other:true)
+    echo "coyote-mcp exists but is not owned by Helm release $control_release; refusing to adopt or scale it" >&2
+    exit 1
+    ;;
+  unowned:false|other:false)
+    echo "coyote-mcp is not owned by Helm release $control_release; leaving it unchanged" >&2
+    ;;
+esac
 
 echo "Phase A: scale all Helm-managed database consumers to zero before migration"
 scale_deployment "$control_namespace" coyote-server 0
 scale_deployment "$control_namespace" coyote-frontend 0
-if [[ "$mcp_exists" == "true" ]]; then
+if [[ "$mcp_is_desired" == "true" && "$mcp_state" == "managed" ]]; then
   scale_deployment "$control_namespace" coyote-mcp 0
 fi
-scale_deployment "$worker_namespace" coyote-kubernetes-worker-staging 0
+scale_deployment "$worker_namespace" "$worker_deployment" 0
 run kubectl -n "$control_namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
 run kubectl -n "$control_namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
-if [[ "$mcp_exists" == "true" ]]; then
+if [[ "$mcp_is_desired" == "true" && "$mcp_state" == "managed" ]]; then
   run kubectl -n "$control_namespace" rollout status deployment/coyote-mcp --timeout="${timeout_seconds}s"
 fi
-run kubectl -n "$worker_namespace" rollout status deployment/coyote-kubernetes-worker-staging --timeout="${timeout_seconds}s"
+run kubectl -n "$worker_namespace" rollout status "deployment/$worker_deployment" --timeout="${timeout_seconds}s"
 
 echo "Phase B: apply and wait for migration Job $migration_job"
 if [[ "$dry_run" == "true" ]]; then
@@ -146,7 +182,7 @@ else
 fi
 
 echo "Phase C: restore the desired control-plane replicas"
-run helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" --values "$control_values" --wait --timeout "${timeout_seconds}s"
+run helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" --wait --timeout "${timeout_seconds}s"
 scale_deployment "$control_namespace" coyote-server "$server_replicas"
 scale_deployment "$control_namespace" coyote-frontend "$frontend_replicas"
 if [[ "$mcp_is_desired" == "true" ]]; then
@@ -159,9 +195,9 @@ if [[ "$mcp_is_desired" == "true" ]]; then
 fi
 
 echo "Phase D: restore the desired worker replicas"
-run helm upgrade "$worker_release" "$worker_chart" --namespace "$worker_namespace" --values "$worker_values" --wait --timeout "${timeout_seconds}s"
-scale_deployment "$worker_namespace" coyote-kubernetes-worker-staging "$worker_replicas"
-run kubectl -n "$worker_namespace" rollout status deployment/coyote-kubernetes-worker-staging --timeout="${timeout_seconds}s"
+run helm upgrade "$worker_release" "$worker_chart" --namespace "$worker_namespace" "${worker_values_args[@]}" --wait --timeout "${timeout_seconds}s"
+scale_deployment "$worker_namespace" "$worker_deployment" "$worker_replicas"
+run kubectl -n "$worker_namespace" rollout status "deployment/$worker_deployment" --timeout="${timeout_seconds}s"
 
 if [[ -n "$gateway_manifest" ]]; then
   require_command jq

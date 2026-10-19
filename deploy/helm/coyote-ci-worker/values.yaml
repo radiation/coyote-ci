@@ -1,5 +1,6 @@
 namespace: ""
 controlPlaneNamespace: ""
+allowSharedControlPlaneNamespace: false
 gke:
   enabled: true
   secretManagerCSI: {enabled: true}
@@ -34,6 +35,11 @@ cloudBuild:
   artifactRegistryRepository: ""
   source: {bucket: "", prefix: coyote-sources}
 worker:
+  name: coyote-kubernetes-worker-staging
+  configMapName: coyote-gke-staging-worker
+  databaseSecretProviderClass: coyote-staging-worker-database-secrets
+  internalAPIURL: ""
+  helperImage: ""
   replicas: 1
   replicasManagedExternally: false
   maxInFlightJobs: 1

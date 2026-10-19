@@ -1,0 +1,48 @@
+namespace: coyote-ci
+# The production worker currently executes in this namespace. This explicit
+# exception is supported only for the existing single-namespace production path.
+executionNamespace: coyote-ci
+allowSharedExecutionNamespace: true
+images:
+  server: example.invalid/coyote-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  frontend: example.invalid/coyote-frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  migrate: example.invalid/coyote-migrate@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+serviceAccounts:
+  server: {name: coyote-server, gsaEmail: coyote-ci-server@bryanchoate.iam.gserviceaccount.com}
+  migrate: {name: coyote-migrate, gsaEmail: coyote-ci-migrate@bryanchoate.iam.gserviceaccount.com}
+cloudSql: {connectionName: "bryanchoate:us-central1:bryanchoate-postgres"}
+secrets:
+  project: bryanchoate
+  databaseUrl: coyote-ci-database-url
+  workspaceHelperCapability: coyote-workspace-helper-capability-secret
+  oidcClient: coyote-ci-oidc-client-secret
+  session: coyote-ci-session-secret
+storage:
+  project: bryanchoate
+  artifacts: {bucket: example-production-artifacts, prefix: builds}
+  cache: {bucket: example-production-cache, prefix: coyote-ci/cache}
+  workspaceRevisions: {bucket: example-production-workspace-revisions, prefix: workspace-revisions}
+auth:
+  bootstrapAdminEmails: admin@example.invalid
+  oidc:
+    issuerURL: https://issuer.example.invalid
+    clientID: coyote-ci-production
+    redirectURL: https://coyote-ci.bryanchoate.com/auth/callback
+  publicURL: https://coyote-ci.bryanchoate.com
+server: {replicas: 1, replicasManagedExternally: true}
+frontend: {replicas: 1, replicasManagedExternally: true}
+# The existing coyote-mcp Deployment is intentionally not managed until its
+# live ownership and database contract are verified during cutover.
+mcp:
+  enabled: false
+  replicas: 1
+  replicasManagedExternally: true
+  service: {port: 8081}
+  terminationGracePeriodSeconds: 30
+  resources: {}
+  auth: {allowedOrigins: [], allowDisabledAuth: false}
+gateway:
+  enabled: true
+  hostname: coyote-ci.bryanchoate.com
+  addressName: coyote-ci-production-address
+  certificateMap: coyote-ci-production-map

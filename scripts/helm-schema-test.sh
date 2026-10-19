@@ -30,6 +30,30 @@ require_command helm
 
 control_values="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml"
 worker_values="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml"
+production_control_values="$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml"
+production_worker_values="$repo_root/deploy/helm/examples/gke-production-worker-values.yaml"
+
+helm template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci --values "$production_control_values" >/dev/null
+helm template coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" --namespace coyote-ci --values "$production_worker_values" >"$temp_dir/production-worker.yaml"
+ruby -ryaml - "$temp_dir/production-worker.yaml" <<'RUBY'
+documents = YAML.load_stream(File.read(ARGV.fetch(0))).compact
+names = documents.map { |document| document.dig("metadata", "name") if ["Role", "RoleBinding"].include?(document["kind"]) }.compact
+abort "shared-namespace worker must not render duplicate verifier RBAC" if names.include?("coyote-server-workspace-verifier")
+worker = documents.find { |document| document.dig("metadata", "name") == "coyote-kubernetes-worker" && document["kind"] == "Deployment" } or abort "production worker deployment is missing"
+helper_image = worker.dig("spec", "template", "spec", "containers")&.find { |container| container["name"] == "worker" }&.fetch("env")&.find { |env| env["name"] == "WORKER_KUBERNETES_HELPER_IMAGE" }&.fetch("value")
+abort "production helper image must use the worker image by default" unless helper_image == worker.dig("spec", "template", "spec", "containers")&.find { |container| container["name"] == "worker" }&.fetch("image")
+RUBY
+
+cat >"$temp_dir/shared-namespace-without-opt-in.yaml" <<'EOF'
+executionNamespace: coyote-ci
+EOF
+expect_template_failure coyote-ci "$repo_root/deploy/helm/coyote-ci" coyote-ci "$control_values" "$temp_dir/shared-namespace-without-opt-in.yaml"
+
+cat >"$temp_dir/shared-worker-namespace-without-opt-in.yaml" <<'EOF'
+namespace: coyote-ci
+controlPlaneNamespace: coyote-ci
+EOF
+expect_template_failure coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" coyote-ci "$worker_values" "$temp_dir/shared-worker-namespace-without-opt-in.yaml"
 
 cat >"$temp_dir/missing-namespace.yaml" <<'EOF'
 namespace: ""
@@ -133,6 +157,12 @@ worker:
   maxInFlightJobs: 0
 EOF
 expect_template_failure coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" coyote-ci-staging "$worker_values" "$temp_dir/invalid-concurrency.yaml"
+
+cat >"$temp_dir/invalid-helper-image.yaml" <<'EOF'
+worker:
+  helperImage: example.invalid/coyote-worker:mutable
+EOF
+expect_template_failure coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" coyote-ci-staging "$worker_values" "$temp_dir/invalid-helper-image.yaml"
 
 cat >"$temp_dir/release-overlay.yaml" <<'EOF'
 release:
