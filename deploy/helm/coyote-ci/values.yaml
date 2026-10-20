@@ -1,5 +1,6 @@
 namespace: ""
 executionNamespace: ""
+allowSharedExecutionNamespace: false
 
 gke:
   enabled: true
@@ -97,6 +98,7 @@ mcp:
     limits: {cpu: 500m, memory: 512Mi}
   auth:
     allowedOrigins: []
+    omitEmptyAllowedOrigins: false
     allowDisabledAuth: false
 
 gateway:

@@ -347,11 +347,18 @@ replicas_managed_externally() {
   case "$release/$name" in
     "$control_release/coyote-server") values="$control_values"; section="server" ;;
     "$control_release/coyote-frontend") values="$control_values"; section="frontend" ;;
-    "$worker_release/coyote-kubernetes-worker-staging") values="$worker_values"; section="worker" ;;
+    "$control_release/coyote-mcp") values="$control_values"; section="mcp" ;;
+    "$worker_release/$worker_deployment") values="$worker_values"; section="worker" ;;
     *) printf 'false\n'; return ;;
   esac
   ruby -ryaml -e 'puts YAML.load_file(ARGV.fetch(0)).fetch(ARGV.fetch(1)).fetch("replicasManagedExternally", false) == true' "$values" "$section"
 }
+
+worker_deployment="$(ruby -ryaml -e '
+  name = YAML.load_file(ARGV.fetch(0)).fetch("worker").fetch("name", "coyote-kubernetes-worker-staging")
+  abort "worker.name must be a Kubernetes-safe name" unless name.match?(/\A[a-z0-9]([-a-z0-9]*[a-z0-9])?\z/)
+  puts name
+' "$worker_values")"
 
 ownership_state() {
   ruby -ryaml -e '

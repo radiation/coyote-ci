@@ -1,0 +1,27 @@
+namespace: coyote-ci
+controlPlaneNamespace: coyote-ci
+allowSharedControlPlaneNamespace: true
+images:
+  worker: example.invalid/coyote-worker@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+serviceAccounts:
+  worker: {name: coyote-kubernetes-worker, gsaEmail: coyote-ci-worker@bryanchoate.iam.gserviceaccount.com}
+cloudSql: {connectionName: "bryanchoate:us-central1:bryanchoate-postgres"}
+secrets: {project: bryanchoate, databaseUrl: coyote-ci-database-url}
+storage:
+  project: bryanchoate
+  artifacts: {bucket: example-production-artifacts, prefix: builds}
+cloudBuild:
+  project: bryanchoate
+  location: us-central1
+  runtimeServiceAccount: coyote-cloud-build@bryanchoate.iam.gserviceaccount.com
+  artifactRegistryRepository: us-central1-docker.pkg.dev/bryanchoate/coyote-ci
+  source: {bucket: example-production-sources, prefix: coyote-sources}
+worker:
+  name: coyote-kubernetes-worker
+  configMapName: coyote-gke-production-worker
+  databaseSecretProviderClass: coyote-production-worker-database-secrets
+  internalAPIURL: http://coyote-server.coyote-ci.svc.cluster.local:8080
+  replicas: 1
+  replicasManagedExternally: true
+  maxInFlightJobs: 1
+  resources: {}
