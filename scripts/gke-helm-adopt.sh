@@ -355,7 +355,7 @@ replicas_managed_externally() {
 }
 
 worker_deployment="$(ruby -ryaml -e '
-  name = YAML.load_file(ARGV.fetch(0)).fetch("worker").fetch("name")
+  name = YAML.load_file(ARGV.fetch(0)).fetch("worker").fetch("name", "coyote-kubernetes-worker-staging")
   abort "worker.name must be a Kubernetes-safe name" unless name.match?(/\A[a-z0-9]([-a-z0-9]*[a-z0-9])?\z/)
   puts name
 ' "$worker_values")"

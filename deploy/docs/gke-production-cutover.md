@@ -39,11 +39,15 @@ plane and production worker. `allowSharedExecutionNamespace: true` and
 existing topology; staging retains its separate `coyote-ci-staging` namespace
 and default isolation.
 
-`coyote-mcp` is deliberately disabled in the production profile. The rollout
-will stop before any scale or migration operation if an unmanaged
-`coyote-mcp` Deployment exists. Determine whether it is an active Coyote CI
-component, who owns it, and its database contract before enabling it or moving
-it. Do not point it at `coyote_ci` based on this runbook alone.
+`coyote-mcp` is deliberately disabled in the copied production profile until
+its live ownership and database contract are verified. The rollout does not
+inspect an unmanaged MCP Deployment's database contract. If an unowned
+`coyote-mcp` Deployment exists, it stops before any scale or migration
+operation until an operator has independently verified that it cannot access
+the `coyote_ci` database and explicitly sets
+`GKE_HELM_UNMANAGED_MCP_DATABASE_ISOLATION_CONFIRMED=true`. A Deployment owned
+by another or partial Helm release always stops the rollout. Do not point MCP
+at `coyote_ci` based on this runbook alone.
 
 ## 1. Read-only preflight
 
@@ -124,7 +128,7 @@ Cloud SQL Auth Proxy is listening on `127.0.0.1:5432`; it must not connect to a
 different database or a public Cloud SQL endpoint:
 
 ```sh
-ENCODED_DB_PASSWORD="$(ruby -e '
+ENCODED_DB_PASSWORD="$(printf '%s' "$COYOTE_CI_DB_PASSWORD" | ruby -e '
   password = STDIN.read
   puts password.bytes.map { |byte|
     (byte >= 0x41 && byte <= 0x5a) ||
@@ -132,11 +136,15 @@ ENCODED_DB_PASSWORD="$(ruby -e '
       (byte >= 0x30 && byte <= 0x39) ||
       [0x2d, 0x2e, 0x5f, 0x7e].include?(byte) ? byte.chr : "%%%02X" % byte
   }.join
-' <<<"$COYOTE_CI_DB_PASSWORD")"
+')"
 DATABASE_URL="postgres://coyote_ci_app:${ENCODED_DB_PASSWORD}@127.0.0.1:5432/coyote_ci?sslmode=disable"
+PGPASS_PASSWORD="$(printf '%s' "$COYOTE_CI_DB_PASSWORD" | ruby -e '
+  password = STDIN.read
+  puts password.gsub(/[:\\]/) { |character| "\\#{character}" }
+')"
 PGPASS_FILE="$(mktemp)"
 chmod 600 "$PGPASS_FILE"
-printf '127.0.0.1:5432:coyote_ci:coyote_ci_app:%s\n' "$COYOTE_CI_DB_PASSWORD" >"$PGPASS_FILE"
+printf '127.0.0.1:5432:coyote_ci:coyote_ci_app:%s\n' "$PGPASS_PASSWORD" >"$PGPASS_FILE"
 PGPASSFILE="$PGPASS_FILE" psql \
   'postgres://coyote_ci_app@127.0.0.1:5432/coyote_ci?sslmode=disable' \
   -Atqc 'SELECT current_database()' | grep -Fx coyote_ci
@@ -276,10 +284,22 @@ helm template coyote-ci-worker deploy/helm/coyote-ci-worker --namespace coyote-c
   --values .local/helm/coyote-release-images.yaml >/dev/null
 ```
 
-The production profile keeps `coyote-mcp` enabled and managed by the existing
-`coyote-ci` Helm release. Preserve its separately pinned image, replicas,
-resources, ServiceAccount, and database SecretProviderClass identity; only its
-Secret Manager reference changes during the deliberate production upgrade.
+After verifying that the live `coyote-mcp` is a Coyote CI component and that
+its database transition is approved, explicitly transfer its verified
+non-secret configuration into
+`.local/helm/gke-production-control-plane-values.yaml` before running the
+commands above. The copied profile does not provide an MCP image or Google
+service-account binding and has `mcp.enabled: false`; enabling it alone is not
+valid.
+
+Set `images.mcp`, `serviceAccounts.mcp.name`, and
+`serviceAccounts.mcp.gsaEmail` to the verified live values. Set
+`mcp.enabled: true`, preserve its replicas, external-replica-management
+setting, resources, service port, termination grace period, and allowed
+origins, and retain the existing `coyote-mcp` ServiceAccount and
+SecretProviderClass identities. Use the intended production Secret Manager
+reference only after the MCP database transition is approved. Re-run the lint
+and template commands above after these settings are present.
 
 ### Adopt ownership before applying production configuration
 
@@ -305,17 +325,33 @@ GKE_HELM_WORKER_VALUES=.local/helm/gke-adoption-worker-values.yaml \
 GKE_HELM_CONTROL_PLANE_NAMESPACE=coyote-ci \
 GKE_HELM_WORKER_NAMESPACE=coyote-ci \
 GKE_HELM_ADOPT_DRY_RUN=true \
-make gke-helm-adopt
+GKE_HELM_ADOPT_APPLY=true \
+bash scripts/gke-helm-adopt.sh
 ```
 
 After an approved review of a zero-drift preflight, run the same command with
-`GKE_HELM_ADOPT_DRY_RUN=false` to adopt only Helm ownership metadata. Then
-run the normal production rollout below to apply the intentional changes. Do
-not relax the preflight comparison or use `helm uninstall`.
+only `GKE_HELM_ADOPT_DRY_RUN` changed to `false`:
+
+```sh
+GKE_HELM_CONTROL_PLANE_VALUES=.local/helm/gke-adoption-control-values.yaml \
+GKE_HELM_WORKER_VALUES=.local/helm/gke-adoption-worker-values.yaml \
+GKE_HELM_CONTROL_PLANE_NAMESPACE=coyote-ci \
+GKE_HELM_WORKER_NAMESPACE=coyote-ci \
+GKE_HELM_ADOPT_DRY_RUN=false \
+GKE_HELM_ADOPT_APPLY=true \
+bash scripts/gke-helm-adopt.sh
+```
+
+This adopts only Helm ownership metadata. Then run the normal production
+rollout below to apply the intentional changes. Do not relax the preflight
+comparison or use `helm uninstall`.
 
 After ownership adoption has completed, run the controlled rollout. It scales
-database consumers to zero, applies one uniquely named migration Job, waits
-for success, then restores the server, frontend, worker, and MCP:
+database consumers to zero, updates only the production migrator ServiceAccount
+and `coyote-migrate-secrets` SecretProviderClass, applies one uniquely named
+migration Job, waits for success, then restores the server, frontend, worker,
+and MCP. This prerequisite update ensures the Job mounts the intended
+production database reference before it starts:
 
 ```sh
 GKE_HELM_CONTROL_PLANE_VALUES=.local/helm/gke-production-control-plane-values.yaml \

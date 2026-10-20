@@ -21,6 +21,17 @@ printf 'helm %s\n' "$*" >>"$COMMAND_LOG"
 if [[ "$1" == "template" && "$*" == *"templates/gateway.yaml"* ]]; then
   exit 0
 fi
+if [[ "$1" == "template" && "$*" == *"templates/identities-rbac.yaml"* ]]; then
+  printf '%s\n' \
+    'apiVersion: v1' \
+    'kind: ServiceAccount' \
+    'metadata: {name: coyote-migrate, namespace: coyote-ci}' \
+    '---' \
+    'apiVersion: secrets-store.csi.x-k8s.io/v1' \
+    'kind: SecretProviderClass' \
+    'metadata: {name: coyote-migrate-secrets, namespace: coyote-ci}'
+  exit 0
+fi
 if [[ "$1" == "template" && "$*" == *"templates/migration-job.yaml"* ]]; then
   printf '%s\n' 'apiVersion: batch/v1' 'kind: Job' 'metadata: {name: coyote-migrate-test-run}'
 fi
@@ -57,6 +68,28 @@ GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-value
 GKE_HELM_RELEASE_VALUES="$release_values" \
 "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
 
+worker_values_without_name="$temp_dir/worker-without-name.yaml"
+ruby -ryaml -e '
+  values = YAML.load_file(ARGV.fetch(0))
+  values.fetch("worker").delete("name")
+  File.write(ARGV.fetch(1), YAML.dump(values))
+' "$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" "$worker_values_without_name"
+omitted_name_log="$temp_dir/omitted-worker-name-commands.log"
+PATH="$temp_dir/bin:$PATH" \
+COMMAND_LOG="$omitted_name_log" \
+KUBECTL_MCP_DEPLOYMENT_STATE=absent \
+HELM_ROLLOUT_ID=test-omitted-worker-name \
+GKE_HELM_DRY_RUN=false \
+GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
+GKE_HELM_WORKER_VALUES="$worker_values_without_name" \
+GKE_HELM_RELEASE_VALUES="$release_values" \
+"$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
+grep -q 'patch deployment/coyote-kubernetes-worker-staging .*replicas.:0' "$omitted_name_log" || {
+  echo "rollout did not use the Helm default worker name when worker.name was omitted" >&2
+  cat "$omitted_name_log" >&2
+  exit 1
+}
+
 line_number() {
   grep -n -m1 -- "$1" "$log" | cut -d: -f1
 }
@@ -67,7 +100,8 @@ worker_zero="$(line_number 'kubectl -n coyote-ci-staging patch deployment/coyote
 server_zero_ready="$(line_number 'kubectl -n coyote-ci rollout status deployment/coyote-server --timeout=600s')"
 frontend_zero_ready="$(line_number 'kubectl -n coyote-ci rollout status deployment/coyote-frontend --timeout=600s')"
 worker_zero_ready="$(line_number 'kubectl -n coyote-ci-staging rollout status deployment/coyote-kubernetes-worker-staging --timeout=600s')"
-migration_apply="$(line_number 'kubectl -n coyote-ci apply -f -')"
+migrator_prerequisite_apply="$(grep -n 'kubectl -n coyote-ci apply -f -' "$log" | sed -n '1s/:.*//p')"
+migration_apply="$(grep -n 'kubectl -n coyote-ci apply -f -' "$log" | sed -n '2s/:.*//p')"
 migration_wait="$(line_number 'kubectl -n coyote-ci wait --for=condition=complete job/coyote-migrate-test-run')"
 control_upgrade="$(grep -n 'helm upgrade coyote-ci ' "$log" | tail -n1 | cut -d: -f1)"
 server_restore="$(line_number 'kubectl -n coyote-ci patch deployment/coyote-server .*--subresource=scale .*coyote-rollout .*replicas.:1')"
@@ -75,7 +109,7 @@ frontend_restore="$(line_number 'kubectl -n coyote-ci patch deployment/coyote-fr
 worker_upgrade="$(grep -n 'helm upgrade coyote-ci-worker ' "$log" | tail -n1 | cut -d: -f1)"
 worker_restore="$(line_number 'kubectl -n coyote-ci-staging patch deployment/coyote-kubernetes-worker-staging .*--subresource=scale .*coyote-rollout .*replicas.:1')"
 
-[[ "$server_zero" -lt "$frontend_zero" && "$frontend_zero" -lt "$worker_zero" && "$worker_zero" -lt "$server_zero_ready" && "$server_zero_ready" -lt "$frontend_zero_ready" && "$frontend_zero_ready" -lt "$worker_zero_ready" && "$worker_zero_ready" -lt "$migration_apply" && "$migration_apply" -lt "$migration_wait" && "$migration_wait" -lt "$control_upgrade" && "$control_upgrade" -lt "$server_restore" && "$server_restore" -lt "$frontend_restore" && "$frontend_restore" -lt "$worker_upgrade" && "$worker_upgrade" -lt "$worker_restore" ]] || {
+[[ -n "$migrator_prerequisite_apply" && -n "$migration_apply" && "$server_zero" -lt "$frontend_zero" && "$frontend_zero" -lt "$worker_zero" && "$worker_zero" -lt "$server_zero_ready" && "$server_zero_ready" -lt "$frontend_zero_ready" && "$frontend_zero_ready" -lt "$worker_zero_ready" && "$worker_zero_ready" -lt "$migrator_prerequisite_apply" && "$migrator_prerequisite_apply" -lt "$migration_apply" && "$migration_apply" -lt "$migration_wait" && "$migration_wait" -lt "$control_upgrade" && "$control_upgrade" -lt "$server_restore" && "$server_restore" -lt "$frontend_restore" && "$frontend_restore" -lt "$worker_upgrade" && "$worker_upgrade" -lt "$worker_restore" ]] || {
   echo "unexpected Helm rollout command sequence" >&2
   cat "$log" >&2
   exit 1
@@ -182,22 +216,52 @@ fi
 }
 
 disable_log="$temp_dir/disable-commands.log"
-PATH="$temp_dir/bin:$PATH" \
+if disable_output="$(PATH="$temp_dir/bin:$PATH" \
 COMMAND_LOG="$disable_log" \
 KUBECTL_MCP_DEPLOYMENT_STATE=unowned \
 HELM_ROLLOUT_ID=test-disable \
 GKE_HELM_DRY_RUN=false \
 GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
 GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+"$repo_root/scripts/gke-helm-rollout.sh" 2>&1)"; then
+  echo "unowned disabled MCP must require an explicit database-isolation confirmation" >&2
+  exit 1
+fi
+
+[[ "$disable_output" == *"GKE_HELM_UNMANAGED_MCP_DATABASE_ISOLATION_CONFIRMED=true"* ]] || {
+  echo "unowned MCP guard did not require database-isolation confirmation" >&2
+  printf '%s\n' "$disable_output" >&2
+  exit 1
+}
+! grep -q 'patch deployment/coyote-mcp' "$disable_log" || {
+  echo "unowned MCP guard scaled the deployment" >&2
+  cat "$disable_log" >&2
+  exit 1
+}
+! grep -q ' apply -f -' "$disable_log" || {
+  echo "unowned MCP guard started the migration" >&2
+  cat "$disable_log" >&2
+  exit 1
+}
+
+disable_log="$temp_dir/confirmed-disable-commands.log"
+PATH="$temp_dir/bin:$PATH" \
+COMMAND_LOG="$disable_log" \
+KUBECTL_MCP_DEPLOYMENT_STATE=unowned \
+GKE_HELM_UNMANAGED_MCP_DATABASE_ISOLATION_CONFIRMED=true \
+HELM_ROLLOUT_ID=test-confirmed-disable \
+GKE_HELM_DRY_RUN=false \
+GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
+GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
 "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>"$temp_dir/disable.err"
 
-grep -q 'leaving it unchanged' "$temp_dir/disable.err" || {
-  echo "unmanaged MCP was not reported as untouched" >&2
+grep -q 'operator confirmed database isolation, leaving it unchanged' "$temp_dir/disable.err" || {
+  echo "confirmed unowned MCP was not reported as untouched" >&2
   cat "$temp_dir/disable.err" >&2
   exit 1
 }
 ! grep -q 'patch deployment/coyote-mcp' "$disable_log" || {
-  echo "unmanaged MCP deployment was scaled" >&2
+  echo "confirmed unowned MCP deployment was scaled" >&2
   cat "$disable_log" >&2
   exit 1
 }

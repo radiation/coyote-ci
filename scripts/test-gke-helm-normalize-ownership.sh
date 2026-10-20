@@ -51,6 +51,13 @@ printf 'adoption-verifier %s\n' "$*" >>"$COMMAND_LOG"
 EOF
 chmod +x "$temp_dir/bin/helm" "$temp_dir/bin/kubectl" "$temp_dir/adoption-verifier"
 
+worker_values_without_name="$temp_dir/worker-without-name.yaml"
+ruby -ryaml -e '
+  values = YAML.load_file(ARGV.fetch(0))
+  values.fetch("worker").delete("name")
+  File.write(ARGV.fetch(1), YAML.dump(values))
+' "$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" "$worker_values_without_name"
+
 run_normalizer() {
   env PATH="$temp_dir/bin:$PATH" \
   COMMAND_LOG="$log" \
@@ -58,6 +65,16 @@ run_normalizer() {
   GKE_HELM_ADOPT_SCRIPT="$temp_dir/adoption-verifier" \
   GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
   GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+  "$@"
+}
+
+run_normalizer_without_worker_name() {
+  env PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$log" \
+  REAL_HELM="$real_helm" \
+  GKE_HELM_ADOPT_SCRIPT="$temp_dir/adoption-verifier" \
+  GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
+  GKE_HELM_WORKER_VALUES="$worker_values_without_name" \
   "$@"
 }
 
@@ -70,6 +87,13 @@ for deployment in coyote-server coyote-frontend coyote-kubernetes-worker-staging
 done
 ! grep -q '^kubectl .* patch ' "$log" || { echo "dry-run performed a scale patch" >&2; exit 1; }
 ! grep -q '^helm upgrade ' "$log" || { echo "dry-run performed a Helm upgrade" >&2; exit 1; }
+
+: >"$log"
+omitted_name_output="$(run_normalizer_without_worker_name bash "$repo_root/scripts/gke-helm-normalize-ownership.sh")"
+grep -q 'patch deployment/coyote-kubernetes-worker-staging --subresource=scale' <<<"$omitted_name_output" || {
+  echo "normalization did not use the Helm default worker name when worker.name was omitted" >&2
+  exit 1
+}
 
 : >"$log"
 run_normalizer NORMALIZATION_STATE=kubectl-scale GKE_HELM_NORMALIZE_APPLY=true bash "$repo_root/scripts/gke-helm-normalize-ownership.sh" >/dev/null
