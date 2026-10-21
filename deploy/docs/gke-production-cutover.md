@@ -364,6 +364,116 @@ GKE_HELM_RELEASE_VALUES=.local/helm/coyote-release-images.yaml \
 make gke-helm-rollout
 ```
 
+### Operator-controlled rollout recovery
+
+Routine Helm rollout is distinct from the one-time ownership adoption above.
+Do not use `gke-helm-adopt.sh`, `--force-conflicts`, or a live-equivalent
+adoption profile during a routine release upgrade.
+
+Every state-changing production rollout requires a stable, operator-selected
+rollout ID, the expected current Kubernetes context, and the target cluster
+UID. The rollout writes an atomic, non-secret local checkpoint under
+`.local/helm/rollouts/`. Keep this directory access-controlled and retain the
+checkpoint until the rollout has completed and its post-deployment smoke checks
+have been recorded.
+
+Obtain the context and cluster UID from the reviewed target cluster without
+printing any secrets, then start a rollout with the immutable release overlay:
+
+```sh
+export HELM_ROLLOUT_ID='REPLACE_WITH_REVIEWED_CHANGE_ID'
+export GKE_HELM_TARGET_ENVIRONMENT=production
+export GKE_HELM_EXPECTED_CONTEXT='REPLACE_WITH_KUBECTL_CONTEXT'
+export GKE_HELM_EXPECTED_CLUSTER_UID='REPLACE_WITH_CLUSTER_UID'
+export GKE_HELM_CONTROL_PLANE_VALUES=.local/helm/gke-production-control-plane-values.yaml
+export GKE_HELM_WORKER_VALUES=.local/helm/gke-production-worker-values.yaml
+export GKE_HELM_CONTROL_PLANE_NAMESPACE=coyote-ci
+export GKE_HELM_WORKER_NAMESPACE=coyote-ci
+export GKE_HELM_CONTROL_PLANE_RELEASE=coyote-ci
+export GKE_HELM_WORKER_RELEASE=coyote-ci-worker
+export GKE_HELM_RELEASE_VALUES=.local/helm/coyote-release-images.yaml
+make gke-helm-rollout
+```
+
+The rollout records the environment, context, cluster UID, namespaces, Helm
+releases and revisions when available, immutable release inputs, captured
+replica intent, named migration Job, and attempted/completed phases. It also
+acquires a Kubernetes Lease named for the target control-plane release. Another
+operator must wait for the Lease to expire or inspect the holder; do not delete
+an active Lease merely to bypass the protection.
+
+The Lease holder is unique to one script execution, even when two operators
+use the same rollout ID. The script renews the Lease while Helm upgrades,
+migration waits, Deployment readiness waits, and Gateway readiness polling
+block. `kubectl delete` cannot apply Kubernetes delete preconditions, so release
+uses an optimistic resource-version replacement that clears only the Lease
+version it still owns; an older execution therefore cannot delete or clear a
+successor's Lease. Kubernetes
+cannot cancel a command already in flight if Lease ownership is lost; the script
+stops before the next mutation, and the operator must inspect that command's
+result before recovering.
+
+Check a rollout without mutating the cluster:
+
+```sh
+GKE_HELM_OPERATION=status \
+HELM_ROLLOUT_ID="$HELM_ROLLOUT_ID" \
+GKE_HELM_TARGET_ENVIRONMENT=production \
+GKE_HELM_EXPECTED_CONTEXT="$GKE_HELM_EXPECTED_CONTEXT" \
+GKE_HELM_EXPECTED_CLUSTER_UID="$GKE_HELM_EXPECTED_CLUSTER_UID" \
+GKE_HELM_CONTROL_PLANE_VALUES="$GKE_HELM_CONTROL_PLANE_VALUES" \
+GKE_HELM_WORKER_VALUES="$GKE_HELM_WORKER_VALUES" \
+GKE_HELM_RELEASE_VALUES="$GKE_HELM_RELEASE_VALUES" \
+bash scripts/gke-helm-rollout.sh
+```
+
+If the state identifies a completed migration and the same immutable release
+inputs are still selected, resume the rollout with the same rollout ID:
+
+```sh
+GKE_HELM_OPERATION=resume \
+HELM_ROLLOUT_ID="$HELM_ROLLOUT_ID" \
+bash scripts/gke-helm-rollout.sh
+```
+
+`resume` rejects a changed release overlay, target context, namespace, release,
+or cluster identity. It also refuses to repeat a migration when the named Job
+is failed, running, absent after a recorded attempt, or otherwise ambiguous.
+Inspect the Job, Helm releases, and release image digests before taking a new
+operator-approved action. Never run Goose down migrations or automatically
+roll back application binaries.
+
+If `helm status` shows an advanced revision but the local checkpoint did not
+record it, do not run `resume` or re-run the migration. First record the named
+migration Job outcome, both Helm revisions, and the deployed immutable image
+digests. Confirm that these match the rollout's rendered inputs and determine
+whether replicas were restored. Reconstruct the original checkpoint only from
+that evidence, or escalate with the rollout ID and collected state; do not
+guess that the unrecorded Helm command succeeded.
+
+After any failure, replicas are not automatically restored: schema
+compatibility with the prior binaries is not yet guaranteed. The checkpoint
+contains the live replica counts captured before any scale-down, so temporary
+zero replicas are never treated as desired configuration. After reviewing the
+migration and release state, explicitly restore those captured counts:
+
+```sh
+GKE_HELM_OPERATION=restore-replicas \
+GKE_HELM_RESTORE_REPLICAS_CONFIRMED=true \
+HELM_ROLLOUT_ID="$HELM_ROLLOUT_ID" \
+bash scripts/gke-helm-rollout.sh
+```
+
+If the local checkpoint is missing, do not start a production rollout merely
+because a new ID can be chosen. Inspect migration Jobs, Helm revisions, current
+image digests, and replica counts first. A production rollout with existing
+migration Jobs requires the explicit
+`GKE_HELM_MISSING_STATE_RECONCILIATION_CONFIRMED=true` acknowledgement only
+after that reconciliation. This confirmation does **not** authorize a new
+rollout, migration retry, or replica restoration. Recover the original
+checkpoint or escalate with the named migration Job, Helm revisions, deployed
+immutable image digests, and captured replica intent.
+
 Inspect the completed migration without exposing its DSN:
 
 ```sh
