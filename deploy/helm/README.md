@@ -1,8 +1,9 @@
 # Coyote CI Helm charts
 
-These charts are the render-only Helm packaging for the proven GKE staging
-architecture. They do not provision GCP infrastructure, create namespaces, or
-run database migrations.
+These charts package the proven GKE architecture. They do not provision GCP
+infrastructure, but a new installation can use the documented two-phase Helm
+workflow below to create the application resources and run its initial
+database migration.
 
 - `coyote-ci` owns steady-state control-plane resources in `coyote-ci`.
 - `coyote-ci-worker` owns steady-state staging execution-worker resources in
@@ -20,6 +21,185 @@ helm lint --strict deploy/helm/coyote-ci-worker \
 scripts/helm-render-parity.sh
 scripts/helm-schema-test.sh
 ```
+
+## First installation
+
+Before installation, provision the external GKE/GCP dependencies described in
+[`../docs/gke-gcp-deployment.md`](../docs/gke-gcp-deployment.md): Cloud SQL,
+Secret Manager secrets, Workload Identity and IAM bindings, GCS buckets, OIDC,
+and optional Gateway address, certificate, and DNS resources. The migration
+ServiceAccount needs Cloud SQL Client plus read access only to the database URL
+secret. The migration Job mounts that secret through `coyote-migrate-secrets`
+and reaches Cloud SQL through its local Cloud SQL Auth Proxy sidecar.
+
+Resolve an approved Coyote release to its immutable image overlay before
+installing:
+
+```sh
+coyote release resolve \
+  --release "$COYOTE_RELEASE_VERSION" \
+  --release-source "$COYOTE_RELEASE_SOURCE" \
+  --output coyote-release-images.yaml
+```
+
+Use the generated overlay as the final values file. It supplies the
+digest-pinned server, frontend, worker, and migration images. MCP remains a
+separate environment-specific image setting.
+
+Use Helm-managed replicas for a fresh installation. For example,
+`customer-values.yaml` can contain:
+
+```yaml
+server:
+  replicasManagedExternally: false
+  replicas: 2
+
+frontend:
+  replicasManagedExternally: false
+  replicas: 1
+```
+
+For an optional MCP installation, configure its desired replica count the same
+way:
+
+```yaml
+mcp:
+  enabled: true
+  replicasManagedExternally: false
+  replicas: 1
+  auth:
+    allowedOrigins:
+      - https://mcp.example.invalid
+```
+
+The MCP image and GSA remain required environment-specific settings. Fresh
+installations must not copy `replicasManagedExternally: true` from the
+established GKE integration deployment. External replica management is
+reserved for workflows that explicitly manage the Deployment scale
+subresource.
+
+Independent Coyote installations must use separate Kubernetes namespaces. The
+TokenReview name helper prevents collisions for its cluster-scoped RBAC
+objects, but the chart does not make every namespaced resource safe for
+multiple Helm releases in one namespace.
+
+### Phase 1: install at zero replicas and migrate
+
+Use a unique DNS-label-compatible migration ID. Do not use `--atomic`: if the
+Job fails, it must remain available for inspection. This command requires a
+Helm version that supports `--wait-for-jobs`.
+
+```sh
+INSTALL_MIGRATION_ID="install-20261021-001"
+
+helm upgrade --install coyote-ci deploy/helm/coyote-ci \
+  --namespace "$COYOTE_NAMESPACE" \
+  --create-namespace \
+  --values customer-values.yaml \
+  --values coyote-release-images.yaml \
+  --set server.replicasManagedExternally=false \
+  --set server.replicas=0 \
+  --set frontend.replicasManagedExternally=false \
+  --set frontend.replicas=0 \
+  --set migration.render=true \
+  --set "migration.runID=$INSTALL_MIGRATION_ID" \
+  --wait \
+  --wait-for-jobs \
+  --timeout 15m
+```
+
+When enabling MCP, supply its separately published digest-pinned image and GSA
+in `customer-values.yaml`, and add:
+
+```sh
+--set mcp.replicasManagedExternally=false \
+--set mcp.replicas=0
+```
+
+The first revision temporarily overrides the desired customer replica counts
+to zero. It creates the migration ServiceAccount, SecretProviderClass, and
+Job while the server, frontend, and optional MCP database consumers remain
+unavailable. Kubernetes object creation does not guarantee operational
+readiness; `--wait --wait-for-jobs` waits for the Job's result and reports its
+failure. The Job image runs Goose against an empty database, applies only
+remaining migrations against a partially migrated database, and succeeds
+without changes against an already-current database.
+
+If the migration fails or times out, inspect the retained Job and its logs,
+correct the cause, and repeat Phase 1 with a new migration ID. Do not retry
+while a prior Job might still be running or has ambiguous status. Do not run
+Goose down migrations automatically.
+
+### Phase 2: enable the control plane
+
+After Phase 1 succeeds, enable the desired replicas from
+`customer-values.yaml`:
+
+```sh
+helm upgrade coyote-ci deploy/helm/coyote-ci \
+  --namespace "$COYOTE_NAMESPACE" \
+  --values customer-values.yaml \
+  --values coyote-release-images.yaml \
+  --set migration.render=false \
+  --wait \
+  --timeout 15m
+```
+
+This removes the completed migration Job from the Helm release and restores
+the configured nonzero server, frontend, and optional MCP replicas from
+`customer-values.yaml`. Capture successful Job status or logs before Phase 2
+if they are needed for installation evidence. If Phase 2 fails, correct the
+workload or configuration issue and repeat only Phase 2; a completed migration
+does not need to be rerun.
+
+### Phase 3: optionally install the Kubernetes worker
+
+The control plane can be installed without a Kubernetes execution worker. To
+enable Kubernetes job execution after the control plane is ready:
+
+```sh
+helm upgrade --install coyote-ci-worker deploy/helm/coyote-ci-worker \
+  --namespace "$COYOTE_EXECUTION_NAMESPACE" \
+  --create-namespace \
+  --values worker-values.yaml \
+  --values coyote-release-images.yaml \
+  --wait \
+  --timeout 15m
+```
+
+The worker is installed only after the database is migrated and does not run
+its own migration Job.
+
+### Upgrades
+
+The two-phase workflow is for first installation only. A version change does
+not by itself establish whether a database migration is required. Until
+migrations are backwards-compatible across supported application versions,
+release notes must explicitly state either:
+
+- **No database migration required:** use ordinary `helm upgrade --install`.
+- **Database migration required:** use the controlled quiesce/migrate/restore
+  procedure for the established environment.
+
+The existing GKE rollout-recovery path remains the schema-changing upgrade
+procedure. Do not use the first-install commands to replace its safeguards.
+
+### Existing GKE installations
+
+New releases generate the cluster-scoped TokenReview RBAC name from the Helm
+release and namespace. Existing installations that already use
+`coyote-server-tokenreview` must explicitly set:
+
+```yaml
+rbac:
+  tokenReviewNameOverride: coyote-server-tokenreview
+```
+
+Verify the live ClusterRole and ClusterRoleBinding name before upgrading. Do
+not rely on a chart default to preserve a historical name. The checked-in GKE
+examples do not establish the actual operator-local configuration: inspect the
+local values used by the existing deployment and preserve its verified live
+name before upgrading. Do not modify operator-local values automatically.
 
 ## Optional MCP deployment
 
@@ -48,9 +228,8 @@ introduced through a separate MCP database-url secret.
 MCP remains ClusterIP-only; add an authenticated TLS gateway integration only
 after selecting a suitable private ingress policy and explicit allowed origins.
 
-The raw manifests and deployment scripts remain the current deployment path.
-The migration Job is excluded from ordinary chart renders and Helm release
-ownership. It is rendered explicitly for a unique rollout run and applied by
+The migration Job is excluded from ordinary chart renders. For established
+GKE installations, it is rendered explicitly for a unique rollout run and applied by
 [`scripts/gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh):
 
 ```sh

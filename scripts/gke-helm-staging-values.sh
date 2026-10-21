@@ -125,6 +125,7 @@ ruby -rjson -ryaml -e '
   control_values = {
     "namespace" => server.dig("metadata", "namespace"),
     "executionNamespace" => worker.dig("metadata", "namespace"),
+    "rbac" => {"tokenReviewNameOverride" => "coyote-server-tokenreview"},
     "images" => {
       "server" => image(server_container, "server"),
       "frontend" => image(frontend_container, "frontend"),

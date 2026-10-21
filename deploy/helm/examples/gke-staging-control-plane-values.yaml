@@ -1,5 +1,8 @@
 namespace: coyote-ci
 executionNamespace: coyote-ci-staging
+rbac:
+  # Preserve the raw-manifest name while the existing environment transitions to Helm.
+  tokenReviewNameOverride: coyote-server-tokenreview
 images:
   server: example.invalid/coyote-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   frontend: example.invalid/coyote-frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

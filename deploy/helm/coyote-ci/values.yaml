@@ -2,6 +2,9 @@ namespace: ""
 executionNamespace: ""
 allowSharedExecutionNamespace: false
 
+rbac:
+  tokenReviewNameOverride: ""
+
 gke:
   enabled: true
   secretManagerCSI:
