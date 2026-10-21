@@ -1,3 +1,13 @@
+{{- define "coyote-ci.tokenReviewName" -}}
+{{- if .Values.rbac.tokenReviewNameOverride -}}
+{{- .Values.rbac.tokenReviewNameOverride -}}
+{{- else -}}
+{{- $identity := printf "%s-%s" .Release.Name .Release.Namespace -}}
+{{- $prefix := trunc 40 $identity | trimSuffix "-" -}}
+{{- printf "%s-%s-tokenreview" $prefix (trunc 8 (sha256sum $identity)) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "coyote-ci.validate" -}}
 {{- if ne .Release.Namespace .Values.namespace }}{{ fail "release namespace must match namespace" }}{{ end -}}
 {{- if and (eq .Values.namespace .Values.executionNamespace) (not .Values.allowSharedExecutionNamespace) }}{{ fail "control-plane and execution namespaces must differ unless allowSharedExecutionNamespace is true" }}{{ end -}}

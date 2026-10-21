@@ -77,7 +77,35 @@ database exits successfully.
 
 ### Kubernetes deployment contract
 
-The future Kubernetes migration Job must use the immutable `migrate-runtime`
-image, mount the database DSN as `DATABASE_URL_FILE`, and run alongside a Cloud
-SQL Auth Proxy sidecar that listens on the DSN's loopback host and port. A
-successful Job completion is required before the server Deployment rolls out.
+The Kubernetes migration Job uses the immutable `migrate-runtime` image,
+mounts the database DSN as `DATABASE_URL_FILE`, and runs alongside a Cloud SQL
+Auth Proxy sidecar that listens on the DSN's loopback host and port. The
+migration ServiceAccount requires Cloud SQL Client and read access only to the
+database URL secret. A successful Job completion is required before the server
+Deployment rolls out.
+
+### New Helm installation
+
+For a new installation, use the two-phase workflow in
+[`../helm/README.md`](../helm/README.md):
+
+1. Install the control-plane chart with Helm-managed server/frontend replicas
+   set to zero, `migration.render=true`, and a unique `migration.runID`.
+2. Run Helm with `--wait --wait-for-jobs` so the migration Job completes before
+   database-consuming Deployments are enabled.
+3. Upgrade the same release with `migration.render=false` and the desired
+   replica counts.
+4. Install the optional worker chart only after the control plane is healthy.
+
+Do not use `--atomic` for the migration phase: a failed Job must remain for
+inspection. Against an empty database Goose applies all migrations; against a
+partially migrated database it applies only the remaining migrations; against
+an already-current database it succeeds without changes. Retry a failed
+initial migration only after inspecting its Job and logs, and use a new
+`migration.runID`. Do not start a new Job while the earlier Job may still be
+running or has ambiguous state.
+
+The first-install workflow does not make schema-changing upgrades safe. Keep
+using the controlled quiesce/migrate/restore procedure for an established
+environment until migrations are backwards-compatible across supported
+application versions. Never run Goose down migrations automatically.
