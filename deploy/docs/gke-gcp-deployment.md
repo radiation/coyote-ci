@@ -320,5 +320,7 @@ therefore each look nearly as long as the command even when they overlap or
 wait on lifecycle work. Treat this as an observability/display issue, not
 evidence that each helper independently consumed that duration.
 
-Production cutover, broader cache/performance optimization, and documentation
-reorganization belong to later work.
+For the operator-controlled production VM-to-GKE cutover, see
+[GKE production cutover](gke-production-cutover.md). The staging deployment
+described here remains isolated and must not be repointed at production
+credentials.

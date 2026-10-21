@@ -835,7 +835,10 @@ func TestNotificationRecoveryDrain_Run(t *testing.T) {
 		}
 		cancel()
 		close(release)
-		<-done
+		runErr := <-done
+		if !errors.Is(runErr, context.Canceled) {
+			t.Fatalf("expected canceled drain, got %v", runErr)
+		}
 		if calls.Load() != 1 {
 			t.Fatalf("expected one in-flight iteration call, got %d", calls.Load())
 		}
@@ -868,7 +871,10 @@ func TestNotificationRecoveryDrain_Run(t *testing.T) {
 			t.Fatal("expected drain to continue after iteration error")
 		}
 		cancel()
-		<-done
+		runErr := <-done
+		if !errors.Is(runErr, context.Canceled) {
+			t.Fatalf("expected canceled drain, got %v", runErr)
+		}
 	})
 }
 

@@ -134,7 +134,7 @@ func (c *Client) buildRequest(request domain.ImageBuildRequest) (*googlecloudbui
 	args = append(args, request.Spec.ContextPath)
 	return &googlecloudbuild.Build{
 		Source:         &googlecloudbuild.Source{StorageSource: &googlecloudbuild.StorageSource{Bucket: request.Source.Bucket, Object: request.Source.Object, Generation: generation}},
-		Steps:          []*googlecloudbuild.BuildStep{{Name: "gcr.io/cloud-builders/docker", Args: args}},
+		Steps:          []*googlecloudbuild.BuildStep{{Name: "gcr.io/cloud-builders/docker", Args: args, Env: []string{"DOCKER_BUILDKIT=1"}}},
 		Images:         []string{targetImage},
 		Options:        &googlecloudbuild.BuildOptions{Logging: "CLOUD_LOGGING_ONLY"},
 		Timeout:        protobufDurationSeconds(request.Timeout),
