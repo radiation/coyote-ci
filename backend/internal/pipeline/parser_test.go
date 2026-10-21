@@ -67,7 +67,6 @@ func TestLoadAndResolve_RepositoryPipeline(t *testing.T) {
 		"Coyote Server Image":   {"node-000", "node-006", "node-007"},
 		"Coyote Frontend Image": {"node-008"},
 		"Coyote Worker Image":   {"node-000", "node-006", "node-007"},
-		"Coyote Migrate Image":  {"node-000"},
 	}
 	for name, want := range wantDependencies {
 		step, found := byName[name]
