@@ -1,0 +1,26 @@
+# Local editor and operating system artifacts
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Generated Helm archives and temporary package output
+*.tgz
+tmp/
+temp/
+
+# Local overrides and environment files
+*.local.yaml
+*.local.yml
+*.override.yaml
+*.override.yml
+.env
+.env.*
+
+# Development and repository metadata
+.git/
+.gitignore
+README*
+tests/
+testdata/
