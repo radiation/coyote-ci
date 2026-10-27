@@ -5,6 +5,13 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "npm"
     directory: "/frontend"
@@ -12,33 +19,22 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 10
     groups:
-      vitest:
+      minor-and-patch:
         patterns:
-          - "vitest"
-          - "@vitest/*"
-    ignore:
-      - dependency-name: "typescript"
+          - "*"
         update-types:
-          - "version-update:semver-major"
-
-  - package-ecosystem: "uv"
-    directory: "/mcp"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-
-    groups:
-      python-runtime:
-        dependency-type: "production"
-        patterns:
-          - "*"
-      python-dev:
-        dependency-type: "development"
-        patterns:
-          - "*"
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
