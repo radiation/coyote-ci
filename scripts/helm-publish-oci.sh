@@ -95,7 +95,7 @@ require_command "$helm_bin"
 [[ "${OCI_IMMUTABLE_TAGS_CONFIRMED:-}" == "true" ]] || { echo "OCI_IMMUTABLE_TAGS_CONFIRMED=true is required after verifying registry immutable-tag policy" >&2; exit 2; }
 case "$selection" in all|control-plane|worker) ;; *) echo "HELM_CHART_SELECTION must be all, control-plane, or worker" >&2; exit 2 ;; esac
 
-"$validator"
+bash "$validator"
 
 declare -a succeeded=()
 declare -a failed=()

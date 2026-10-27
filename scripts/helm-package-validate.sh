@@ -41,13 +41,14 @@ validate_chart() {
 validate_archive_contents() {
   local archive="$1"
   local chart_name="$2"
-  local archive_path
+  local archive_path filename
   while IFS= read -r archive_path; do
     case "$archive_path" in
       "$chart_name/Chart.yaml"|"$chart_name/values.yaml"|"$chart_name/values.schema.json"|"$chart_name/.helmignore"|"$chart_name/templates/"*) ;;
       *) echo "unexpected package path in $archive: $archive_path" >&2; exit 1 ;;
     esac
-    if [[ "$archive_path" =~ (^|/)([^/]*(secret|credential|password|token|private[._-]?key)|[^/]*\.env|[^/]*\.local\.(yaml|yml))$ ]]; then
+    filename="${archive_path##*/}"
+    if [[ "$archive_path" != "$chart_name/templates/secrets.yaml" && "$filename" =~ (secrets?|credentials?|passwords?|tokens?|private[._-]?key)([._-].*|$) || "$filename" =~ \.env($|[._-].*) || "$filename" =~ \.local\.(yaml|yml)$ ]]; then
       echo "secret-like or operator-local package path in $archive: $archive_path" >&2
       exit 1
     fi

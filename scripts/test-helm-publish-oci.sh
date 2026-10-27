@@ -16,7 +16,7 @@ cat >"$fake_validator" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod +x "$fake_validator"
+chmod 0644 "$fake_validator"
 
 cat >"$fake_helm" <<'EOF'
 #!/usr/bin/env bash

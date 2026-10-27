@@ -34,4 +34,9 @@ cp -R "$repo_root/deploy/helm/coyote-ci" "$secret_chart"
 touch "$secret_chart/operator-secret.yaml"
 expect_failure "secret-like archive path" env HELM_PACKAGE_SKIP_EXISTING_TESTS=true CONTROL_CHART_DIR="$secret_chart" bash "$validator"
 
+nested_secret_chart="$temp_dir/nested-secret-chart"
+cp -R "$repo_root/deploy/helm/coyote-ci" "$nested_secret_chart"
+touch "$nested_secret_chart/templates/_private-key.pem"
+expect_failure "nested secret-like template path" env HELM_PACKAGE_SKIP_EXISTING_TESTS=true CONTROL_CHART_DIR="$nested_secret_chart" bash "$validator"
+
 echo "Helm package validation tests passed"

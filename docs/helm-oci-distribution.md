@@ -85,25 +85,60 @@ coyote release resolve \
   --output release-overlay.yaml
 ```
 
-For the documented initial installation sequence, provide the existing
-GKE-specific operator values, release overlay, and migration values to the
-control-plane chart. The chart retains its current first-install migration
-handling; do not redesign that sequence for OCI distribution.
+For a first installation, follow the same migration-safe sequence as the
+source chart. Provide the GKE-specific operator values and the release overlay
+as the final values file. Use a unique DNS-label-compatible migration ID and
+do not use `--atomic`, so a failed Job remains available for diagnosis.
+
+### Phase 1: install at zero replicas and migrate
 
 ```sh
+INSTALL_MIGRATION_ID="install-20261027-001"
+
 helm upgrade --install coyote-ci \
   oci://REGISTRY/charts/coyote-ci \
   --version CHART_VERSION \
-  --namespace coyote-ci --create-namespace \
+  --namespace "$COYOTE_NAMESPACE" --create-namespace \
   --values operator-values.yaml \
-  --values release-overlay.yaml
+  --values release-overlay.yaml \
+  --set server.replicasManagedExternally=false \
+  --set server.replicas=0 \
+  --set frontend.replicasManagedExternally=false \
+  --set frontend.replicas=0 \
+  --set migration.render=true \
+  --set "migration.runID=$INSTALL_MIGRATION_ID" \
+  --wait --wait-for-jobs --timeout 15m
+```
 
+When MCP is enabled, also set its replicas to zero in Phase 1. Do not proceed
+until the migration Job succeeds.
+
+### Phase 2: restore the control plane
+
+```sh
+helm upgrade coyote-ci \
+  oci://REGISTRY/charts/coyote-ci \
+  --version CHART_VERSION \
+  --namespace "$COYOTE_NAMESPACE" \
+  --values operator-values.yaml \
+  --values release-overlay.yaml \
+  --set migration.render=false \
+  --wait --timeout 15m
+```
+
+The operator values restore the desired nonzero server, frontend, and optional
+MCP replicas only after the database is migrated.
+
+### Phase 3: optionally install the worker
+
+```sh
 helm upgrade --install coyote-ci-worker \
   oci://REGISTRY/charts/coyote-ci-worker \
   --version WORKER_CHART_VERSION \
-  --namespace coyote-ci-worker --create-namespace \
+  --namespace "$COYOTE_EXECUTION_NAMESPACE" --create-namespace \
   --values worker-values.yaml \
-  --values release-overlay.yaml
+  --values release-overlay.yaml \
+  --wait --timeout 15m
 ```
 
 The current charts are GKE-specific and require environment-specific Google
