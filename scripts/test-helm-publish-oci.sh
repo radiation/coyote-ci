@@ -85,7 +85,8 @@ printf '%s\n' "$*" >>"$FAKE_GCLOUD_LOG"
 case "$1 $2 $3" in
   "artifacts repositories describe")
     case "${FAKE_GCLOUD_REPOSITORY:-present}" in
-      present) exit 0 ;;
+      present) printf 'DOCKER\n' ;;
+      wrong-format) printf 'MAVEN\n' ;;
       *) echo "repository was not found" >&2; exit 1 ;;
     esac
     ;;
@@ -94,6 +95,7 @@ case "$1 $2 $3" in
       present) printf '[{"package":"us-central1-docker.pkg.dev/example-project/coyote-ci/charts/coyote-ci","tags":["%s"]}]\n' "${FAKE_GCLOUD_TAGS:-unused}" ;;
       empty) printf '[]\n' ;;
       unrelated) printf '[{"package":"us-central1-docker.pkg.dev/example-project/coyote-ci/charts/other","tags":["0.1.0"]}]\n' ;;
+      untagged) printf '[{"package":"us-central1-docker.pkg.dev/example-project/coyote-ci/charts/untagged"}]\n' ;;
       malformed) printf '[not-json\n' ;;
       unexpected) printf '[{"package":1,"tags":["0.1.0"]}]\n' ;;
       error) echo "request failed" >&2; exit 1 ;;
@@ -126,6 +128,7 @@ expect_failure() {
 
 expect_failure "missing OCI registry" env HELM_BIN="$fake_helm" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" OCI_IMMUTABLE_TAGS_CONFIRMED=true bash "$publisher"
 expect_failure "missing immutable-tag confirmation" env HELM_BIN="$fake_helm" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" OCI_REGISTRY="registry.example/coyote-ci" bash "$publisher"
+expect_failure "nested Artifact Registry destination" env HELM_BIN="$fake_helm" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci/charts" OCI_IMMUTABLE_TAGS_CONFIRMED=true bash "$publisher"
 expect_failure "duplicate chart version" env FAKE_HELM_LOOKUP=exists HELM_BIN="$fake_helm" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" OCI_REGISTRY="registry.example/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true bash "$publisher"
 expect_failure "authorization lookup error" env FAKE_HELM_LOOKUP=error HELM_BIN="$fake_helm" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" OCI_REGISTRY="registry.example/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true bash "$publisher"
 expect_failure "ambiguous not found lookup error" env FAKE_HELM_LOOKUP=ambiguous HELM_BIN="$fake_helm" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" OCI_REGISTRY="registry.example/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true bash "$publisher"
@@ -141,6 +144,7 @@ if grep -q '^show chart ' "$temp_dir/helm.log"; then
 fi
 
 run_google_publisher env FAKE_GCLOUD_IMAGES=unrelated HELM_CHART_SELECTION=control-plane >"$temp_dir/google-unrelated-image-success"
+run_google_publisher env FAKE_GCLOUD_IMAGES=untagged HELM_CHART_SELECTION=control-plane >"$temp_dir/google-untagged-image-success"
 
 : >"$temp_dir/helm.log"
 : >"$temp_dir/gcloud.log"
@@ -155,6 +159,13 @@ fi
 expect_failure "missing Artifact Registry repository" env FAKE_GCLOUD_REPOSITORY=missing HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
 if grep -q '^artifacts docker images list ' "$temp_dir/gcloud.log"; then
   echo "missing Artifact Registry repository reached tag listing" >&2
+  exit 1
+fi
+
+: >"$temp_dir/gcloud.log"
+expect_failure "non-Docker Artifact Registry repository" env FAKE_GCLOUD_REPOSITORY=wrong-format HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
+if grep -q '^artifacts docker images list ' "$temp_dir/gcloud.log"; then
+  echo "non-Docker Artifact Registry repository reached image listing" >&2
   exit 1
 fi
 expect_failure "Artifact Registry image listing failure" env FAKE_GCLOUD_IMAGES=error HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"

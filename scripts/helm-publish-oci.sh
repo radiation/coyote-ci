@@ -33,6 +33,10 @@ is_google_artifact_registry() {
   [[ "$oci_registry" =~ ^[a-z0-9-]+-docker\.pkg\.dev/[^/]+/[^/]+$ ]]
 }
 
+is_google_artifact_registry_host() {
+  [[ "$oci_registry" =~ ^[a-z0-9-]+-docker\.pkg\.dev/ ]]
+}
+
 lookup_google_artifact_registry_version() {
   local chart_name="$1"
   local version="$2"
@@ -42,6 +46,7 @@ lookup_google_artifact_registry_version() {
   local tags_file="$package_dir/artifact-registry-tags.json"
   local parse_error="$package_dir/artifact-registry-tags-parse-error"
   local matches_file="$package_dir/artifact-registry-tag-matches"
+  local repository_format
 
   registry_host="${oci_registry%%/*}"
   project="${oci_registry#*/}"
@@ -53,11 +58,12 @@ lookup_google_artifact_registry_version() {
 
   require_command "$gcloud_bin"
   require_command "$ruby_bin"
-  if ! "$gcloud_bin" artifacts repositories describe "$repository" --project "$project" --location "$location" --format='value(name)' >/dev/null 2>"$repository_error"; then
+  if ! repository_format="$("$gcloud_bin" artifacts repositories describe "$repository" --project "$project" --location "$location" --format='value(format)' 2>"$repository_error")"; then
     echo "unable to verify Artifact Registry repository $oci_registry" >&2
     sed 's/[[:cntrl:]]//g' "$repository_error" >&2
     return 1
   fi
+  [[ "$repository_format" == "DOCKER" ]] || { echo "Artifact Registry repository $oci_registry must use DOCKER format" >&2; return 1; }
   if ! "$gcloud_bin" artifacts docker images list "$oci_registry" --include-tags --format=json >"$tags_file" 2>"$tags_error"; then
     echo "unable to list Artifact Registry chart images for $oci_registry" >&2
     sed 's/[[:cntrl:]]//g' "$tags_error" >&2
@@ -69,8 +75,10 @@ lookup_google_artifact_registry_version() {
     images = JSON.parse(STDIN.read)
     abort "Artifact Registry image response must be an array" unless images.is_a?(Array)
     images.each do |entry|
-      abort "Artifact Registry image entry has an unexpected shape" unless entry.is_a?(Hash) && entry["package"].is_a?(String) && entry["tags"].is_a?(Array) && entry["tags"].all? { |tag| tag.is_a?(String) }
-      puts entry["package"] if entry["package"] == image && entry["tags"].include?(expected_tag)
+      abort "Artifact Registry image entry has an unexpected shape" unless entry.is_a?(Hash) && entry["package"].is_a?(String)
+      tags = entry.fetch("tags", [])
+      abort "Artifact Registry image tags have an unexpected shape" unless tags.is_a?(Array) && tags.all? { |tag| tag.is_a?(String) }
+      puts entry["package"] if entry["package"] == image && tags.include?(expected_tag)
     end
   ' "$image" "$expected_tag" <"$tags_file" >"$matches_file" 2>"$parse_error"; then
     echo "unable to parse Artifact Registry chart images for $oci_registry" >&2
@@ -153,6 +161,10 @@ publish_chart() {
 require_command "$helm_bin"
 [[ -n "$oci_registry" ]] || { echo "OCI_REGISTRY is required" >&2; exit 2; }
 [[ "$oci_registry" != oci://* ]] || { echo "OCI_REGISTRY must not include the oci:// prefix" >&2; exit 2; }
+if is_google_artifact_registry_host && ! is_google_artifact_registry; then
+  echo "OCI_REGISTRY for Artifact Registry must be <location>-docker.pkg.dev/<project>/<repository>; nested paths are not supported" >&2
+  exit 2
+fi
 [[ "${OCI_IMMUTABLE_TAGS_CONFIRMED:-}" == "true" ]] || { echo "OCI_IMMUTABLE_TAGS_CONFIRMED=true is required after verifying registry immutable-tag policy" >&2; exit 2; }
 case "$selection" in all|control-plane|worker) ;; *) echo "HELM_CHART_SELECTION must be all, control-plane, or worker" >&2; exit 2 ;; esac
 

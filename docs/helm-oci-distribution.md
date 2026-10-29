@@ -63,10 +63,12 @@ ambiguous lookup errors fail closed. Pushes are independent. If one succeeds
 and another fails, the successful chart remains published; repair and retry
 only the unpublished chart.
 
-For `*.pkg.dev` destinations, the publisher uses authenticated, read-only
-Artifact Registry repository and Docker image-tag listings before publication.
-It requires the repository to exist, treats a matching chart tag as an
-existing version, and fails closed on listing or authentication errors.
+For Artifact Registry, `OCI_REGISTRY` must be exactly
+`<location>-docker.pkg.dev/<project>/<repository>`. The publisher verifies
+that the repository exists and has `DOCKER` format, then uses authenticated,
+read-only Docker image listings before publication. It treats a matching chart
+tag as an existing version and fails closed on listing or authentication
+errors. Other `*.pkg.dev` destinations, including nested paths, are rejected.
 
 Before publishing, operators must verify Artifact Registry writer IAM,
 immutable-tag enforcement, and cleanup/retention rules. Public anonymous pull
