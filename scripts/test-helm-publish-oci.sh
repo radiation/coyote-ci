@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 publisher="$repo_root/scripts/helm-publish-oci.sh"
 temp_dir="$(mktemp -d)"
 fake_helm="$temp_dir/helm"
+fake_gcloud="$temp_dir/gcloud"
 fake_validator="$temp_dir/validator"
 
 cleanup() {
@@ -77,9 +78,41 @@ esac
 EOF
 chmod +x "$fake_helm"
 
+cat >"$fake_gcloud" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_GCLOUD_LOG"
+case "$1 $2 $3" in
+  "artifacts repositories describe")
+    case "${FAKE_GCLOUD_REPOSITORY:-present}" in
+      present) exit 0 ;;
+      *) echo "repository was not found" >&2; exit 1 ;;
+    esac
+    ;;
+  "artifacts docker images")
+    case "${FAKE_GCLOUD_IMAGES:-present}" in
+      present) printf '[{"package":"us-central1-docker.pkg.dev/example-project/coyote-ci/charts/coyote-ci","tags":["%s"]}]\n' "${FAKE_GCLOUD_TAGS:-unused}" ;;
+      empty) printf '[]\n' ;;
+      unrelated) printf '[{"package":"us-central1-docker.pkg.dev/example-project/coyote-ci/charts/other","tags":["0.1.0"]}]\n' ;;
+      malformed) printf '[not-json\n' ;;
+      unexpected) printf '[{"package":1,"tags":["0.1.0"]}]\n' ;;
+      error) echo "request failed" >&2; exit 1 ;;
+    esac
+    ;;
+  *) echo "unexpected gcloud command: $*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$fake_gcloud"
+
 run_publisher() {
   : >"$temp_dir/helm.log"
   HELM_BIN="$fake_helm" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" OCI_REGISTRY="registry.example/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true "$@" bash "$publisher"
+}
+
+run_google_publisher() {
+  : >"$temp_dir/helm.log"
+  : >"$temp_dir/gcloud.log"
+  HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true "$@" bash "$publisher"
 }
 
 expect_failure() {
@@ -98,6 +131,35 @@ expect_failure "authorization lookup error" env FAKE_HELM_LOOKUP=error HELM_BIN=
 expect_failure "ambiguous not found lookup error" env FAKE_HELM_LOOKUP=ambiguous HELM_BIN="$fake_helm" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" OCI_REGISTRY="registry.example/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true bash "$publisher"
 expect_failure "missing repository lookup error" env FAKE_HELM_LOOKUP=repository HELM_BIN="$fake_helm" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" OCI_REGISTRY="registry.example/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true bash "$publisher"
 expect_failure "connectivity lookup error" env FAKE_HELM_LOOKUP=connectivity HELM_BIN="$fake_helm" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" OCI_REGISTRY="registry.example/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true bash "$publisher"
+
+run_google_publisher env FAKE_GCLOUD_IMAGES=empty HELM_CHART_SELECTION=control-plane >"$temp_dir/google-success"
+grep -q 'artifacts repositories describe coyote-ci --project example-project --location us-central1' "$temp_dir/gcloud.log"
+grep -q 'artifacts docker images list us-central1-docker.pkg.dev/example-project/coyote-ci --include-tags --format=json' "$temp_dir/gcloud.log"
+if grep -q '^show chart ' "$temp_dir/helm.log"; then
+  echo "Artifact Registry lookup fell back to Helm" >&2
+  exit 1
+fi
+
+run_google_publisher env FAKE_GCLOUD_IMAGES=unrelated HELM_CHART_SELECTION=control-plane >"$temp_dir/google-unrelated-image-success"
+
+: >"$temp_dir/helm.log"
+: >"$temp_dir/gcloud.log"
+expect_failure "existing Artifact Registry chart version" env FAKE_GCLOUD_TAGS=0.1.0 HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
+if grep -q '^push ' "$temp_dir/helm.log"; then
+  echo "duplicate Artifact Registry version reached Helm push" >&2
+  exit 1
+fi
+
+: >"$temp_dir/helm.log"
+: >"$temp_dir/gcloud.log"
+expect_failure "missing Artifact Registry repository" env FAKE_GCLOUD_REPOSITORY=missing HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
+if grep -q '^artifacts docker images list ' "$temp_dir/gcloud.log"; then
+  echo "missing Artifact Registry repository reached tag listing" >&2
+  exit 1
+fi
+expect_failure "Artifact Registry image listing failure" env FAKE_GCLOUD_IMAGES=error HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
+expect_failure "malformed Artifact Registry tag JSON" env FAKE_GCLOUD_IMAGES=malformed HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
+expect_failure "unexpected Artifact Registry tag JSON" env FAKE_GCLOUD_IMAGES=unexpected HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
 
 run_publisher env HELM_CHART_SELECTION=all >"$temp_dir/success"
 grep -q 'published chart=coyote-ci version=0.1.0 reference=oci://registry.example/coyote-ci/charts/coyote-ci digest=sha256:' "$temp_dir/success"

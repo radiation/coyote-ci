@@ -63,6 +63,11 @@ ambiguous lookup errors fail closed. Pushes are independent. If one succeeds
 and another fails, the successful chart remains published; repair and retry
 only the unpublished chart.
 
+For `*.pkg.dev` destinations, the publisher uses authenticated, read-only
+Artifact Registry repository and Docker image-tag listings before publication.
+It requires the repository to exist, treats a matching chart tag as an
+existing version, and fails closed on listing or authentication errors.
+
 Before publishing, operators must verify Artifact Registry writer IAM,
 immutable-tag enforcement, and cleanup/retention rules. Public anonymous pull
 is an explicit policy decision and is not changed by these scripts.
