@@ -446,8 +446,8 @@ lease_manifest() {
       "spec" => {
         "holderIdentity" => holder,
         "leaseDurationSeconds" => Integer(duration),
-        "acquireTime" => Time.now.utc.iso8601,
-        "renewTime" => Time.now.utc.iso8601
+        "acquireTime" => Time.now.utc.iso8601(6),
+        "renewTime" => Time.now.utc.iso8601(6)
       }
     }
     puts JSON.generate(document)

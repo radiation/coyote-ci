@@ -57,6 +57,14 @@ if [[ "$1" == "status" && "$*" == *"--output json"* ]]; then
   esac
 fi
 EOF
+timestamp_shim="$temp_dir/fixed-time.rb"
+cat >"$timestamp_shim" <<'EOF'
+class << Time
+  def now
+    Time.utc(2026, 10, 30, 11, 45, 38)
+  end
+end
+EOF
 cat >"$temp_dir/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 printf 'kubectl %s\n' "$*" >>"$COMMAND_LOG"
@@ -111,6 +119,7 @@ fi
 if [[ "$*" == *" create -f -" || "$*" == *" replace -f -" ]]; then
   payload="$(cat)"
   if [[ "$payload" == *'"kind":"Lease"'* ]]; then
+    printf '%s\t%s\n' "$*" "$payload" >>"${COMMAND_LOG}.lease-requests"
     if [[ "${KUBECTL_TRANSFER_BEFORE_LEASE_RELEASE:-false}" == "true" ]] && printf '%s' "$payload" | ruby -rjson -e 'exit(JSON.parse(STDIN.read).dig("spec", "holderIdentity").to_s.empty? ? 0 : 1)'; then
       printf '%s\n' '{"metadata":{"uid":"successor-uid","resourceVersion":"2"},"spec":{"holderIdentity":"successor-execution","renewTime":"2099-01-01T00:00:00Z","leaseDurationSeconds":900}}' >"${COMMAND_LOG}.lease"
       exit 1
@@ -195,6 +204,7 @@ chmod +x "$temp_dir/bin/helm" "$temp_dir/bin/kubectl"
 
 PATH="$temp_dir/bin:$PATH" \
 COMMAND_LOG="$log" \
+RUBYOPT="-r$timestamp_shim" \
 KUBECTL_MCP_DEPLOYMENT_STATE=absent \
 HELM_ROLLOUT_ID=test-run \
 GKE_HELM_DRY_RUN=false \
@@ -202,6 +212,13 @@ GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-contr
 GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
 GKE_HELM_RELEASE_VALUES="$release_values" \
 "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
+ruby -rjson -e '
+  create = File.readlines(ARGV.fetch(0), chomp: true).find { |line| line.start_with?("-n coyote-ci create -f -\t") }
+  abort "rollout Lease create request was not recorded" if create.nil?
+  lease = JSON.parse(create.split("\t", 2).fetch(1))
+  expected = "2026-10-30T11:45:38.000000Z"
+  abort "Lease create timestamps=#{lease.fetch("spec").slice("acquireTime", "renewTime")}" unless lease.dig("spec", "acquireTime") == expected && lease.dig("spec", "renewTime") == expected
+' "${log}.lease-requests"
 
 worker_values_without_name="$temp_dir/worker-without-name.yaml"
 ruby -ryaml -e '
@@ -790,6 +807,7 @@ fi
 migration_renewal_log="$temp_dir/migration-renewal-commands.log"
 PATH="$temp_dir/bin:$PATH" \
 COMMAND_LOG="$migration_renewal_log" \
+RUBYOPT="-r$timestamp_shim" \
 KUBECTL_SLEEP_MIGRATION_WAIT=2 \
 KUBECTL_MCP_DEPLOYMENT_STATE=absent \
 HELM_ROLLOUT_ID=test-migration-renewal \
@@ -803,6 +821,15 @@ grep -q 'kubectl -n coyote-ci replace -f -' "$migration_renewal_log" || {
   cat "$migration_renewal_log" >&2
   exit 1
 }
+ruby -rjson -e '
+  renewal = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t", 2) }.find do |command, payload|
+    command.include?(" replace -f -") && !JSON.parse(payload).dig("spec", "holderIdentity").to_s.empty?
+  end
+  abort "rollout Lease renewal request was not recorded" if renewal.nil?
+  lease = JSON.parse(renewal.fetch(1))
+  expected = "2026-10-30T11:45:38.000000Z"
+  abort "Lease renewal timestamps=#{lease.fetch("spec").slice("acquireTime", "renewTime")}" unless lease.dig("spec", "acquireTime") == expected && lease.dig("spec", "renewTime") == expected
+' "${migration_renewal_log}.lease-requests"
 
 migration_loss_log="$temp_dir/migration-lease-loss-commands.log"
 if PATH="$temp_dir/bin:$PATH" \
