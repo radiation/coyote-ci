@@ -20,6 +20,16 @@ func validManifest() Manifest {
 	}}
 }
 
+func validV2Manifest() Manifest {
+	return Manifest{SchemaVersion: ManifestSchemaVersionV2, Release: "0.0.10", Source: SourceIdentity{Commit: strings.Repeat("a", 40), CreatedAt: "2026-11-03T14:00:00Z"}, Components: map[string]Component{
+		"server":   {Version: "1.2.3", Image: "registry.example/coyote-server@sha256:" + strings.Repeat("a", 64)},
+		"frontend": {Version: "2.3.4", Image: "registry.example/coyote-frontend@sha256:" + strings.Repeat("b", 64)},
+		"worker":   {Version: "1.2.3", Image: "registry.example/coyote-worker@sha256:" + strings.Repeat("c", 64)},
+		"mcp":      {Version: "0.4.0", Image: "registry.example/coyote-mcp@sha256:" + strings.Repeat("d", 64)},
+		"migrate":  {Version: "3.0.0", Image: "registry.example/coyote-migrate@sha256:" + strings.Repeat("e", 64)},
+	}}
+}
+
 func TestManifestValidation(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -41,6 +51,8 @@ func TestManifestValidation(t *testing.T) {
 		{"bad digest", func(m *Manifest) { m.Images["server"] = "registry.example/coyote-server@sha256:bad" }},
 		{"bad commit", func(m *Manifest) { m.Source.Commit = "abc123" }},
 		{"schema", func(m *Manifest) { m.SchemaVersion = 2 }},
+		{"components", func(m *Manifest) { m.Components = validV2Manifest().Components }},
+		{"empty components", func(m *Manifest) { m.Components = map[string]Component{} }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -52,6 +64,66 @@ func TestManifestValidation(t *testing.T) {
 			}
 			if tc.name != "valid" && err == nil {
 				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestV2ManifestValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Manifest)
+	}{
+		{"valid", func(*Manifest) {}},
+		{"missing component", func(m *Manifest) { delete(m.Components, "mcp") }},
+		{"missing version", func(m *Manifest) { m.Components["mcp"] = Component{Image: m.Components["mcp"].Image} }},
+		{"mutable image", func(m *Manifest) {
+			m.Components["mcp"] = Component{Version: "0.4.0", Image: "registry.example/coyote-mcp:latest"}
+		}},
+		{"legacy images", func(m *Manifest) { m.Images = validManifest().Images }},
+		{"empty legacy images", func(m *Manifest) { m.Images = map[string]string{} }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := validV2Manifest()
+			tc.mutate(&manifest)
+			err := manifest.Validate()
+			if tc.name == "valid" && err != nil {
+				t.Fatalf("validate: %v", err)
+			}
+			if tc.name != "valid" && err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestManifestFormatExclusivityAfterJSONDecoding(t *testing.T) {
+	tests := []struct {
+		name      string
+		manifest  Manifest
+		forbidden string
+	}{
+		{"v1 empty components", validManifest(), "components"},
+		{"v2 empty images", validV2Manifest(), "images"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			data, marshalErr := json.Marshal(tc.manifest)
+			if marshalErr != nil {
+				t.Fatalf("marshal manifest: %v", marshalErr)
+			}
+			var document map[string]any
+			if decodeErr := json.Unmarshal(data, &document); decodeErr != nil {
+				t.Fatalf("decode manifest document: %v", decodeErr)
+			}
+			document[tc.forbidden] = map[string]any{}
+			data, marshalErr = json.Marshal(document)
+			if marshalErr != nil {
+				t.Fatalf("marshal document with forbidden field: %v", marshalErr)
+			}
+			if _, parseErr := ParseManifest(data); parseErr == nil {
+				t.Fatal("expected forbidden empty object to fail validation")
 			}
 		})
 	}
@@ -91,6 +163,64 @@ func TestResolveAndOverlay(t *testing.T) {
 		if !strings.Contains(output.String(), "worker: "+manifest.Images["worker"]) || !strings.Contains(output.String(), "manifestDigest: "+digest) {
 			t.Fatalf("unexpected overlay: %s", output.String())
 		}
+	}
+}
+
+func TestV2ManifestParsingResolutionAndOverlay(t *testing.T) {
+	root := t.TempDir()
+	publisher, publisherErr := NewFilePublisher(root)
+	if publisherErr != nil {
+		t.Fatalf("publisher: %v", publisherErr)
+	}
+	manifest := validV2Manifest()
+	digest, publishErr := publisher.PublishManifest(manifest)
+	if publishErr != nil {
+		t.Fatalf("publish manifest: %v", publishErr)
+	}
+	source, sourceErr := NewFileSource(root)
+	if sourceErr != nil {
+		t.Fatalf("source: %v", sourceErr)
+	}
+	resolved, resolveErr := Resolve(context.Background(), source, manifest.Release, "")
+	if resolveErr != nil {
+		t.Fatalf("resolve: %v", resolveErr)
+	}
+	if resolved.Manifest.Components["mcp"].Version != "0.4.0" {
+		t.Fatalf("unexpected MCP component: %+v", resolved.Manifest.Components["mcp"])
+	}
+	var output bytes.Buffer
+	if overlayErr := WriteValuesOverlay(&output, resolved); overlayErr != nil {
+		t.Fatalf("overlay: %v", overlayErr)
+	}
+	want := "release:\n  version: 0.0.10\n  channel: \n  manifestDigest: " + digest + "\nimages:\n  server: " + manifest.Components["server"].Image + "\n  frontend: " + manifest.Components["frontend"].Image + "\n  worker: " + manifest.Components["worker"].Image + "\n  migrate: " + manifest.Components["migrate"].Image + "\n  mcp: " + manifest.Components["mcp"].Image + "\n"
+	if output.String() != want {
+		t.Fatalf("unexpected overlay:\n%s", output.String())
+	}
+}
+
+func TestManifestSerializationAndDigestCompatibility(t *testing.T) {
+	v1 := validManifest()
+	v1Data, marshalV1Err := json.MarshalIndent(v1, "", "  ")
+	if marshalV1Err != nil {
+		t.Fatalf("marshal v1: %v", marshalV1Err)
+	}
+	v1Data = append(v1Data, '\n')
+	if got, want := Digest(v1Data), "sha256:575e21c962745837da2f9708898bb440f37eb3a8eb8a34b6505c3eadf4a646dd"; got != want {
+		t.Fatalf("v1 digest changed: got %s want %s", got, want)
+	}
+	v2 := validV2Manifest()
+	first, marshalFirstErr := json.MarshalIndent(v2, "", "  ")
+	if marshalFirstErr != nil {
+		t.Fatalf("marshal v2 first: %v", marshalFirstErr)
+	}
+	second, marshalSecondErr := json.MarshalIndent(v2, "", "  ")
+	if marshalSecondErr != nil {
+		t.Fatalf("marshal v2 second: %v", marshalSecondErr)
+	}
+	first = append(first, '\n')
+	second = append(second, '\n')
+	if string(first) != string(second) || Digest(first) != Digest(second) {
+		t.Fatal("v2 manifest serialization or digest is not deterministic")
 	}
 }
 

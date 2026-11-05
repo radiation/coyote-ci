@@ -1,1 +1,74 @@
-{"$schema":"https://json-schema.org/draft-07/schema#","type":"object","required":["schema_version","release","source","images"],"properties":{"schema_version":{"const":1},"release":{"type":"string","pattern":"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"},"source":{"type":"object","required":["commit","created_at"],"properties":{"commit":{"type":"string","pattern":"^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"},"created_at":{"type":"string","format":"date-time"}}},"images":{"type":"object","required":["server","frontend","worker","migrate"],"additionalProperties":false,"properties":{"server":{"type":"string","pattern":"^[^@]+/[^@/:]+@sha256:[a-f0-9]{64}$"},"frontend":{"type":"string","pattern":"^[^@]+/[^@/:]+@sha256:[a-f0-9]{64}$"},"worker":{"type":"string","pattern":"^[^@]+/[^@/:]+@sha256:[a-f0-9]{64}$"},"migrate":{"type":"string","pattern":"^[^@]+/[^@/:]+@sha256:[a-f0-9]{64}$"}}}}}
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "definitions": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "image": {
+      "type": "string",
+      "pattern": "^[^@]+/[^@/:]+@sha256:[a-f0-9]{64}$"
+    },
+    "source": {
+      "type": "object",
+      "required": ["commit", "created_at"],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "component": {
+      "type": "object",
+      "required": ["version", "image"],
+      "additionalProperties": false,
+      "properties": {
+        "version": {"$ref": "#/definitions/semver"},
+        "image": {"$ref": "#/definitions/image"}
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "not": {"required": ["components"]},
+      "required": ["schema_version", "release", "source", "images"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "release": {"$ref": "#/definitions/semver"},
+        "source": {"$ref": "#/definitions/source"},
+        "images": {
+          "type": "object",
+          "required": ["server", "frontend", "worker", "migrate"],
+          "additionalProperties": false,
+          "properties": {
+            "server": {"$ref": "#/definitions/image"},
+            "frontend": {"$ref": "#/definitions/image"},
+            "worker": {"$ref": "#/definitions/image"},
+            "migrate": {"$ref": "#/definitions/image"}
+          }
+        }
+      }
+    },
+    {
+      "not": {"required": ["images"]},
+      "required": ["schema_version", "release", "source", "components"],
+      "properties": {
+        "schema_version": {"const": 2},
+        "release": {"$ref": "#/definitions/semver"},
+        "source": {"$ref": "#/definitions/source"},
+        "components": {
+          "type": "object",
+          "required": ["server", "frontend", "worker", "mcp", "migrate"],
+          "additionalProperties": false,
+          "properties": {
+            "server": {"$ref": "#/definitions/component"},
+            "frontend": {"$ref": "#/definitions/component"},
+            "worker": {"$ref": "#/definitions/component"},
+            "mcp": {"$ref": "#/definitions/component"},
+            "migrate": {"$ref": "#/definitions/component"}
+          }
+        }
+      }
+    }
+  ]
+}
