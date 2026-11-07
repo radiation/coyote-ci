@@ -33,10 +33,12 @@ COPY . .
 FROM source AS source-builder
 
 ARG COYOTE_APPLICATION_VERSION=dev
+ARG COYOTE_SERVER_VERSION=
+ARG COYOTE_WORKER_VERSION=
 ARG COYOTE_COMMIT=unknown
 ARG COYOTE_BUILD_DATE=
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_APPLICATION_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o server ./cmd/server
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_APPLICATION_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o worker ./cmd/worker
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_SERVER_VERSION:-$COYOTE_APPLICATION_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_WORKER_VERSION:-$COYOTE_APPLICATION_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o worker ./cmd/worker
 
 FROM source AS mcp-builder
 
