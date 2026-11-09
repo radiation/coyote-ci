@@ -17,6 +17,15 @@ images:
   worker: example.invalid/coyote-worker@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
   migrate: example.invalid/coyote-migrate@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 EOF
+v2_release_values="$temp_dir/v2-release-images.yaml"
+cat >"$v2_release_values" <<'EOF'
+images:
+  server: example.invalid/coyote-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  frontend: example.invalid/coyote-frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  worker: example.invalid/coyote-worker@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  migrate: example.invalid/coyote-migrate@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  mcp: example.invalid/coyote-mcp@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+EOF
 
 cat >"$temp_dir/bin/helm" <<'EOF'
 #!/usr/bin/env bash
@@ -101,7 +110,7 @@ if [[ "$*" == *"get deployment/coyote-mcp"* ]]; then
   fi
   case "${KUBECTL_MCP_DEPLOYMENT_STATE:-absent}" in
     absent) ;;
-    managed) printf '%s\n' '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"Helm"},"annotations":{"meta.helm.sh/release-name":"coyote-ci","meta.helm.sh/release-namespace":"coyote-ci"}}}' ;;
+    managed) printf '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"Helm"},"annotations":{"meta.helm.sh/release-name":"coyote-ci","meta.helm.sh/release-namespace":"coyote-ci"}},"spec":{"template":{"spec":{"containers":[{"name":"mcp","image":"%s"}]}}}}\n' "${KUBECTL_MCP_IMAGE:-example.invalid/coyote-mcp@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee}" ;;
     unowned) printf '%s\n' '{"metadata":{}}' ;;
     other) printf '%s\n' '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"Helm"},"annotations":{"meta.helm.sh/release-name":"other-release","meta.helm.sh/release-namespace":"coyote-ci"}}}' ;;
     *) echo "unknown MCP deployment state: ${KUBECTL_MCP_DEPLOYMENT_STATE}" >&2; exit 2 ;;
@@ -299,6 +308,16 @@ mcp:
     allowDisabledAuth: false
 EOF
 
+PATH="$temp_dir/bin:$PATH" \
+COMMAND_LOG="$temp_dir/v2-disabled-commands.log" \
+KUBECTL_MCP_DEPLOYMENT_STATE=absent \
+HELM_ROLLOUT_ID=test-v2-disabled \
+GKE_HELM_DRY_RUN=false \
+GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
+GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+GKE_HELM_RELEASE_VALUES="$v2_release_values" \
+"$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
+
 mcp_log="$temp_dir/mcp-commands.log"
 PATH="$temp_dir/bin:$PATH" \
 COMMAND_LOG="$mcp_log" \
@@ -307,6 +326,7 @@ HELM_ROLLOUT_ID=test-mcp \
 GKE_HELM_DRY_RUN=false \
 GKE_HELM_CONTROL_PLANE_VALUES="$mcp_values" \
 GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+GKE_HELM_RELEASE_VALUES="$v2_release_values" \
 "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
 
 mcp_zero="$(grep -n -m1 'kubectl -n coyote-ci patch deployment/coyote-mcp .*--subresource=scale .*coyote-rollout .*replicas.:0' "$mcp_log" | cut -d: -f1)"
@@ -326,6 +346,7 @@ HELM_ROLLOUT_ID=test-first-enable \
 GKE_HELM_DRY_RUN=false \
 GKE_HELM_CONTROL_PLANE_VALUES="$mcp_values" \
 GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+GKE_HELM_RELEASE_VALUES="$v2_release_values" \
 "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
 
 ! grep -q 'patch deployment/coyote-mcp .*replicas.:0' "$first_enable_log" || {
@@ -338,6 +359,106 @@ grep -q 'patch deployment/coyote-mcp .*replicas.:2' "$first_enable_log" || {
   cat "$first_enable_log" >&2
   exit 1
 }
+grep -q '"mcp": {' "$GKE_HELM_ROLLOUT_STATE_DIR/staging-test-first-enable.json" && grep -q '"state": "absent"' "$GKE_HELM_ROLLOUT_STATE_DIR/staging-test-first-enable.json" || {
+  echo "first-time MCP enablement did not checkpoint its initial absence" >&2
+  exit 1
+}
+
+mutable_mcp_values="$temp_dir/mutable-mcp-release-images.yaml"
+cp "$v2_release_values" "$mutable_mcp_values"
+ruby -ryaml -e 'values = YAML.load_file(ARGV.fetch(0)); values.fetch("images")["mcp"] = "example.invalid/coyote-mcp:mutable"; File.write(ARGV.fetch(1), YAML.dump(values))' "$v2_release_values" "$mutable_mcp_values"
+mutable_mcp_log="$temp_dir/mutable-mcp-commands.log"
+if PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$mutable_mcp_log" \
+  KUBECTL_MCP_DEPLOYMENT_STATE=absent \
+  HELM_ROLLOUT_ID=test-mutable-mcp \
+  GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$mcp_values" \
+  GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+  GKE_HELM_RELEASE_VALUES="$mutable_mcp_values" \
+  "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>&1; then
+  echo "mutable MCP image must be rejected" >&2
+  exit 1
+fi
+if [[ -f "$mutable_mcp_log" ]] && grep -q ' patch deployment/\| apply -f -\|helm upgrade' "$mutable_mcp_log"; then
+  echo "mutable MCP image reached a cluster mutation" >&2
+  cat "$mutable_mcp_log" >&2
+  exit 1
+fi
+
+mcp_resume_log="$temp_dir/mcp-resume-commands.log"
+if PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$mcp_resume_log" \
+  HELM_FAIL_WORKER_UPGRADE=true \
+  KUBECTL_MCP_DEPLOYMENT_STATE=managed \
+  KUBECTL_MCP_IMAGE=example.invalid/coyote-mcp@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff \
+  HELM_ROLLOUT_ID=test-mcp-resume \
+  GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$mcp_values" \
+  GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+  GKE_HELM_RELEASE_VALUES="$v2_release_values" \
+  "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>&1; then
+  echo "MCP resume setup must stop at the worker upgrade" >&2
+  exit 1
+fi
+PATH="$temp_dir/bin:$PATH" \
+COMMAND_LOG="$temp_dir/mcp-resume-followup-commands.log" \
+KUBECTL_MIGRATION_JOB_STATUS=complete \
+KUBECTL_MCP_DEPLOYMENT_STATE=managed \
+HELM_ROLLOUT_ID=test-mcp-resume \
+GKE_HELM_OPERATION=resume \
+GKE_HELM_DRY_RUN=false \
+GKE_HELM_CONTROL_PLANE_VALUES="$mcp_values" \
+GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+GKE_HELM_RELEASE_VALUES="$v2_release_values" \
+"$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
+
+changed_mcp_values="$temp_dir/changed-mcp-release-images.yaml"
+cp "$v2_release_values" "$changed_mcp_values"
+ruby -ryaml -e 'values = YAML.load_file(ARGV.fetch(0)); values.fetch("images")["mcp"] = "example.invalid/coyote-mcp@sha256:9999999999999999999999999999999999999999999999999999999999999999"; File.write(ARGV.fetch(1), YAML.dump(values))' "$v2_release_values" "$changed_mcp_values"
+if PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$temp_dir/changed-mcp-resume-commands.log" \
+  KUBECTL_MIGRATION_JOB_STATUS=complete \
+  KUBECTL_MCP_DEPLOYMENT_STATE=managed \
+  HELM_ROLLOUT_ID=test-mcp-resume \
+  GKE_HELM_OPERATION=resume \
+  GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$mcp_values" \
+  GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+  GKE_HELM_RELEASE_VALUES="$changed_mcp_values" \
+  "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>&1; then
+  echo "resume must reject a changed MCP target image" >&2
+  exit 1
+fi
+if PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$temp_dir/changed-mcp-observed-resume-commands.log" \
+  KUBECTL_MIGRATION_JOB_STATUS=complete \
+  KUBECTL_MCP_DEPLOYMENT_STATE=managed \
+  KUBECTL_MCP_IMAGE=example.invalid/coyote-mcp@sha256:9999999999999999999999999999999999999999999999999999999999999999 \
+  HELM_ROLLOUT_ID=test-mcp-resume \
+  GKE_HELM_OPERATION=resume \
+  GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$mcp_values" \
+  GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+  GKE_HELM_RELEASE_VALUES="$v2_release_values" \
+  "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>&1; then
+  echo "resume must reject an unexpected MCP deployment image" >&2
+  exit 1
+fi
+if PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$temp_dir/mcp-disabled-resume-commands.log" \
+  KUBECTL_MIGRATION_JOB_STATUS=complete \
+  KUBECTL_MCP_DEPLOYMENT_STATE=absent \
+  HELM_ROLLOUT_ID=test-mcp-resume \
+  GKE_HELM_OPERATION=resume \
+  GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" \
+  GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+  GKE_HELM_RELEASE_VALUES="$release_values" \
+  "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>&1; then
+  echo "resume must reject an enabled-to-disabled MCP transition" >&2
+  exit 1
+fi
 
 lookup_error_log="$temp_dir/mcp-lookup-error-commands.log"
 if lookup_error_output="$(PATH="$temp_dir/bin:$PATH" \
@@ -347,6 +468,7 @@ if lookup_error_output="$(PATH="$temp_dir/bin:$PATH" \
   GKE_HELM_DRY_RUN=false \
   GKE_HELM_CONTROL_PLANE_VALUES="$mcp_values" \
   GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml" \
+  GKE_HELM_RELEASE_VALUES="$v2_release_values" \
   "$repo_root/scripts/gke-helm-rollout.sh" 2>&1)"; then
   echo "MCP deployment lookup error must stop the rollout" >&2
   exit 1
