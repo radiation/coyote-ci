@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"cloud.google.com/go/storage"
+	"google.golang.org/api/option"
 )
 
 func validManifest() Manifest {
@@ -304,9 +307,12 @@ func TestChannelIndexAndFileSourceFailures(t *testing.T) {
 func TestOpenStoreLocations(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "release store #1")
 	for _, location := range []string{root, "file://" + root} {
-		store, storeErr := OpenStore(location)
+		store, closer, storeErr := OpenStore(context.Background(), location)
 		if storeErr != nil {
 			t.Fatalf("OpenStore(%q): %v", location, storeErr)
+		}
+		if closer != nil {
+			t.Fatalf("OpenStore(%q) returned an unexpected closer", location)
 		}
 		if _, ok := store.(*FilePublisher); !ok {
 			t.Fatalf("OpenStore(%q) returned %T, want *FilePublisher", location, store)
@@ -326,7 +332,6 @@ func TestOpenStoreRejectsUnsupportedAndMalformedLocations(t *testing.T) {
 		location string
 		want     error
 	}{
-		{location: "gs://release-bucket/releases", want: ErrUnsupportedBackend},
 		{location: "s3://release-bucket/releases", want: ErrUnsupportedBackend},
 		{location: "gs://", want: ErrInvalidLocation},
 		{location: "gs://release-bucket:443/releases", want: ErrInvalidLocation},
@@ -341,11 +346,43 @@ func TestOpenStoreRejectsUnsupportedAndMalformedLocations(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.location, func(t *testing.T) {
-			_, storeErr := OpenStore(tc.location)
+			_, _, storeErr := OpenStore(context.Background(), tc.location)
 			if !errors.Is(storeErr, tc.want) {
 				t.Fatalf("OpenStore(%q) error=%v, want %v", tc.location, storeErr, tc.want)
 			}
 		})
+	}
+}
+
+func TestOpenStoreSelectsGCS(t *testing.T) {
+	store, closer, storeErr := openStore(context.Background(), "gs://release-bucket/releases", func(ctx context.Context) (*storage.Client, error) {
+		return storage.NewClient(ctx, option.WithoutAuthentication())
+	})
+	if storeErr != nil {
+		t.Fatalf("openStore: %v", storeErr)
+	}
+	if _, ok := store.(*GCSStore); !ok {
+		t.Fatalf("openStore returned %T, want *GCSStore", store)
+	}
+	if closer == nil {
+		t.Fatal("openStore did not return a GCS client closer")
+	}
+	if closeErr := closer.Close(); closeErr != nil {
+		t.Fatalf("close GCS client: %v", closeErr)
+	}
+}
+
+func TestOpenStoreFilesystemDoesNotCreateGCSClient(t *testing.T) {
+	called := false
+	store, closer, storeErr := openStore(context.Background(), t.TempDir(), func(context.Context) (*storage.Client, error) {
+		called = true
+		return nil, errors.New("GCS client must not be created")
+	})
+	if storeErr != nil {
+		t.Fatalf("openStore: %v", storeErr)
+	}
+	if _, ok := store.(*FilePublisher); !ok || closer != nil || called {
+		t.Fatalf("store=%T closer=%v GCS client called=%t", store, closer, called)
 	}
 }
 

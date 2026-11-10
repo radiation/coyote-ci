@@ -89,7 +89,27 @@ func (s *GCSStore) PublishManifest(ctx context.Context, manifest Manifest) (stri
 	if marshalErr != nil {
 		return "", marshalErr
 	}
-	objectName := s.manifestObjectName(manifest.Release)
+	return s.publishManifestData(ctx, manifest.Release, data)
+}
+
+func (s *GCSStore) ImportManifest(ctx context.Context, data []byte) (Manifest, string, error) {
+	manifest, parseErr := ParseManifest(data)
+	if parseErr != nil {
+		return Manifest{}, "", parseErr
+	}
+	digest, publishErr := s.publishManifestData(ctx, manifest.Release, data)
+	if publishErr != nil {
+		return Manifest{}, "", publishErr
+	}
+	return manifest, digest, nil
+}
+
+func (s *GCSStore) publishManifestData(ctx context.Context, releaseVersion string, data []byte) (string, error) {
+	ctx = releaseContext(ctx)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	objectName := s.manifestObjectName(releaseVersion)
 	createErr := s.objects.Create(ctx, objectName, data)
 	if createErr == nil {
 		return Digest(data), nil

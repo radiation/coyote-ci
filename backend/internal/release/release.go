@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"cloud.google.com/go/storage"
 )
 
 const (
@@ -88,6 +90,7 @@ type Source interface {
 
 type Publisher interface {
 	PublishManifest(context.Context, Manifest) (string, error)
+	ImportManifest(context.Context, []byte) (Manifest, string, error)
 	PromoteChannel(context.Context, string, string, string) error
 	PromoteCoyoteLatestIfNewer(context.Context, string, string) (bool, error)
 }
@@ -285,33 +288,47 @@ func NewFileSource(location string) (*FileSource, error) {
 	return &FileSource{root: filepath.Clean(location)}, nil
 }
 
-// OpenStore resolves a release source location to its backing store.
-func OpenStore(location string) (Store, error) {
+// OpenStore resolves a release source location to its backing store. The
+// returned closer is non-nil only when the selected provider owns a client.
+func OpenStore(ctx context.Context, location string) (Store, io.Closer, error) {
+	return openStore(ctx, location, func(clientContext context.Context) (*storage.Client, error) {
+		return storage.NewClient(clientContext)
+	})
+}
+
+func openStore(ctx context.Context, location string, newGCSClient func(context.Context) (*storage.Client, error)) (Store, io.Closer, error) {
 	trimmed := strings.TrimSpace(location)
 	if strings.HasPrefix(trimmed, "file:") {
 		if !strings.HasPrefix(trimmed, "file://") {
-			return nil, fmt.Errorf("%w: %q", ErrInvalidLocation, location)
+			return nil, nil, fmt.Errorf("%w: %q", ErrInvalidLocation, location)
 		}
-		return NewFileStore(trimmed)
+		store, storeErr := NewFileStore(trimmed)
+		return store, nil, storeErr
 	}
 	if strings.HasPrefix(trimmed, "gs:") {
-		return openGCSStoreLocation(trimmed)
+		if _, _, parseErr := parseGCSStoreLocation(trimmed); parseErr != nil {
+			return nil, nil, parseErr
+		}
+		client, clientErr := newGCSClient(releaseContext(ctx))
+		if clientErr != nil {
+			return nil, nil, clientErr
+		}
+		store, storeErr := NewGCSStore(client, trimmed)
+		if storeErr != nil {
+			_ = client.Close()
+			return nil, nil, storeErr
+		}
+		return store, client, nil
 	}
 	if strings.Contains(trimmed, "://") {
 		parsed, parseErr := url.Parse(trimmed)
 		if parseErr != nil || parsed.Scheme == "" {
-			return nil, fmt.Errorf("%w: %q", ErrInvalidLocation, location)
+			return nil, nil, fmt.Errorf("%w: %q", ErrInvalidLocation, location)
 		}
-		return nil, fmt.Errorf("%w: %s", ErrUnsupportedBackend, parsed.Scheme)
+		return nil, nil, fmt.Errorf("%w: %s", ErrUnsupportedBackend, parsed.Scheme)
 	}
-	return NewFileStore(trimmed)
-}
-
-func openGCSStoreLocation(location string) (Store, error) {
-	if _, _, parseErr := parseGCSStoreLocation(location); parseErr != nil {
-		return nil, parseErr
-	}
-	return nil, fmt.Errorf("%w: gs", ErrUnsupportedBackend)
+	store, storeErr := NewFileStore(trimmed)
+	return store, nil, storeErr
 }
 
 func parseGCSStoreLocation(location string) (string, string, error) {
@@ -409,7 +426,27 @@ func (p *FilePublisher) PublishManifest(ctx context.Context, manifest Manifest) 
 		return "", err
 	}
 	data = append(data, '\n')
-	path := filepath.Join(p.root, "releases", manifest.Release+".json")
+	return p.publishManifestData(ctx, manifest.Release, data)
+}
+
+func (p *FilePublisher) ImportManifest(ctx context.Context, data []byte) (Manifest, string, error) {
+	manifest, parseErr := ParseManifest(data)
+	if parseErr != nil {
+		return Manifest{}, "", parseErr
+	}
+	digest, publishErr := p.publishManifestData(ctx, manifest.Release, data)
+	if publishErr != nil {
+		return Manifest{}, "", publishErr
+	}
+	return manifest, digest, nil
+}
+
+func (p *FilePublisher) publishManifestData(ctx context.Context, releaseVersion string, data []byte) (string, error) {
+	ctx = releaseContext(ctx)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	path := filepath.Join(p.root, "releases", releaseVersion+".json")
 	releaseLock, lockErr := p.acquireLock(ctx, path+".lock")
 	if lockErr != nil {
 		return "", lockErr

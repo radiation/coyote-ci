@@ -1,6 +1,7 @@
 package release
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -69,6 +70,40 @@ func TestGCSStoreManifestPublicationPreservesWriteAndReconciliationErrors(t *tes
 	_, publishErr := store.PublishManifest(context.Background(), validManifest())
 	if !errors.Is(publishErr, writeErr) || !errors.Is(publishErr, reconcileErr) {
 		t.Fatalf("publish error=%v", publishErr)
+	}
+}
+
+func TestGCSStoreImportsRawManifestBytes(t *testing.T) {
+	objects := newReleaseObjectStoreFake()
+	store, storeErr := newGCSStore(objects, "")
+	if storeErr != nil {
+		t.Fatalf("newGCSStore: %v", storeErr)
+	}
+	raw, marshalErr := marshalManifest(validManifest())
+	if marshalErr != nil {
+		t.Fatalf("marshalManifest: %v", marshalErr)
+	}
+	raw = append([]byte("\n"), raw...)
+	manifest, digest, importErr := store.ImportManifest(context.Background(), raw)
+	if importErr != nil || manifest.Release != "2.5.1" || digest != Digest(raw) {
+		t.Fatalf("ImportManifest manifest=%+v digest=%q err=%v", manifest, digest, importErr)
+	}
+	stored, found := objects.object("releases/2.5.1.json")
+	if !found || !bytes.Equal(stored.data, raw) {
+		t.Fatalf("stored data=%q found=%t", stored.data, found)
+	}
+	if _, repeatedDigest, repeatErr := store.ImportManifest(context.Background(), raw); repeatErr != nil || repeatedDigest != digest {
+		t.Fatalf("idempotent import digest=%q err=%v", repeatedDigest, repeatErr)
+	}
+	conflicting := bytes.Replace(raw, []byte("2026-10-03"), []byte("2026-10-04"), 1)
+	if _, _, conflictErr := store.ImportManifest(context.Background(), conflicting); !errors.Is(conflictErr, ErrManifestConflict) {
+		t.Fatalf("conflicting import error=%v", conflictErr)
+	}
+	if _, found := objects.object("channels.json"); found {
+		t.Fatal("raw import created a channel index")
+	}
+	if _, _, invalidErr := store.ImportManifest(context.Background(), []byte("{")); invalidErr == nil {
+		t.Fatal("expected invalid raw manifest error")
 	}
 }
 

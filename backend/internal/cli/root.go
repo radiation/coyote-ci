@@ -18,6 +18,7 @@ import (
 	cliconfig "github.com/radiation/coyote-ci/backend/internal/cli/config"
 	"github.com/radiation/coyote-ci/backend/internal/cli/credentials"
 	"github.com/radiation/coyote-ci/backend/internal/cli/output"
+	releases "github.com/radiation/coyote-ci/backend/internal/release"
 	"github.com/radiation/coyote-ci/backend/internal/versioninfo"
 )
 
@@ -27,18 +28,21 @@ type ConfigStore interface {
 	Path() (string, error)
 }
 
+type ReleaseStoreOpener func(context.Context, string) (releases.Store, io.Closer, error)
+
 type Dependencies struct {
-	Context      context.Context
-	Stdout       io.Writer
-	Stderr       io.Writer
-	Stdin        io.Reader
-	ConfigStore  ConfigStore
-	Credentials  credentials.Store
-	HTTPClient   *http.Client
-	PromptSecret func(string) (string, error)
-	Getenv       func(string) string
-	ConfigPath   string
-	Args         []string
+	Context          context.Context
+	Stdout           io.Writer
+	Stderr           io.Writer
+	Stdin            io.Reader
+	ConfigStore      ConfigStore
+	Credentials      credentials.Store
+	HTTPClient       *http.Client
+	PromptSecret     func(string) (string, error)
+	Getenv           func(string) string
+	ConfigPath       string
+	Args             []string
+	OpenReleaseStore ReleaseStoreOpener
 }
 
 type ExitError struct {
@@ -61,14 +65,15 @@ func (e *ExitError) Unwrap() error {
 }
 
 type app struct {
-	stdout       io.Writer
-	stderr       io.Writer
-	stdin        io.Reader
-	configStore  ConfigStore
-	credentials  credentials.Store
-	httpClient   *http.Client
-	promptSecret func(string) (string, error)
-	getenv       func(string) string
+	stdout           io.Writer
+	stderr           io.Writer
+	stdin            io.Reader
+	configStore      ConfigStore
+	credentials      credentials.Store
+	httpClient       *http.Client
+	promptSecret     func(string) (string, error)
+	getenv           func(string) string
+	openReleaseStore ReleaseStoreOpener
 
 	flagContext string
 	flagServer  string
@@ -143,13 +148,17 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 		getenv = os.Getenv
 	}
 	application := &app{
-		stdout:      stdout,
-		stderr:      stderr,
-		stdin:       stdin,
-		configStore: configStore,
-		credentials: credentialStore,
-		httpClient:  deps.HTTPClient,
-		getenv:      getenv,
+		stdout:           stdout,
+		stderr:           stderr,
+		stdin:            stdin,
+		configStore:      configStore,
+		credentials:      credentialStore,
+		httpClient:       deps.HTTPClient,
+		getenv:           getenv,
+		openReleaseStore: deps.OpenReleaseStore,
+	}
+	if application.openReleaseStore == nil {
+		application.openReleaseStore = releases.OpenStore
 	}
 	application.promptSecret = deps.PromptSecret
 	if application.promptSecret == nil {

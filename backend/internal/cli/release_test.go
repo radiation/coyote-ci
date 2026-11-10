@@ -2,7 +2,10 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +17,8 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/cli/credentials"
 	releases "github.com/radiation/coyote-ci/backend/internal/release"
 )
+
+type releaseContextKey struct{}
 
 func TestReleaseResolveCommand(t *testing.T) {
 	root := t.TempDir()
@@ -97,6 +102,202 @@ func TestReleaseCommandFailures(t *testing.T) {
 	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Args: []string{"release", "publish", "--manifest", validManifestPath, "--release-source", blockedSource}}); code != 1 {
 		t.Fatalf("expected blocked source exit code 1, got %d", code)
 	}
+}
+
+func TestReleaseRawImportAndFetchFilesystem(t *testing.T) {
+	manifestPath := writeCLIManifest(t, t.TempDir())
+	raw, readErr := os.ReadFile(manifestPath)
+	if readErr != nil {
+		t.Fatalf("read manifest: %v", readErr)
+	}
+	raw = append([]byte("\n"), raw...)
+	rawPath := filepath.Join(t.TempDir(), "historical.json")
+	if writeErr := os.WriteFile(rawPath, raw, 0o600); writeErr != nil {
+		t.Fatalf("write raw manifest: %v", writeErr)
+	}
+	source := t.TempDir()
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	args := []string{"release", "import", "--file", rawPath, "--release-source", source, "--expected-digest", releases.Digest(raw)}
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Args: args}); code != 0 {
+		t.Fatalf("import exit=%d stderr=%s", code, stderr.String())
+	}
+	if _, channelErr := os.Stat(filepath.Join(source, "channels.json")); !os.IsNotExist(channelErr) {
+		t.Fatalf("import created channels.json: %v", channelErr)
+	}
+
+	fetchedPath := filepath.Join(t.TempDir(), "fetched.json")
+	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: stderr, Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", "file://" + source, "--output", fetchedPath}}); code != 0 {
+		t.Fatalf("fetch exit=%d stderr=%s", code, stderr.String())
+	}
+	fetched, fetchReadErr := os.ReadFile(fetchedPath)
+	if fetchReadErr != nil {
+		t.Fatalf("read fetched manifest: %v", fetchReadErr)
+	}
+	if !bytes.Equal(fetched, raw) {
+		t.Fatalf("fetched bytes changed\nwant=%q\n got=%q", raw, fetched)
+	}
+
+	stdout.Reset()
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", source, "--output", "-"}}); code != 0 {
+		t.Fatalf("stdout fetch exit=%d stderr=%s", code, stderr.String())
+	}
+	if !bytes.Equal(stdout.Bytes(), raw) {
+		t.Fatalf("stdout bytes changed\nwant=%q\n got=%q", raw, stdout.Bytes())
+	}
+
+	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: stderr, Args: args}); code != 0 {
+		t.Fatalf("idempotent import exit=%d stderr=%s", code, stderr.String())
+	}
+	conflicting := bytes.Replace(raw, []byte("2026-10-03"), []byte("2026-10-04"), 1)
+	if writeErr := os.WriteFile(rawPath, conflicting, 0o600); writeErr != nil {
+		t.Fatalf("write conflicting manifest: %v", writeErr)
+	}
+	conflictArgs := []string{"release", "import", "--file", rawPath, "--release-source", source, "--expected-digest", releases.Digest(conflicting)}
+	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: stderr, Args: conflictArgs}); code != 1 {
+		t.Fatalf("conflicting import exit=%d want 1 stderr=%s", code, stderr.String())
+	}
+	stored, storedErr := os.ReadFile(filepath.Join(source, "releases", "2.5.1.json"))
+	if storedErr != nil || !bytes.Equal(stored, raw) {
+		t.Fatalf("stored manifest changed data=%q err=%v", stored, storedErr)
+	}
+}
+
+func TestReleaseRawImportAndFetchFailures(t *testing.T) {
+	source := t.TempDir()
+	invalidPath := filepath.Join(t.TempDir(), "invalid.json")
+	if writeErr := os.WriteFile(invalidPath, []byte("{"), 0o600); writeErr != nil {
+		t.Fatalf("write invalid manifest: %v", writeErr)
+	}
+	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Args: []string{"release", "import", "--file", invalidPath, "--release-source", source, "--expected-digest", "sha256:" + strings.Repeat("a", 64)}}); code != 2 {
+		t.Fatalf("invalid import exit=%d want 2", code)
+	}
+
+	manifestPath := writeCLIManifest(t, t.TempDir())
+	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Args: []string{"release", "import", "--file", manifestPath, "--release-source", source, "--expected-digest", "sha256:" + strings.Repeat("a", 64)}}); code != 2 {
+		t.Fatalf("digest mismatch exit=%d want 2", code)
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "preserve.json")
+	if writeErr := os.WriteFile(outputPath, []byte("preserve"), 0o600); writeErr != nil {
+		t.Fatalf("write output: %v", writeErr)
+	}
+	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", source, "--output", outputPath}}); code != 1 {
+		t.Fatalf("missing fetch exit=%d want 1", code)
+	}
+	output, outputErr := os.ReadFile(outputPath)
+	if outputErr != nil || string(output) != "preserve" {
+		t.Fatalf("failed fetch changed output=%q err=%v", output, outputErr)
+	}
+}
+
+func TestReleaseGCSStoreSelectionContextAndCleanup(t *testing.T) {
+	raw := []byte("{\"raw\":true}\n")
+	store := &releaseStoreFake{document: releases.Document{Data: raw, Digest: releases.Digest(raw)}}
+	closer := &releaseStoreCloserFake{}
+	contextKey := releaseContextKey{}
+	ctx := context.WithValue(context.Background(), contextKey, "release-gcs")
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	code := Run(Dependencies{
+		Context: ctx,
+		Stdout:  stdout,
+		Stderr:  stderr,
+		OpenReleaseStore: func(openContext context.Context, location string) (releases.Store, io.Closer, error) {
+			if location != "gs://release-bucket/releases" {
+				t.Fatalf("release source=%q", location)
+			}
+			if openContext.Value(contextKey) != "release-gcs" {
+				t.Fatal("opener did not receive command context")
+			}
+			return store, closer, nil
+		},
+		Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", "gs://release-bucket/releases", "--output", "-"},
+	})
+	if code != 0 {
+		t.Fatalf("GCS fetch exit=%d stderr=%s", code, stderr.String())
+	}
+	if !bytes.Equal(stdout.Bytes(), raw) || store.fetchContext.Value(contextKey) != "release-gcs" {
+		t.Fatalf("unexpected fetch bytes=%q context=%v", stdout.Bytes(), store.fetchContext)
+	}
+	if closer.closed != 1 {
+		t.Fatalf("GCS client close calls=%d want 1", closer.closed)
+	}
+
+	store.fetchErr = releases.ErrNotFound
+	outputPath := filepath.Join(t.TempDir(), "preserve.json")
+	if writeErr := os.WriteFile(outputPath, []byte("preserve"), 0o600); writeErr != nil {
+		t.Fatalf("write output: %v", writeErr)
+	}
+	if code = Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: stderr, OpenReleaseStore: func(context.Context, string) (releases.Store, io.Closer, error) {
+		return store, closer, nil
+	}, Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", "gs://release-bucket/releases", "--output", outputPath}}); code != 1 {
+		t.Fatalf("failed GCS fetch exit=%d want 1", code)
+	}
+	output, outputErr := os.ReadFile(outputPath)
+	if outputErr != nil || string(output) != "preserve" {
+		t.Fatalf("failed GCS fetch changed output=%q err=%v", output, outputErr)
+	}
+	if closer.closed != 2 {
+		t.Fatalf("GCS client close calls=%d want 2", closer.closed)
+	}
+
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	store.fetchErr = nil
+	if code = Run(Dependencies{Context: canceledContext, Stdout: &bytes.Buffer{}, Stderr: stderr, OpenReleaseStore: func(context.Context, string) (releases.Store, io.Closer, error) {
+		return store, closer, nil
+	}, Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", "gs://release-bucket/releases", "--output", "-"}}); code != 1 {
+		t.Fatalf("canceled GCS fetch exit=%d want 1", code)
+	}
+	if !errors.Is(store.fetchContext.Err(), context.Canceled) {
+		t.Fatalf("fetch context error=%v", store.fetchContext.Err())
+	}
+	if closer.closed != 3 {
+		t.Fatalf("GCS client close calls=%d want 3", closer.closed)
+	}
+}
+
+type releaseStoreFake struct {
+	document     releases.Document
+	fetchErr     error
+	fetchContext context.Context
+}
+
+func (s *releaseStoreFake) FetchManifest(ctx context.Context, _ string) (releases.Document, error) {
+	s.fetchContext = ctx
+	if contextErr := ctx.Err(); contextErr != nil {
+		return releases.Document{}, contextErr
+	}
+	if s.fetchErr != nil {
+		return releases.Document{}, s.fetchErr
+	}
+	return s.document, nil
+}
+
+func (s *releaseStoreFake) FetchChannelIndex(context.Context) (releases.ChannelIndex, error) {
+	return releases.ChannelIndex{}, errors.New("not implemented")
+}
+
+func (s *releaseStoreFake) PublishManifest(context.Context, releases.Manifest) (string, error) {
+	return "", errors.New("not implemented")
+}
+
+func (s *releaseStoreFake) ImportManifest(context.Context, []byte) (releases.Manifest, string, error) {
+	return releases.Manifest{}, "", errors.New("not implemented")
+}
+
+func (s *releaseStoreFake) PromoteChannel(context.Context, string, string, string) error {
+	return errors.New("not implemented")
+}
+
+func (s *releaseStoreFake) PromoteCoyoteLatestIfNewer(context.Context, string, string) (bool, error) {
+	return false, errors.New("not implemented")
+}
+
+type releaseStoreCloserFake struct{ closed int }
+
+func (c *releaseStoreCloserFake) Close() error {
+	c.closed++
+	return nil
 }
 
 func TestReleaseOutputHelper(t *testing.T) {
