@@ -181,8 +181,8 @@ func TestReleaseRawImportAndFetchFailures(t *testing.T) {
 	if writeErr := os.WriteFile(outputPath, []byte("preserve"), 0o600); writeErr != nil {
 		t.Fatalf("write output: %v", writeErr)
 	}
-	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", source, "--output", outputPath}}); code != 1 {
-		t.Fatalf("missing fetch exit=%d want 1", code)
+	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", source, "--output", outputPath}}); code != releaseFetchNotFoundExitCode {
+		t.Fatalf("missing fetch exit=%d want %d", code, releaseFetchNotFoundExitCode)
 	}
 	output, outputErr := os.ReadFile(outputPath)
 	if outputErr != nil || string(output) != "preserve" {
@@ -229,8 +229,8 @@ func TestReleaseGCSStoreSelectionContextAndCleanup(t *testing.T) {
 	}
 	if code = Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: stderr, OpenReleaseStore: func(context.Context, string) (releases.Store, io.Closer, error) {
 		return store, closer, nil
-	}, Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", "gs://release-bucket/releases", "--output", outputPath}}); code != 1 {
-		t.Fatalf("failed GCS fetch exit=%d want 1", code)
+	}, Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", "gs://release-bucket/releases", "--output", outputPath}}); code != releaseFetchNotFoundExitCode {
+		t.Fatalf("failed GCS fetch exit=%d want %d", code, releaseFetchNotFoundExitCode)
 	}
 	output, outputErr := os.ReadFile(outputPath)
 	if outputErr != nil || string(output) != "preserve" {
@@ -238,6 +238,16 @@ func TestReleaseGCSStoreSelectionContextAndCleanup(t *testing.T) {
 	}
 	if closer.closed != 2 {
 		t.Fatalf("GCS client close calls=%d want 2", closer.closed)
+	}
+
+	store.fetchErr = errors.New("permission denied: release document not found in policy detail")
+	if code = Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: stderr, OpenReleaseStore: func(context.Context, string) (releases.Store, io.Closer, error) {
+		return store, closer, nil
+	}, Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", "gs://release-bucket/releases", "--output", outputPath}}); code != 1 {
+		t.Fatalf("permission fetch exit=%d want 1", code)
+	}
+	if closer.closed != 3 {
+		t.Fatalf("GCS client close calls=%d want 3", closer.closed)
 	}
 
 	canceledContext, cancel := context.WithCancel(context.Background())
@@ -251,8 +261,8 @@ func TestReleaseGCSStoreSelectionContextAndCleanup(t *testing.T) {
 	if !errors.Is(store.fetchContext.Err(), context.Canceled) {
 		t.Fatalf("fetch context error=%v", store.fetchContext.Err())
 	}
-	if closer.closed != 3 {
-		t.Fatalf("GCS client close calls=%d want 3", closer.closed)
+	if closer.closed != 4 {
+		t.Fatalf("GCS client close calls=%d want 4", closer.closed)
 	}
 }
 

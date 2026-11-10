@@ -14,6 +14,8 @@ import (
 	releases "github.com/radiation/coyote-ci/backend/internal/release"
 )
 
+const releaseFetchNotFoundExitCode = 3
+
 func (a *app) newReleaseCommand() *cobra.Command {
 	command := &cobra.Command{Use: "release", Short: "Resolve and publish Coyote software releases"}
 	command.AddCommand(a.newReleaseResolveCommand())
@@ -220,7 +222,7 @@ func (a *app) newReleasePublishCommand() *cobra.Command {
 	var manifestPath, sourceLocation, channel string
 	command := &cobra.Command{
 		Use:   "publish",
-		Short: "Publish an immutable release manifest to a filesystem release source",
+		Short: "Publish an immutable release manifest to a release store",
 		RunE: func(cmd *cobra.Command, _ []string) (commandErr error) {
 			if strings.TrimSpace(manifestPath) == "" || strings.TrimSpace(sourceLocation) == "" {
 				return &ExitError{Code: 2, Err: errors.New("--manifest and --release-source are required")}
@@ -276,6 +278,9 @@ func (a *app) newReleaseFetchCommand() *cobra.Command {
 			defer closeReleaseStore(&commandErr, closer)
 			document, fetchErr := store.FetchManifest(cmd.Context(), releaseVersion)
 			if fetchErr != nil {
+				if errors.Is(fetchErr, releases.ErrNotFound) {
+					return &ExitError{Code: releaseFetchNotFoundExitCode, Err: fetchErr}
+				}
 				return &ExitError{Code: 1, Err: fetchErr}
 			}
 			if outputPath == "-" {

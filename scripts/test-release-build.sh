@@ -53,11 +53,24 @@ cat >"$temp_dir/go" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$TEST_GO_LOG"
-manifest=""; release_source=""; channel=false
+command=""; manifest=""; release_source=""; release_version=""; output=""; channel=false
+for argument in "$@"; do
+  if [[ "$argument" == fetch || "$argument" == publish ]]; then
+    command="$argument"
+  fi
+done
 for ((i = 1; i <= $#; i++)); do
   if [[ "${!i}" == --manifest ]]; then
     next=$((i + 1))
     manifest="${!next}"
+  fi
+  if [[ "${!i}" == --version ]]; then
+    next=$((i + 1))
+    release_version="${!next}"
+  fi
+  if [[ "${!i}" == --output ]]; then
+    next=$((i + 1))
+    output="${!next}"
   fi
   if [[ "${!i}" == --release-source ]]; then
     next=$((i + 1))
@@ -67,12 +80,31 @@ for ((i = 1; i <= $#; i++)); do
     channel=true
   fi
 done
-[[ -n "$manifest" && -n "$release_source" ]] || exit 1
+[[ -n "$release_source" ]] || exit 1
+store_root="${TEST_RELEASE_STORE_ROOT:-$release_source}"
+if [[ "$command" == fetch ]]; then
+  [[ -n "$release_version" && -n "$output" ]] || exit 1
+  if [[ -n "${TEST_GO_FETCH_ERROR:-}" && ( -z "${TEST_GO_FETCH_ERROR_VERSION:-}" || "$release_version" == "$TEST_GO_FETCH_ERROR_VERSION" ) ]]; then
+    case "$TEST_GO_FETCH_ERROR" in
+      missing) echo "release document not found: $release_version" >&2; exit 3 ;;
+      permission) echo "${TEST_GO_FETCH_ERROR_TEXT:-permission denied fetching release manifest: $release_version}" >&2 ;;
+      transient) echo "temporary release store failure: $release_version" >&2 ;;
+      *) exit 1 ;;
+    esac
+	  exit 1
+  fi
+  source_manifest="$store_root/releases/$release_version.json"
+  [[ -f "$source_manifest" ]] || { echo "release document not found: $release_version" >&2; exit 3; }
+  cp "$source_manifest" "$output.tmp"
+  mv "$output.tmp" "$output"
+  exit 0
+fi
+[[ "$command" == publish && -n "$manifest" ]] || exit 1
 cp "$manifest" "$TEST_MANIFEST"
 if [[ "$channel" == false ]]; then
   [[ "${TEST_GO_MANIFEST_FAIL:-}" != true ]] || exit 1
-  mkdir -p "$release_source/releases"
-  cp "$manifest" "$release_source/releases/0.0.10.json"
+  mkdir -p "$store_root/releases"
+  cp "$manifest" "$store_root/releases/0.0.10.json"
 else
   [[ "${TEST_GO_CHANNEL_FAIL:-}" != true ]] || exit 1
   printf 'advanced\n' >>"$TEST_CHANNEL_LOG"
@@ -97,8 +129,13 @@ EOF
 }
 
 run_release() {
-  local store="$1" manifest="$2" docker_log="$3" go_log="$4" state_name tag_state promotion_count channel_log
+  local store="$1" manifest="$2" docker_log="$3" go_log="$4" state_name tag_state promotion_count channel_log store_root release_channel=latest argument
   shift 4
+  for argument in "$@"; do
+    if [[ "$argument" == RELEASE_CHANNEL=* ]]; then
+      release_channel="${argument#RELEASE_CHANNEL=}"
+    fi
+  done
   state_name="${TEST_STATE_NAME:-default}"
   tag_state="$temp_dir/tag-state-$state_name"
   promotion_count="$temp_dir/promotion-count-$state_name"
@@ -110,10 +147,12 @@ run_release() {
     : >"$promotion_count"
     : >"$channel_log"
   fi
+  store_root="${TEST_RELEASE_STORE_ROOT:-$store}"
   env PATH="$temp_dir:$PATH" TEST_MANIFEST="$manifest" TEST_DOCKER_LOG="$docker_log" TEST_GO_LOG="$go_log" \
     TEST_TAG_STATE="$tag_state" TEST_PROMOTION_COUNT="$promotion_count" TEST_CHANNEL_LOG="$channel_log" \
+    TEST_RELEASE_STORE_ROOT="$store_root" \
     VERSION=0.0.10 RELEASE_REGISTRY=registry.example/coyote RELEASE_SOURCE="$store" PREVIOUS_RELEASE=0.0.9 \
-    RELEASE_BUILD_DATE=2026-11-05T00:00:00Z RELEASE_CHANNEL=latest \
+    RELEASE_BUILD_DATE=2026-11-05T00:00:00Z RELEASE_CHANNEL="$release_channel" \
     COMPONENT_SERVER_ACTION=build COMPONENT_SERVER_VERSION=1.1.0 \
     COMPONENT_WORKER_ACTION=build COMPONENT_WORKER_VERSION=1.1.1 \
     COMPONENT_FRONTEND_ACTION=build COMPONENT_FRONTEND_VERSION=2.0.0 \
@@ -130,6 +169,15 @@ contents="$(cat "$manifest")"; log="$(cat "$docker_log")"
 assert_contains "$contents" '"schema_version": 2'; assert_contains "$contents" '"mcp"'; assert_contains "$contents" '"version": "1.1.0"'
 assert_contains "$log" '--target source-runtime'; assert_contains "$log" 'COYOTE_SERVER_VERSION=1.1.0'; assert_contains "$log" 'COYOTE_WORKER_VERSION=1.1.1'; assert_contains "$log" 'COYOTE_APPLICATION_VERSION=0.2.0'
 assert_contains "$log" 'imagetools create --tag registry.example/coyote/coyote-mcp:0.2.0'
+assert_contains "$(cat "$go_log")" "release fetch --version 0.0.9 --release-source $store"
+
+# A caller-supplied compiled CLI avoids go run collapsing the fetch exit-code contract.
+store="$temp_dir/compiled-cli-store"; write_v2_previous "$store"
+manifest="$temp_dir/compiled-cli.json"; docker_log="$temp_dir/compiled-cli.docker"; go_log="$temp_dir/compiled-cli.go"
+run_release "$store" "$manifest" "$docker_log" "$go_log" COYOTE_RELEASE_CLI="$temp_dir/go"
+fetch_log="$(grep 'release fetch' "$go_log")"
+assert_contains "$fetch_log" 'release fetch --version 0.0.9'
+assert_not_contains "$fetch_log" 'run ./cmd/coyote'
 
 # Mixed release: server/worker reuse while the other components build; reused components never build, push, or tag.
 store="$temp_dir/mixed-store"; write_v2_previous "$store"
@@ -168,6 +216,7 @@ run_release "$store" "$manifest" "$docker_log" "$go_log" \
   COMPONENT_MIGRATE_ACTION=reuse COMPONENT_MIGRATE_VERSION=1.0.0 \
   COMPONENT_MCP_ACTION=reuse COMPONENT_MCP_VERSION=0.1.0 COMPONENT_MCP_IMAGE="registry.bootstrap/coyote-mcp@$(digest d)"
 assert_contains "$(cat "$manifest")" '"schema_version": 2'; assert_contains "$(cat "$manifest")" 'registry.bootstrap/coyote-mcp@sha256:'
+assert_contains "$(cat "$go_log")" "release fetch --version 0.0.9 --release-source $store"
 
 # A semantic component tag resolving to different content fails before the platform manifest publishes.
 store="$temp_dir/collision-store"; write_v2_previous "$store"
@@ -179,7 +228,10 @@ store="$temp_dir/plan-store"; write_v2_previous "$store"
 manifest="$temp_dir/plan.json"; docker_log="$temp_dir/plan.docker"; go_log="$temp_dir/plan.go"
 plan="$(run_release "$store" "$manifest" "$docker_log" "$go_log" RELEASE_PLAN=true)"
 assert_contains "$plan" 'Release plan'; assert_contains "$plan" 'platform_version=0.0.10'; assert_contains "$plan" 'constraint=server-worker actions are coupled'
-[[ ! -f "$manifest" && ! -s "$go_log" ]] || { echo 'plan published a manifest' >&2; exit 1; }
+[[ ! -f "$manifest" ]] || { echo 'plan published a manifest' >&2; exit 1; }
+assert_contains "$(cat "$go_log")" 'release fetch --version 0.0.9'
+assert_contains "$(cat "$go_log")" 'release fetch --version 0.0.10'
+assert_not_contains "$(cat "$go_log")" 'release publish'
 log="$(cat "$docker_log")"; assert_not_contains "$log" 'buildx build'; assert_not_contains "$log" 'imagetools create'
 
 # Build or publication failure never reaches a platform manifest or component tag promotion.
@@ -259,5 +311,47 @@ TEST_STATE_NAME=all-reuse-date TEST_PRESERVE_STATE=true run_release "$store" "$t
   COMPONENT_MCP_ACTION=reuse COMPONENT_MCP_VERSION=1.0.0 \
   COMPONENT_MIGRATE_ACTION=reuse COMPONENT_MIGRATE_VERSION=1.0.0
 assert_not_contains "$(cat "$temp_dir/all-reuse-matching.docker")" 'buildx build'
+
+# GCS locations use the same CLI fetch contract; plans perform only reads against the provider-neutral source.
+gcs_store="$temp_dir/gcs-store"; gcs_source="gs://release-bucket/release-metadata"; write_v2_previous "$gcs_store"
+plan="$(TEST_RELEASE_STORE_ROOT="$gcs_store" run_release "$gcs_source" "$temp_dir/gcs-reuse.json" "$temp_dir/gcs-reuse.docker" "$temp_dir/gcs-reuse.go" RELEASE_PLAN=true \
+  COMPONENT_SERVER_ACTION=reuse COMPONENT_SERVER_VERSION=1.0.0 \
+  COMPONENT_WORKER_ACTION=reuse COMPONENT_WORKER_VERSION=1.0.0 \
+  COMPONENT_FRONTEND_ACTION=reuse COMPONENT_FRONTEND_VERSION=1.0.0 \
+  COMPONENT_MCP_ACTION=reuse COMPONENT_MCP_VERSION=1.0.0 \
+  COMPONENT_MIGRATE_ACTION=reuse COMPONENT_MIGRATE_VERSION=1.0.0)"
+assert_contains "$plan" 'Release plan'; assert_contains "$(cat "$temp_dir/gcs-reuse.go")" "release fetch --version 0.0.9 --release-source $gcs_source"
+[[ ! -f "$temp_dir/gcs-reuse.json" ]] || { echo 'GCS plan published a manifest' >&2; exit 1; }
+
+gcs_store="$temp_dir/gcs-mixed-store"; gcs_source="gs://release-bucket/mixed"; write_v2_previous "$gcs_store"
+plan="$(TEST_RELEASE_STORE_ROOT="$gcs_store" run_release "$gcs_source" "$temp_dir/gcs-mixed.json" "$temp_dir/gcs-mixed.docker" "$temp_dir/gcs-mixed.go" RELEASE_PLAN=true \
+  COMPONENT_SERVER_ACTION=reuse COMPONENT_SERVER_VERSION=1.0.0 \
+  COMPONENT_WORKER_ACTION=reuse COMPONENT_WORKER_VERSION=1.0.0)"
+assert_contains "$plan" 'component=server action=reuse'; assert_not_contains "$(cat "$temp_dir/gcs-mixed.docker")" 'buildx build'
+
+# An immutable v2 GCS manifest makes retries use the stored records without rebuilding.
+gcs_store="$temp_dir/gcs-retry-store"; gcs_source="gs://release-bucket/retry"; write_v2_previous "$gcs_store"
+TEST_STATE_NAME=gcs-retry TEST_RELEASE_STORE_ROOT="$gcs_store" run_release "$gcs_source" "$temp_dir/gcs-first.json" "$temp_dir/gcs-first.docker" "$temp_dir/gcs-first.go"
+TEST_STATE_NAME=gcs-retry TEST_PRESERVE_STATE=true TEST_RELEASE_STORE_ROOT="$gcs_store" run_release "$gcs_source" "$temp_dir/gcs-retry.json" "$temp_dir/gcs-retry.docker" "$temp_dir/gcs-retry.go"
+assert_contains "$(cat "$temp_dir/gcs-retry.go")" "release fetch --version 0.0.10 --release-source $gcs_source"
+assert_not_contains "$(cat "$temp_dir/gcs-retry.docker")" 'buildx build'
+
+# Only a documented missing response permits a new release. Permission and transient fetch failures stop before publication.
+store="$temp_dir/fetch-failure-store"; write_v2_previous "$store"
+if TEST_GO_FETCH_ERROR=permission run_release "$store" "$temp_dir/fetch-permission.json" "$temp_dir/fetch-permission.docker" "$temp_dir/fetch-permission.go"; then echo 'expected permission fetch failure' >&2; exit 1; fi
+[[ ! -f "$temp_dir/fetch-permission.json" ]] || { echo 'manifest published after permission failure' >&2; exit 1; }
+if TEST_GO_FETCH_ERROR=transient run_release "$store" "$temp_dir/fetch-transient.json" "$temp_dir/fetch-transient.docker" "$temp_dir/fetch-transient.go"; then echo 'expected transient fetch failure' >&2; exit 1; fi
+[[ ! -f "$temp_dir/fetch-transient.json" ]] || { echo 'manifest published after transient failure' >&2; exit 1; }
+if TEST_GO_FETCH_ERROR=permission TEST_GO_FETCH_ERROR_VERSION=0.0.10 run_release "$store" "$temp_dir/fetch-existing-permission.json" "$temp_dir/fetch-existing-permission.docker" "$temp_dir/fetch-existing-permission.go"; then echo 'expected existing manifest permission failure' >&2; exit 1; fi
+[[ ! -f "$temp_dir/fetch-existing-permission.json" ]] || { echo 'manifest published after existing manifest permission failure' >&2; exit 1; }
+if TEST_GO_FETCH_ERROR=missing TEST_GO_FETCH_ERROR_VERSION=0.0.9 run_release "$store" "$temp_dir/fetch-missing.json" "$temp_dir/fetch-missing.docker" "$temp_dir/fetch-missing.go"; then echo 'expected predecessor missing failure' >&2; exit 1; fi
+if TEST_GO_FETCH_ERROR=permission TEST_GO_FETCH_ERROR_VERSION=0.0.10 run_release "$store" "$temp_dir/fetch-diagnostic.json" "$temp_dir/fetch-diagnostic.docker" "$temp_dir/fetch-diagnostic.go" TEST_GO_FETCH_ERROR_TEXT='release document not found in permission detail'; then echo 'expected diagnostic permission fetch failure' >&2; exit 1; fi
+[[ ! -f "$temp_dir/fetch-diagnostic.json" ]] || { echo 'manifest published after diagnostic permission failure' >&2; exit 1; }
+
+# Disabled channels publish only the immutable manifest.
+store="$temp_dir/no-channel-store"; write_v2_previous "$store"
+run_release "$store" "$temp_dir/no-channel.json" "$temp_dir/no-channel.docker" "$temp_dir/no-channel.go" RELEASE_CHANNEL=
+assert_not_contains "$(cat "$temp_dir/no-channel.go")" --channel
+[[ ! -s "$temp_dir/channel-log-default" ]] || { echo 'disabled channel advanced' >&2; exit 1; }
 
 echo 'Release build script tests passed'

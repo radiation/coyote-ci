@@ -8,10 +8,30 @@ commits the manifest, then promotes semantic registry tags to the committed dige
 `latest` and `stable` are mutable
 channel pointers; moving one never alters an existing manifest.
 
-The currently supported provider-neutral release source is a filesystem directory
-or `file://` URL with `releases/<version>.json` and `channels.json`. It does not
-require a running Coyote server. OCI and mirrored HTTP sources can implement the
-same release-source interface later.
+The currently supported provider-neutral release source is a filesystem directory,
+`file://` URL, or `gs://bucket[/prefix]` location. Each source stores
+`releases/<version>.json` and `channels.json`; Google Cloud Storage uses
+Application Default Credentials or workload identity. It does not require a
+running Coyote server. OCI and mirrored HTTP sources can implement the same
+release-source interface later.
+
+`scripts/release-build.sh` passes `RELEASE_SOURCE` unchanged to the Coyote CLI for
+predecessor and retry manifest reads as well as publication, so the same source
+location works for filesystem and GCS-backed release builds.
+
+GCS release publishers require `storage.objects.get`,
+`storage.objects.create`, and `storage.objects.delete` on the release prefix.
+Cloud Storage requires create and delete permission to replace the mutable
+`channels.json` object, even when the replacement uses a generation-match
+precondition. Immutable release manifests are still created only with a
+does-not-exist precondition.
+
+`coyote release fetch` exits with status `3` only when the requested manifest does
+not exist. Status `1` covers storage, authentication, permission, and output
+failures; status `2` indicates invalid command input. Fetch returns stored bytes
+without parsing them, so commands that consume the manifest validate malformed
+data. Release automation may treat status `3` as an absent target release, but
+must treat every other nonzero status as a failure.
 
 Resolve an overlay before Helm deployment:
 
