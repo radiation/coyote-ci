@@ -16,11 +16,7 @@ func (p *FilePublisher) PromoteCoyoteLatestIfNewer(ctx context.Context, releaseV
 	if !semVerPattern.MatchString(releaseVersion) || !digestPattern.MatchString(manifestDigest) {
 		return false, errors.New("channel promotion requires an exact release and manifest digest")
 	}
-	source, err := NewFileSource(p.root)
-	if err != nil {
-		return false, err
-	}
-	index, err := source.FetchChannelIndex(ctx)
+	index, err := p.FetchChannelIndex(ctx)
 	if errors.Is(err, ErrNotFound) {
 		index = ChannelIndex{SchemaVersion: SchemaVersion, Channels: map[string]ChannelEntry{}}
 	} else if err != nil {

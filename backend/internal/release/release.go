@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"cloud.google.com/go/storage"
 )
 
 const (
@@ -24,6 +27,8 @@ var (
 	ErrNotFound             = errors.New("release document not found")
 	ErrManifestConflict     = errors.New("release manifest already exists with different content")
 	ErrChannelPromotionBusy = errors.New("channel promotion is already in progress")
+	ErrUnsupportedBackend   = errors.New("release store backend is not supported")
+	ErrInvalidLocation      = errors.New("invalid release store location")
 	semVerPattern           = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 	commitPattern           = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
 	digestPattern           = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -83,6 +88,20 @@ type Source interface {
 	FetchChannelIndex(context.Context) (ChannelIndex, error)
 }
 
+type Publisher interface {
+	PublishManifest(context.Context, Manifest) (string, error)
+	ImportManifest(context.Context, []byte) (Manifest, string, error)
+	PromoteChannel(context.Context, string, string, string) error
+	PromoteCoyoteLatestIfNewer(context.Context, string, string) (bool, error)
+}
+
+// Store combines release document reads with the supported publication actions.
+// Provider-specific concurrency controls remain internal to each implementation.
+type Store interface {
+	Source
+	Publisher
+}
+
 type Resolved struct {
 	Manifest       Manifest
 	ManifestDigest string
@@ -100,12 +119,19 @@ func ParseManifest(data []byte) (Manifest, error) {
 	return manifest, nil
 }
 
+func ValidateExactSemanticVersion(version string) error {
+	if !semVerPattern.MatchString(version) {
+		return fmt.Errorf("must be an exact semantic version: %q", version)
+	}
+	return nil
+}
+
 func (m Manifest) Validate() error {
 	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != ManifestSchemaVersionV2 {
 		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
 	}
-	if !semVerPattern.MatchString(m.Release) {
-		return fmt.Errorf("release must be an exact semantic version: %q", m.Release)
+	if versionErr := ValidateExactSemanticVersion(m.Release); versionErr != nil {
+		return fmt.Errorf("release %w", versionErr)
 	}
 	if !commitPattern.MatchString(m.Source.Commit) {
 		return fmt.Errorf("source commit must be a full Git commit SHA: %q", m.Source.Commit)
@@ -162,8 +188,8 @@ func validateComponents(components map[string]Component) error {
 		if !ok {
 			return fmt.Errorf("manifest is missing %s component", name)
 		}
-		if !semVerPattern.MatchString(component.Version) {
-			return fmt.Errorf("%s component version must be an exact semantic version: %q", name, component.Version)
+		if versionErr := ValidateExactSemanticVersion(component.Version); versionErr != nil {
+			return fmt.Errorf("%s component version %w", name, versionErr)
 		}
 		if imageErr := ValidateImageReference(component.Image); imageErr != nil {
 			return fmt.Errorf("%s component image: %w", name, imageErr)
@@ -185,7 +211,7 @@ func validateDeployment(deployment *Deployment) error {
 		if chart == nil {
 			continue
 		}
-		if !semVerPattern.MatchString(chart.Version) || !digestPattern.MatchString(chart.Digest) {
+		if ValidateExactSemanticVersion(chart.Version) != nil || !digestPattern.MatchString(chart.Digest) {
 			return fmt.Errorf("%s must contain an exact version and sha256 digest", name)
 		}
 	}
@@ -211,7 +237,7 @@ func (index ChannelIndex) Validate() error {
 		if channel != "latest" && channel != "stable" {
 			return fmt.Errorf("unsupported release channel %q", channel)
 		}
-		if !semVerPattern.MatchString(entry.Release) || !digestPattern.MatchString(entry.ManifestDigest) {
+		if ValidateExactSemanticVersion(entry.Release) != nil || !digestPattern.MatchString(entry.ManifestDigest) {
 			return fmt.Errorf("channel %q must reference an exact release and manifest digest", channel)
 		}
 	}
@@ -269,6 +295,71 @@ func NewFileSource(location string) (*FileSource, error) {
 	return &FileSource{root: filepath.Clean(location)}, nil
 }
 
+// OpenStore resolves a release source location to its backing store. The
+// returned closer is non-nil only when the selected provider owns a client.
+func OpenStore(ctx context.Context, location string) (Store, io.Closer, error) {
+	return openStore(ctx, location, func(clientContext context.Context) (*storage.Client, error) {
+		return storage.NewClient(clientContext)
+	})
+}
+
+func openStore(ctx context.Context, location string, newGCSClient func(context.Context) (*storage.Client, error)) (Store, io.Closer, error) {
+	trimmed := strings.TrimSpace(location)
+	if strings.HasPrefix(trimmed, "file:") {
+		if !strings.HasPrefix(trimmed, "file://") {
+			return nil, nil, fmt.Errorf("%w: %q", ErrInvalidLocation, location)
+		}
+		store, storeErr := NewFileStore(trimmed)
+		return store, nil, storeErr
+	}
+	if strings.HasPrefix(trimmed, "gs:") {
+		if _, _, parseErr := parseGCSStoreLocation(trimmed); parseErr != nil {
+			return nil, nil, parseErr
+		}
+		client, clientErr := newGCSClient(releaseContext(ctx))
+		if clientErr != nil {
+			return nil, nil, clientErr
+		}
+		store, storeErr := NewGCSStore(client, trimmed)
+		if storeErr != nil {
+			_ = client.Close()
+			return nil, nil, storeErr
+		}
+		return store, client, nil
+	}
+	if strings.Contains(trimmed, "://") {
+		parsed, parseErr := url.Parse(trimmed)
+		if parseErr != nil || parsed.Scheme == "" {
+			return nil, nil, fmt.Errorf("%w: %q", ErrInvalidLocation, location)
+		}
+		return nil, nil, fmt.Errorf("%w: %s", ErrUnsupportedBackend, parsed.Scheme)
+	}
+	store, storeErr := NewFileStore(trimmed)
+	return store, nil, storeErr
+}
+
+func parseGCSStoreLocation(location string) (string, string, error) {
+	parsed, parseErr := url.Parse(location)
+	if parseErr != nil || parsed.Scheme != "gs" || parsed.Hostname() == "" || parsed.Port() != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || !validGCSPrefix(parsed.EscapedPath()) {
+		return "", "", fmt.Errorf("%w: %q", ErrInvalidLocation, location)
+	}
+	return parsed.Hostname(), strings.Trim(parsed.Path, "/"), nil
+}
+
+func validGCSPrefix(escapedPath string) bool {
+	prefix := strings.TrimPrefix(escapedPath, "/")
+	if prefix == "" {
+		return true
+	}
+	for _, escapedComponent := range strings.Split(prefix, "/") {
+		component, unescapeErr := url.PathUnescape(escapedComponent)
+		if unescapeErr != nil || component == "" || component == "." || component == ".." || strings.ContainsAny(component, "/\\") {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *FileSource) FetchManifest(_ context.Context, version string) (Document, error) {
 	return readDocument(filepath.Join(s.root, "releases", version+".json"))
 }
@@ -301,17 +392,39 @@ func Digest(data []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-type FilePublisher struct{ root string }
+type FilePublisher struct {
+	root   string
+	source *FileSource
+}
 
-func NewFilePublisher(location string) (*FilePublisher, error) {
+// NewFileStore returns the filesystem release store for a local path or file URL.
+func NewFileStore(location string) (*FilePublisher, error) {
 	source, err := NewFileSource(location)
 	if err != nil {
 		return nil, err
 	}
-	return &FilePublisher{root: source.root}, nil
+	return &FilePublisher{root: source.root, source: source}, nil
 }
 
-func (p *FilePublisher) PublishManifest(manifest Manifest) (string, error) {
+func NewFilePublisher(location string) (*FilePublisher, error) {
+	return NewFileStore(location)
+}
+
+func (p *FilePublisher) FetchManifest(ctx context.Context, version string) (Document, error) {
+	return p.source.FetchManifest(ctx, version)
+}
+
+func (p *FilePublisher) FetchChannelIndex(ctx context.Context) (ChannelIndex, error) {
+	return p.source.FetchChannelIndex(ctx)
+}
+
+func (p *FilePublisher) PublishManifest(ctx context.Context, manifest Manifest) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
 	if validateErr := manifest.Validate(); validateErr != nil {
 		return "", validateErr
 	}
@@ -320,14 +433,37 @@ func (p *FilePublisher) PublishManifest(manifest Manifest) (string, error) {
 		return "", err
 	}
 	data = append(data, '\n')
-	path := filepath.Join(p.root, "releases", manifest.Release+".json")
-	releaseLock, lockErr := p.acquireLock(context.Background(), path+".lock")
+	return p.publishManifestData(ctx, manifest.Release, data)
+}
+
+func (p *FilePublisher) ImportManifest(ctx context.Context, data []byte) (Manifest, string, error) {
+	manifest, parseErr := ParseManifest(data)
+	if parseErr != nil {
+		return Manifest{}, "", parseErr
+	}
+	digest, publishErr := p.publishManifestData(ctx, manifest.Release, data)
+	if publishErr != nil {
+		return Manifest{}, "", publishErr
+	}
+	return manifest, digest, nil
+}
+
+func (p *FilePublisher) publishManifestData(ctx context.Context, releaseVersion string, data []byte) (string, error) {
+	ctx = releaseContext(ctx)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	path := filepath.Join(p.root, "releases", releaseVersion+".json")
+	releaseLock, lockErr := p.acquireLock(ctx, path+".lock")
 	if lockErr != nil {
 		return "", lockErr
 	}
 	defer func() {
 		_ = os.Remove(releaseLock)
 	}()
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
 	if existing, readErr := os.ReadFile(path); readErr == nil {
 		if string(existing) == string(data) {
 			return Digest(existing), nil
@@ -335,6 +471,9 @@ func (p *FilePublisher) PublishManifest(manifest Manifest) (string, error) {
 		return "", ErrManifestConflict
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return "", readErr
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
 	}
 	if writeErr := writeAtomic(path, data); writeErr != nil {
 		return "", writeErr
@@ -369,11 +508,7 @@ func (p *FilePublisher) PromoteChannel(ctx context.Context, channel, releaseVers
 		_ = os.Remove(releaseLock)
 	}()
 
-	source, sourceErr := NewFileSource(p.root)
-	if sourceErr != nil {
-		return sourceErr
-	}
-	index, indexErr := source.FetchChannelIndex(ctx)
+	index, indexErr := p.FetchChannelIndex(ctx)
 	if errors.Is(indexErr, ErrNotFound) {
 		index = ChannelIndex{SchemaVersion: SchemaVersion, Channels: map[string]ChannelEntry{}}
 	} else if indexErr != nil {

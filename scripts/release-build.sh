@@ -6,14 +6,23 @@ version="${VERSION:-}"
 registry="${RELEASE_REGISTRY:-}"
 release_source="${RELEASE_SOURCE:-}"
 previous_release="${PREVIOUS_RELEASE:-}"
-release_channel="${RELEASE_CHANNEL:-latest}"
+release_channel="${RELEASE_CHANNEL-latest}"
+release_cli="${COYOTE_RELEASE_CLI:-}"
 plan_only="${RELEASE_PLAN:-false}"
+release_fetch_not_found_exit_code=3
 commit="$(git -C "$repo_root" rev-parse HEAD)"
 build_date="${RELEASE_BUILD_DATE:-}"
 build_date_supplied=false
 [[ -n "$build_date" ]] && build_date_supplied=true
 build_tag="build-${commit:0:12}-$(date -u +%Y%m%d%H%M%S)-$$-$RANDOM"
 components=(server worker frontend mcp migrate)
+release_temp_dir="$(mktemp -d)"
+manifest=""
+
+cleanup_release_files() {
+  rm -rf "$release_temp_dir"
+}
+trap cleanup_release_files EXIT
 
 fail() {
   echo "$*" >&2
@@ -127,6 +136,7 @@ validate_configuration() {
   [[ -z "$(git -C "$repo_root" status --porcelain --untracked-files=all)" ]] || fail "release builds require a clean worktree, including untracked files"
   command -v jq >/dev/null || fail "jq is required"
   command -v docker >/dev/null || fail "docker is required"
+  [[ -z "$release_cli" || -x "$release_cli" ]] || fail "COYOTE_RELEASE_CLI must name an executable file"
 
   for component in "${components[@]}"; do
     action="$(component_action "$component")"
@@ -137,6 +147,61 @@ validate_configuration() {
   if [[ "$plan_only" == "false" ]] && has_build_actions; then
     [[ -n "$build_date" ]] || fail "RELEASE_BUILD_DATE is required when building components"
   fi
+}
+
+normalize_local_path() {
+  local path="$1" suffix="" parent base
+  [[ "$path" == /* ]] || path="$PWD/$path"
+  while [[ ! -d "$path" ]]; do
+    base="$(basename "$path")"
+    suffix="/$base$suffix"
+    parent="$(dirname "$path")"
+    [[ "$parent" != "$path" ]] || break
+    path="$parent"
+  done
+  printf '%s%s' "$(cd "$path" && pwd -P)" "$suffix"
+}
+
+normalize_release_source() {
+  local local_path
+  case "$release_source" in
+    file://*)
+      local_path="${release_source#file://}"
+      release_source="file://$(normalize_local_path "$local_path")"
+      ;;
+    *://*)
+      ;;
+    *)
+      release_source="$(normalize_local_path "$release_source")"
+      ;;
+  esac
+}
+
+execute_release_cli() {
+  "$release_cli" "$@"
+}
+
+prepare_release_cli() {
+  [[ -n "$release_cli" ]] && return
+  release_cli="$release_temp_dir/coyote"
+  (
+    cd "$repo_root/backend"
+    go build -o "$release_cli" ./cmd/coyote
+  ) || fail "could not build the release CLI"
+}
+
+fetch_release_manifest() {
+  local release_version="$1" output_path="$2" fetch_output fetch_status
+  if fetch_output="$(execute_release_cli release fetch --version "$release_version" --release-source "$release_source" --output "$output_path" 2>&1)"; then
+    return 0
+  else
+    fetch_status=$?
+  fi
+  if [[ "$fetch_status" == "$release_fetch_not_found_exit_code" ]]; then
+    return 1
+  fi
+  echo "could not fetch release manifest $release_version: $fetch_output" >&2
+  return 2
 }
 
 load_previous_component() {
@@ -174,10 +239,17 @@ load_previous_component() {
 }
 
 load_previous_release() {
-  release_root="$(cd -- "${release_source#file://}" && pwd)" || fail "release source directory not found: $release_source"
-  release_source="$release_root"
-  previous_manifest="$release_root/releases/$previous_release.json"
-  [[ -f "$previous_manifest" ]] || fail "previous release manifest not found: $previous_release"
+  local fetch_status
+  previous_manifest="$release_temp_dir/previous-$previous_release.json"
+  if fetch_release_manifest "$previous_release" "$previous_manifest"; then
+    :
+  else
+    fetch_status=$?
+    if [[ "$fetch_status" == 1 ]]; then
+      fail "previous release manifest not found: $previous_release"
+    fi
+    fail "could not fetch previous release manifest: $previous_release"
+  fi
   previous_schema="$(jq -er '.schema_version' "$previous_manifest")" || fail "could not read previous release schema version"
   [[ "$previous_schema" == "1" || "$previous_schema" == "2" ]] || fail "unsupported previous release schema version: $previous_schema"
   for component in "${components[@]}"; do
@@ -186,11 +258,16 @@ load_previous_release() {
 }
 
 load_existing_release() {
-  local component actual_version actual_image expected_image existing_commit existing_created_at
-  existing_manifest="$release_root/releases/$version.json"
+  local component actual_version actual_image expected_image existing_commit existing_created_at fetch_status
+  existing_manifest="$release_temp_dir/existing-$version.json"
   retry_manifest=false
-  [[ -e "$existing_manifest" ]] || return 0
-  [[ -r "$existing_manifest" ]] || fail "existing release manifest is not readable: $version"
+  if fetch_release_manifest "$version" "$existing_manifest"; then
+    :
+  else
+    fetch_status=$?
+    [[ "$fetch_status" == 1 ]] && return 0
+    fail "could not fetch existing release manifest: $version"
+  fi
   existing_schema="$(jq -er '.schema_version' "$existing_manifest")" || fail "could not read existing release manifest: $version"
   [[ "$existing_schema" == "2" ]] || fail "existing release manifest must use schema v2: $version"
   [[ "$(jq -er '.release' "$existing_manifest")" == "$version" ]] || fail "existing release manifest version conflicts with requested release: $version"
@@ -316,18 +393,12 @@ verify_component_tag() {
 }
 
 publish_manifest() {
-  (
-    cd "$repo_root/backend"
-    go run ./cmd/coyote release publish --manifest "$manifest" --release-source "$release_source"
-  )
+  execute_release_cli release publish --manifest "$manifest" --release-source "$release_source"
 }
 
 advance_channel() {
-  [[ -n "$release_channel" ]] || return
-  (
-    cd "$repo_root/backend"
-    go run ./cmd/coyote release publish --manifest "$manifest" --release-source "$release_source" --channel "$release_channel"
-  )
+  [[ -n "$release_channel" ]] || return 0
+  execute_release_cli release publish --manifest "$manifest" --release-source "$release_source" --channel "$release_channel"
 }
 
 print_plan() {
@@ -355,6 +426,8 @@ print_plan() {
 }
 
 validate_configuration
+normalize_release_source
+prepare_release_cli
 load_previous_release
 
 for component in "${components[@]}"; do
@@ -390,8 +463,7 @@ if [[ "$retry_manifest" == "false" ]]; then
     fi
   done
 
-  manifest="$(mktemp)"
-  trap 'rm -f "$manifest"' EXIT
+  manifest="$release_temp_dir/publish-manifest.json"
   jq -n \
     --arg release "$version" --arg commit "$commit" --arg created_at "$build_date" \
     --arg server_version "$server_version" --arg server_image "$server_image" \

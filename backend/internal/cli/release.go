@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,11 +14,15 @@ import (
 	releases "github.com/radiation/coyote-ci/backend/internal/release"
 )
 
+const releaseFetchNotFoundExitCode = 3
+
 func (a *app) newReleaseCommand() *cobra.Command {
 	command := &cobra.Command{Use: "release", Short: "Resolve and publish Coyote software releases"}
 	command.AddCommand(a.newReleaseResolveCommand())
 	command.AddCommand(a.newReleasePublishCommand())
 	command.AddCommand(a.newReleasePublishCoyoteCommand())
+	command.AddCommand(a.newReleaseFetchCommand())
+	command.AddCommand(a.newReleaseImportCommand())
 	command.AddCommand(a.newApplicationReleaseShowCommand())
 	command.AddCommand(a.newApplicationReleasePromoteCommand())
 	return command
@@ -30,7 +33,7 @@ func (a *app) newReleasePublishCoyoteCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "publish-coyote",
 		Short: "Publish a Coyote product release from a complete generic application release",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (commandErr error) {
 			if strings.TrimSpace(buildID) == "" || strings.TrimSpace(sourceLocation) == "" {
 				return &ExitError{Code: 2, Err: errors.New("--build and --release-source are required")}
 			}
@@ -77,11 +80,12 @@ func (a *app) newReleasePublishCoyoteCommand() *cobra.Command {
 			if err != nil {
 				return &ExitError{Code: 1, Err: err}
 			}
-			publisher, err := releases.NewFilePublisher(sourceLocation)
+			publisher, closer, err := a.openReleaseStore(cmd.Context(), sourceLocation)
 			if err != nil {
-				return &ExitError{Code: 2, Err: err}
+				return releaseStoreOpenExitError(err)
 			}
-			digest, err := publisher.PublishManifest(manifest)
+			defer closeReleaseStore(&commandErr, closer)
+			digest, err := publisher.PublishManifest(cmd.Context(), manifest)
 			if err != nil {
 				return &ExitError{Code: 1, Err: err}
 			}
@@ -102,7 +106,7 @@ func (a *app) newReleasePublishCoyoteCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&buildID, "build", "", "Build ID with a complete generic application release")
-	command.Flags().StringVar(&sourceLocation, "release-source", "", "Filesystem path or file:// URL containing release documents")
+	command.Flags().StringVar(&sourceLocation, "release-source", "", "Release store path, file:// URL, or gs:// location")
 	command.Flags().StringVar(&channel, "channel", "latest", "Optional product channel to promote: latest or stable")
 	return command
 }
@@ -160,17 +164,18 @@ func (a *app) newReleaseResolveCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "resolve",
 		Short: "Resolve a Coyote release to immutable Helm values",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (commandErr error) {
 			if (strings.TrimSpace(releaseVersion) == "") == (strings.TrimSpace(channel) == "") {
 				return &ExitError{Code: 2, Err: errors.New("exactly one of --release or --channel is required")}
 			}
 			if strings.TrimSpace(sourceLocation) == "" || strings.TrimSpace(outputPath) == "" {
 				return &ExitError{Code: 2, Err: errors.New("--release-source and --output are required")}
 			}
-			source, sourceErr := releases.NewFileSource(sourceLocation)
+			source, closer, sourceErr := a.openReleaseStore(cmd.Context(), sourceLocation)
 			if sourceErr != nil {
-				return &ExitError{Code: 2, Err: sourceErr}
+				return releaseStoreOpenExitError(sourceErr)
 			}
+			defer closeReleaseStore(&commandErr, closer)
 			resolved, resolveErr := releases.Resolve(cmd.Context(), source, releaseVersion, channel)
 			if resolveErr != nil {
 				return &ExitError{Code: 1, Err: resolveErr}
@@ -185,7 +190,7 @@ func (a *app) newReleaseResolveCommand() *cobra.Command {
 	}
 	command.Flags().StringVar(&releaseVersion, "release", "", "Exact semantic release version")
 	command.Flags().StringVar(&channel, "channel", "", "Release channel: latest or stable")
-	command.Flags().StringVar(&sourceLocation, "release-source", "", "Filesystem path or file:// URL containing release documents")
+	command.Flags().StringVar(&sourceLocation, "release-source", "", "Release store path, file:// URL, or gs:// location")
 	command.Flags().StringVar(&outputPath, "output", "", "Path for the generated Helm values overlay")
 	return command
 }
@@ -217,8 +222,8 @@ func (a *app) newReleasePublishCommand() *cobra.Command {
 	var manifestPath, sourceLocation, channel string
 	command := &cobra.Command{
 		Use:   "publish",
-		Short: "Publish an immutable release manifest to a filesystem release source",
-		RunE: func(_ *cobra.Command, _ []string) error {
+		Short: "Publish an immutable release manifest to a release store",
+		RunE: func(cmd *cobra.Command, _ []string) (commandErr error) {
 			if strings.TrimSpace(manifestPath) == "" || strings.TrimSpace(sourceLocation) == "" {
 				return &ExitError{Code: 2, Err: errors.New("--manifest and --release-source are required")}
 			}
@@ -233,16 +238,17 @@ func (a *app) newReleasePublishCommand() *cobra.Command {
 			if parseErr != nil {
 				return &ExitError{Code: 2, Err: parseErr}
 			}
-			publisher, publisherErr := releases.NewFilePublisher(sourceLocation)
+			publisher, closer, publisherErr := a.openReleaseStore(cmd.Context(), sourceLocation)
 			if publisherErr != nil {
-				return &ExitError{Code: 2, Err: publisherErr}
+				return releaseStoreOpenExitError(publisherErr)
 			}
-			digest, publishErr := publisher.PublishManifest(manifest)
+			defer closeReleaseStore(&commandErr, closer)
+			digest, publishErr := publisher.PublishManifest(cmd.Context(), manifest)
 			if publishErr != nil {
 				return &ExitError{Code: 1, Err: publishErr}
 			}
 			if channel != "" {
-				if channelErr := publisher.PromoteChannel(context.Background(), channel, manifest.Release, digest); channelErr != nil {
+				if channelErr := publisher.PromoteChannel(cmd.Context(), channel, manifest.Release, digest); channelErr != nil {
 					return &ExitError{Code: 1, Err: channelErr}
 				}
 			}
@@ -251,7 +257,126 @@ func (a *app) newReleasePublishCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&manifestPath, "manifest", "", "Path to a release manifest JSON document")
-	command.Flags().StringVar(&sourceLocation, "release-source", "", "Filesystem path or file:// URL containing release documents")
+	command.Flags().StringVar(&sourceLocation, "release-source", "", "Release store path, file:// URL, or gs:// location")
 	command.Flags().StringVar(&channel, "channel", "", "Optional channel to promote: latest or stable")
 	return command
+}
+
+func (a *app) newReleaseFetchCommand() *cobra.Command {
+	var releaseVersion, sourceLocation, outputPath string
+	command := &cobra.Command{
+		Use:   "fetch",
+		Short: "Fetch the exact stored release manifest bytes",
+		RunE: func(cmd *cobra.Command, _ []string) (commandErr error) {
+			if strings.TrimSpace(releaseVersion) == "" || strings.TrimSpace(sourceLocation) == "" || strings.TrimSpace(outputPath) == "" {
+				return &ExitError{Code: 2, Err: errors.New("--version, --release-source, and --output are required")}
+			}
+			if versionErr := releases.ValidateExactSemanticVersion(releaseVersion); versionErr != nil {
+				return &ExitError{Code: 2, Err: fmt.Errorf("--version %w", versionErr)}
+			}
+			store, closer, storeErr := a.openReleaseStore(cmd.Context(), sourceLocation)
+			if storeErr != nil {
+				return releaseStoreOpenExitError(storeErr)
+			}
+			defer closeReleaseStore(&commandErr, closer)
+			document, fetchErr := store.FetchManifest(cmd.Context(), releaseVersion)
+			if fetchErr != nil {
+				if errors.Is(fetchErr, releases.ErrNotFound) {
+					return &ExitError{Code: releaseFetchNotFoundExitCode, Err: fetchErr}
+				}
+				return &ExitError{Code: 1, Err: fetchErr}
+			}
+			if outputPath == "-" {
+				_, writeErr := a.stdout.Write(document.Data)
+				return writeErr
+			}
+			if writeErr := writeRawReleaseDocument(outputPath, document.Data); writeErr != nil {
+				return &ExitError{Code: 1, Err: writeErr}
+			}
+			_, printErr := fmt.Fprintf(a.stdout, "Wrote release manifest %s to %s\n", releaseVersion, outputPath)
+			return printErr
+		},
+	}
+	command.Flags().StringVar(&releaseVersion, "version", "", "Exact semantic release version")
+	command.Flags().StringVar(&sourceLocation, "release-source", "", "Release store path, file:// URL, or gs:// location")
+	command.Flags().StringVar(&outputPath, "output", "", "Output path, or - for raw stdout")
+	return command
+}
+
+func (a *app) newReleaseImportCommand() *cobra.Command {
+	var manifestPath, sourceLocation, expectedDigest string
+	command := &cobra.Command{
+		Use:   "import",
+		Short: "Import an existing release manifest without reserializing it",
+		RunE: func(cmd *cobra.Command, _ []string) (commandErr error) {
+			if strings.TrimSpace(manifestPath) == "" || strings.TrimSpace(sourceLocation) == "" || strings.TrimSpace(expectedDigest) == "" {
+				return &ExitError{Code: 2, Err: errors.New("--file, --release-source, and --expected-digest are required")}
+			}
+			data, readErr := os.ReadFile(manifestPath)
+			if readErr != nil {
+				return &ExitError{Code: 1, Err: readErr}
+			}
+			manifest, parseErr := releases.ParseManifest(data)
+			if parseErr != nil {
+				return &ExitError{Code: 2, Err: parseErr}
+			}
+			if releases.Digest(data) != strings.TrimSpace(expectedDigest) {
+				return &ExitError{Code: 2, Err: errors.New("--expected-digest does not match manifest bytes")}
+			}
+			store, closer, storeErr := a.openReleaseStore(cmd.Context(), sourceLocation)
+			if storeErr != nil {
+				return releaseStoreOpenExitError(storeErr)
+			}
+			defer closeReleaseStore(&commandErr, closer)
+			_, digest, importErr := store.ImportManifest(cmd.Context(), data)
+			if importErr != nil {
+				return &ExitError{Code: 1, Err: importErr}
+			}
+			_, printErr := fmt.Fprintf(a.stdout, "Imported release %s (%s)\n", manifest.Release, digest)
+			return printErr
+		},
+	}
+	command.Flags().StringVar(&manifestPath, "file", "", "Existing release manifest JSON document")
+	command.Flags().StringVar(&sourceLocation, "release-source", "", "Release store path, file:// URL, or gs:// location")
+	command.Flags().StringVar(&expectedDigest, "expected-digest", "", "SHA-256 digest of the exact manifest bytes")
+	return command
+}
+
+func closeReleaseStore(commandErr *error, closer io.Closer) {
+	if closer == nil {
+		return
+	}
+	if closeErr := closer.Close(); closeErr != nil && *commandErr == nil {
+		*commandErr = &ExitError{Code: 1, Err: closeErr}
+	}
+}
+
+func releaseStoreOpenExitError(err error) *ExitError {
+	if errors.Is(err, releases.ErrInvalidLocation) || errors.Is(err, releases.ErrUnsupportedBackend) {
+		return &ExitError{Code: 2, Err: err}
+	}
+	return &ExitError{Code: 1, Err: err}
+}
+
+func writeRawReleaseDocument(path string, data []byte) error {
+	parent := filepath.Dir(path)
+	if mkdirErr := os.MkdirAll(parent, 0o755); mkdirErr != nil {
+		return mkdirErr
+	}
+	file, createErr := os.CreateTemp(parent, ".coyote-release-manifest-*")
+	if createErr != nil {
+		return createErr
+	}
+	temporaryPath := file.Name()
+	defer func() {
+		_ = os.Remove(temporaryPath)
+	}()
+	if _, writeErr := file.Write(data); writeErr != nil {
+		_ = file.Close()
+		return writeErr
+	}
+	if closeErr := file.Close(); closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(temporaryPath, path)
 }
