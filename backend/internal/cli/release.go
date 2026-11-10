@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -81,7 +80,7 @@ func (a *app) newReleasePublishCoyoteCommand() *cobra.Command {
 			if err != nil {
 				return &ExitError{Code: 2, Err: err}
 			}
-			digest, err := publisher.PublishManifest(manifest)
+			digest, err := publisher.PublishManifest(cmd.Context(), manifest)
 			if err != nil {
 				return &ExitError{Code: 1, Err: err}
 			}
@@ -218,7 +217,7 @@ func (a *app) newReleasePublishCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "publish",
 		Short: "Publish an immutable release manifest to a filesystem release source",
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(manifestPath) == "" || strings.TrimSpace(sourceLocation) == "" {
 				return &ExitError{Code: 2, Err: errors.New("--manifest and --release-source are required")}
 			}
@@ -237,12 +236,12 @@ func (a *app) newReleasePublishCommand() *cobra.Command {
 			if publisherErr != nil {
 				return &ExitError{Code: 2, Err: publisherErr}
 			}
-			digest, publishErr := publisher.PublishManifest(manifest)
+			digest, publishErr := publisher.PublishManifest(cmd.Context(), manifest)
 			if publishErr != nil {
 				return &ExitError{Code: 1, Err: publishErr}
 			}
 			if channel != "" {
-				if channelErr := publisher.PromoteChannel(context.Background(), channel, manifest.Release, digest); channelErr != nil {
+				if channelErr := publisher.PromoteChannel(cmd.Context(), channel, manifest.Release, digest); channelErr != nil {
 					return &ExitError{Code: 1, Err: channelErr}
 				}
 			}

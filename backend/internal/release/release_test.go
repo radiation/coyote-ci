@@ -136,7 +136,7 @@ func TestResolveAndOverlay(t *testing.T) {
 		t.Fatalf("publisher: %v", publisherErr)
 	}
 	manifest := validManifest()
-	digest, publishErr := publisher.PublishManifest(manifest)
+	digest, publishErr := publisher.PublishManifest(context.Background(), manifest)
 	if publishErr != nil {
 		t.Fatalf("publish manifest: %v", publishErr)
 	}
@@ -173,7 +173,7 @@ func TestV2ManifestParsingResolutionAndOverlay(t *testing.T) {
 		t.Fatalf("publisher: %v", publisherErr)
 	}
 	manifest := validV2Manifest()
-	digest, publishErr := publisher.PublishManifest(manifest)
+	digest, publishErr := publisher.PublishManifest(context.Background(), manifest)
 	if publishErr != nil {
 		t.Fatalf("publish manifest: %v", publishErr)
 	}
@@ -228,12 +228,12 @@ func TestResolveFailuresAndAppendOnlyPublishing(t *testing.T) {
 	root := t.TempDir()
 	publisher, _ := NewFilePublisher(root)
 	manifest := validManifest()
-	digest, publishErr := publisher.PublishManifest(manifest)
+	digest, publishErr := publisher.PublishManifest(context.Background(), manifest)
 	if publishErr != nil {
 		t.Fatalf("publish: %v", publishErr)
 	}
 	manifest.Images["server"] = "registry.example/coyote-server@sha256:" + strings.Repeat("e", 64)
-	if _, conflictErr := publisher.PublishManifest(manifest); !errors.Is(conflictErr, ErrManifestConflict) {
+	if _, conflictErr := publisher.PublishManifest(context.Background(), manifest); !errors.Is(conflictErr, ErrManifestConflict) {
 		t.Fatalf("expected conflict, got %v", conflictErr)
 	}
 	index := ChannelIndex{SchemaVersion: 1, Channels: map[string]ChannelEntry{"stable": {Release: "2.5.1", ManifestDigest: digest}}}
@@ -301,6 +301,83 @@ func TestChannelIndexAndFileSourceFailures(t *testing.T) {
 	}
 }
 
+func TestOpenStoreLocations(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "release store #1")
+	for _, location := range []string{root, "file://" + root} {
+		store, storeErr := OpenStore(location)
+		if storeErr != nil {
+			t.Fatalf("OpenStore(%q): %v", location, storeErr)
+		}
+		if _, ok := store.(*FilePublisher); !ok {
+			t.Fatalf("OpenStore(%q) returned %T, want *FilePublisher", location, store)
+		}
+		manifest := validManifest()
+		if _, publishErr := store.PublishManifest(context.Background(), manifest); publishErr != nil {
+			t.Fatalf("PublishManifest(%q): %v", location, publishErr)
+		}
+		if _, fetchErr := store.FetchManifest(context.Background(), manifest.Release); fetchErr != nil {
+			t.Fatalf("FetchManifest(%q): %v", location, fetchErr)
+		}
+	}
+}
+
+func TestOpenStoreRejectsUnsupportedAndMalformedLocations(t *testing.T) {
+	tests := []struct {
+		location string
+		want     error
+	}{
+		{location: "gs://release-bucket/releases", want: ErrUnsupportedBackend},
+		{location: "s3://release-bucket/releases", want: ErrUnsupportedBackend},
+		{location: "gs://", want: ErrInvalidLocation},
+		{location: "gs://release-bucket:443/releases", want: ErrInvalidLocation},
+		{location: "gs://user@release-bucket/releases", want: ErrInvalidLocation},
+		{location: "gs://release-bucket?unexpected=query", want: ErrInvalidLocation},
+		{location: "gs://release-bucket/releases#fragment", want: ErrInvalidLocation},
+		{location: "gs://release-bucket/../escape", want: ErrInvalidLocation},
+		{location: "gs://release-bucket/%2e%2e/escape", want: ErrInvalidLocation},
+		{location: "gs://release-bucket/releases//next", want: ErrInvalidLocation},
+		{location: "file:/tmp/releases", want: ErrInvalidLocation},
+		{location: "://release-store", want: ErrInvalidLocation},
+	}
+	for _, tc := range tests {
+		t.Run(tc.location, func(t *testing.T) {
+			_, storeErr := OpenStore(tc.location)
+			if !errors.Is(storeErr, tc.want) {
+				t.Fatalf("OpenStore(%q) error=%v, want %v", tc.location, storeErr, tc.want)
+			}
+		})
+	}
+}
+
+func TestFilePublisherPromotionHonorsCanceledContext(t *testing.T) {
+	root := t.TempDir()
+	publisher, publisherErr := NewFilePublisher(root)
+	if publisherErr != nil {
+		t.Fatalf("publisher: %v", publisherErr)
+	}
+	if mkdirErr := os.Mkdir(filepath.Join(root, ".channels.lock"), 0o700); mkdirErr != nil {
+		t.Fatalf("create lock: %v", mkdirErr)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := publisher.PromoteChannel(ctx, "latest", "2.5.1", "sha256:"+strings.Repeat("a", 64))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("PromoteChannel() error=%v, want context cancellation", err)
+	}
+}
+
+func TestFilePublisherPublicationHonorsCanceledContext(t *testing.T) {
+	publisher, publisherErr := NewFilePublisher(t.TempDir())
+	if publisherErr != nil {
+		t.Fatalf("publisher: %v", publisherErr)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, publishErr := publisher.PublishManifest(ctx, validManifest()); !errors.Is(publishErr, context.Canceled) {
+		t.Fatalf("PublishManifest() error=%v, want context cancellation", publishErr)
+	}
+}
+
 func TestPublisherAndResolverInputFailures(t *testing.T) {
 	root := t.TempDir()
 	publisher, publisherErr := NewFilePublisher(root)
@@ -309,11 +386,11 @@ func TestPublisherAndResolverInputFailures(t *testing.T) {
 	}
 
 	manifest := validManifest()
-	digest, publishErr := publisher.PublishManifest(manifest)
+	digest, publishErr := publisher.PublishManifest(context.Background(), manifest)
 	if publishErr != nil {
 		t.Fatalf("publish: %v", publishErr)
 	}
-	repeatedDigest, repeatErr := publisher.PublishManifest(manifest)
+	repeatedDigest, repeatErr := publisher.PublishManifest(context.Background(), manifest)
 	if repeatErr != nil || repeatedDigest != digest {
 		t.Fatalf("repeated publish: %q %v", repeatedDigest, repeatErr)
 	}
@@ -386,11 +463,11 @@ func TestPublishManifestPreservesConcurrentImmutability(t *testing.T) {
 	secondManifest.Images["server"] = "registry.example/coyote-server@sha256:" + strings.Repeat("e", 64)
 	results := make(chan error, 2)
 	go func() {
-		_, publishErr := firstPublisher.PublishManifest(firstManifest)
+		_, publishErr := firstPublisher.PublishManifest(context.Background(), firstManifest)
 		results <- publishErr
 	}()
 	go func() {
-		_, publishErr := secondPublisher.PublishManifest(secondManifest)
+		_, publishErr := secondPublisher.PublishManifest(context.Background(), secondManifest)
 		results <- publishErr
 	}()
 	var successes, conflicts int

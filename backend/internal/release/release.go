@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,6 +25,8 @@ var (
 	ErrNotFound             = errors.New("release document not found")
 	ErrManifestConflict     = errors.New("release manifest already exists with different content")
 	ErrChannelPromotionBusy = errors.New("channel promotion is already in progress")
+	ErrUnsupportedBackend   = errors.New("release store backend is not supported")
+	ErrInvalidLocation      = errors.New("invalid release store location")
 	semVerPattern           = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 	commitPattern           = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
 	digestPattern           = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -81,6 +84,19 @@ type Document struct {
 type Source interface {
 	FetchManifest(context.Context, string) (Document, error)
 	FetchChannelIndex(context.Context) (ChannelIndex, error)
+}
+
+type Publisher interface {
+	PublishManifest(context.Context, Manifest) (string, error)
+	PromoteChannel(context.Context, string, string, string) error
+	PromoteCoyoteLatestIfNewer(context.Context, string, string) (bool, error)
+}
+
+// Store combines release document reads with the supported publication actions.
+// Provider-specific concurrency controls remain internal to each implementation.
+type Store interface {
+	Source
+	Publisher
 }
 
 type Resolved struct {
@@ -269,6 +285,50 @@ func NewFileSource(location string) (*FileSource, error) {
 	return &FileSource{root: filepath.Clean(location)}, nil
 }
 
+// OpenStore resolves a release source location to its backing store.
+func OpenStore(location string) (Store, error) {
+	trimmed := strings.TrimSpace(location)
+	if strings.HasPrefix(trimmed, "file:") {
+		if !strings.HasPrefix(trimmed, "file://") {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidLocation, location)
+		}
+		return NewFileStore(trimmed)
+	}
+	if strings.HasPrefix(trimmed, "gs:") {
+		return openGCSStoreLocation(trimmed)
+	}
+	if strings.Contains(trimmed, "://") {
+		parsed, parseErr := url.Parse(trimmed)
+		if parseErr != nil || parsed.Scheme == "" {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidLocation, location)
+		}
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedBackend, parsed.Scheme)
+	}
+	return NewFileStore(trimmed)
+}
+
+func openGCSStoreLocation(location string) (Store, error) {
+	parsed, parseErr := url.Parse(location)
+	if parseErr != nil || parsed.Hostname() == "" || parsed.Port() != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || !validGCSPrefix(parsed.EscapedPath()) {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidLocation, location)
+	}
+	return nil, fmt.Errorf("%w: %s", ErrUnsupportedBackend, parsed.Scheme)
+}
+
+func validGCSPrefix(escapedPath string) bool {
+	prefix := strings.TrimPrefix(escapedPath, "/")
+	if prefix == "" {
+		return true
+	}
+	for _, escapedComponent := range strings.Split(prefix, "/") {
+		component, unescapeErr := url.PathUnescape(escapedComponent)
+		if unescapeErr != nil || component == "" || component == "." || component == ".." || strings.Contains(component, "\\") {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *FileSource) FetchManifest(_ context.Context, version string) (Document, error) {
 	return readDocument(filepath.Join(s.root, "releases", version+".json"))
 }
@@ -301,17 +361,39 @@ func Digest(data []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-type FilePublisher struct{ root string }
+type FilePublisher struct {
+	root   string
+	source *FileSource
+}
 
-func NewFilePublisher(location string) (*FilePublisher, error) {
+// NewFileStore returns the filesystem release store for a local path or file URL.
+func NewFileStore(location string) (*FilePublisher, error) {
 	source, err := NewFileSource(location)
 	if err != nil {
 		return nil, err
 	}
-	return &FilePublisher{root: source.root}, nil
+	return &FilePublisher{root: source.root, source: source}, nil
 }
 
-func (p *FilePublisher) PublishManifest(manifest Manifest) (string, error) {
+func NewFilePublisher(location string) (*FilePublisher, error) {
+	return NewFileStore(location)
+}
+
+func (p *FilePublisher) FetchManifest(ctx context.Context, version string) (Document, error) {
+	return p.source.FetchManifest(ctx, version)
+}
+
+func (p *FilePublisher) FetchChannelIndex(ctx context.Context) (ChannelIndex, error) {
+	return p.source.FetchChannelIndex(ctx)
+}
+
+func (p *FilePublisher) PublishManifest(ctx context.Context, manifest Manifest) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
 	if validateErr := manifest.Validate(); validateErr != nil {
 		return "", validateErr
 	}
@@ -321,13 +403,16 @@ func (p *FilePublisher) PublishManifest(manifest Manifest) (string, error) {
 	}
 	data = append(data, '\n')
 	path := filepath.Join(p.root, "releases", manifest.Release+".json")
-	releaseLock, lockErr := p.acquireLock(context.Background(), path+".lock")
+	releaseLock, lockErr := p.acquireLock(ctx, path+".lock")
 	if lockErr != nil {
 		return "", lockErr
 	}
 	defer func() {
 		_ = os.Remove(releaseLock)
 	}()
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
 	if existing, readErr := os.ReadFile(path); readErr == nil {
 		if string(existing) == string(data) {
 			return Digest(existing), nil
@@ -335,6 +420,9 @@ func (p *FilePublisher) PublishManifest(manifest Manifest) (string, error) {
 		return "", ErrManifestConflict
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return "", readErr
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
 	}
 	if writeErr := writeAtomic(path, data); writeErr != nil {
 		return "", writeErr
@@ -369,11 +457,7 @@ func (p *FilePublisher) PromoteChannel(ctx context.Context, channel, releaseVers
 		_ = os.Remove(releaseLock)
 	}()
 
-	source, sourceErr := NewFileSource(p.root)
-	if sourceErr != nil {
-		return sourceErr
-	}
-	index, indexErr := source.FetchChannelIndex(ctx)
+	index, indexErr := p.FetchChannelIndex(ctx)
 	if errors.Is(indexErr, ErrNotFound) {
 		index = ChannelIndex{SchemaVersion: SchemaVersion, Channels: map[string]ChannelEntry{}}
 	} else if indexErr != nil {
