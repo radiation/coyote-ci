@@ -308,11 +308,18 @@ func OpenStore(location string) (Store, error) {
 }
 
 func openGCSStoreLocation(location string) (Store, error) {
-	parsed, parseErr := url.Parse(location)
-	if parseErr != nil || parsed.Hostname() == "" || parsed.Port() != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || !validGCSPrefix(parsed.EscapedPath()) {
-		return nil, fmt.Errorf("%w: %q", ErrInvalidLocation, location)
+	if _, _, parseErr := parseGCSStoreLocation(location); parseErr != nil {
+		return nil, parseErr
 	}
-	return nil, fmt.Errorf("%w: %s", ErrUnsupportedBackend, parsed.Scheme)
+	return nil, fmt.Errorf("%w: gs", ErrUnsupportedBackend)
+}
+
+func parseGCSStoreLocation(location string) (string, string, error) {
+	parsed, parseErr := url.Parse(location)
+	if parseErr != nil || parsed.Scheme != "gs" || parsed.Hostname() == "" || parsed.Port() != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || !validGCSPrefix(parsed.EscapedPath()) {
+		return "", "", fmt.Errorf("%w: %q", ErrInvalidLocation, location)
+	}
+	return parsed.Hostname(), strings.Trim(parsed.Path, "/"), nil
 }
 
 func validGCSPrefix(escapedPath string) bool {
@@ -322,7 +329,7 @@ func validGCSPrefix(escapedPath string) bool {
 	}
 	for _, escapedComponent := range strings.Split(prefix, "/") {
 		component, unescapeErr := url.PathUnescape(escapedComponent)
-		if unescapeErr != nil || component == "" || component == "." || component == ".." || strings.Contains(component, "\\") {
+		if unescapeErr != nil || component == "" || component == "." || component == ".." || strings.ContainsAny(component, "/\\") {
 			return false
 		}
 	}
