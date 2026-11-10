@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -187,6 +188,56 @@ func TestReleaseRawImportAndFetchFailures(t *testing.T) {
 	output, outputErr := os.ReadFile(outputPath)
 	if outputErr != nil || string(output) != "preserve" {
 		t.Fatalf("failed fetch changed output=%q err=%v", output, outputErr)
+	}
+}
+
+func TestReleaseFetchRejectsInvalidVersionBeforeOpeningStore(t *testing.T) {
+	for _, version := range []string{"../channels", "1.2", "1.2.3/../channels", " 1.2.3"} {
+		t.Run(version, func(t *testing.T) {
+			opened := false
+			code := Run(Dependencies{
+				Stdout: &bytes.Buffer{},
+				Stderr: &bytes.Buffer{},
+				OpenReleaseStore: func(context.Context, string) (releases.Store, io.Closer, error) {
+					opened = true
+					return nil, nil, errors.New("release store should not open")
+				},
+				Args: []string{"release", "fetch", "--version", version, "--release-source", "gs://release-bucket", "--output", "-"},
+			})
+			if code != 2 {
+				t.Fatalf("fetch exit=%d want 2", code)
+			}
+			if opened {
+				t.Fatal("invalid version opened release store")
+			}
+		})
+	}
+}
+
+func TestReleaseFetchClassifiesStoreOpeningFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code int
+	}{
+		{name: "invalid location", err: fmt.Errorf("%w: malformed GCS URL", releases.ErrInvalidLocation), code: 2},
+		{name: "unsupported backend", err: fmt.Errorf("%w: s3", releases.ErrUnsupportedBackend), code: 2},
+		{name: "application default credentials", err: errors.New("could not find default credentials"), code: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			code := Run(Dependencies{
+				Stdout: &bytes.Buffer{},
+				Stderr: &bytes.Buffer{},
+				OpenReleaseStore: func(context.Context, string) (releases.Store, io.Closer, error) {
+					return nil, nil, tc.err
+				},
+				Args: []string{"release", "fetch", "--version", "2.5.1", "--release-source", "gs://release-bucket", "--output", "-"},
+			})
+			if code != tc.code {
+				t.Fatalf("fetch exit=%d want %d", code, tc.code)
+			}
+		})
 	}
 }
 

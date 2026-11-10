@@ -82,7 +82,7 @@ func (a *app) newReleasePublishCoyoteCommand() *cobra.Command {
 			}
 			publisher, closer, err := a.openReleaseStore(cmd.Context(), sourceLocation)
 			if err != nil {
-				return &ExitError{Code: 2, Err: err}
+				return releaseStoreOpenExitError(err)
 			}
 			defer closeReleaseStore(&commandErr, closer)
 			digest, err := publisher.PublishManifest(cmd.Context(), manifest)
@@ -173,7 +173,7 @@ func (a *app) newReleaseResolveCommand() *cobra.Command {
 			}
 			source, closer, sourceErr := a.openReleaseStore(cmd.Context(), sourceLocation)
 			if sourceErr != nil {
-				return &ExitError{Code: 2, Err: sourceErr}
+				return releaseStoreOpenExitError(sourceErr)
 			}
 			defer closeReleaseStore(&commandErr, closer)
 			resolved, resolveErr := releases.Resolve(cmd.Context(), source, releaseVersion, channel)
@@ -240,7 +240,7 @@ func (a *app) newReleasePublishCommand() *cobra.Command {
 			}
 			publisher, closer, publisherErr := a.openReleaseStore(cmd.Context(), sourceLocation)
 			if publisherErr != nil {
-				return &ExitError{Code: 2, Err: publisherErr}
+				return releaseStoreOpenExitError(publisherErr)
 			}
 			defer closeReleaseStore(&commandErr, closer)
 			digest, publishErr := publisher.PublishManifest(cmd.Context(), manifest)
@@ -271,9 +271,12 @@ func (a *app) newReleaseFetchCommand() *cobra.Command {
 			if strings.TrimSpace(releaseVersion) == "" || strings.TrimSpace(sourceLocation) == "" || strings.TrimSpace(outputPath) == "" {
 				return &ExitError{Code: 2, Err: errors.New("--version, --release-source, and --output are required")}
 			}
+			if versionErr := releases.ValidateExactSemanticVersion(releaseVersion); versionErr != nil {
+				return &ExitError{Code: 2, Err: fmt.Errorf("--version %w", versionErr)}
+			}
 			store, closer, storeErr := a.openReleaseStore(cmd.Context(), sourceLocation)
 			if storeErr != nil {
-				return &ExitError{Code: 2, Err: storeErr}
+				return releaseStoreOpenExitError(storeErr)
 			}
 			defer closeReleaseStore(&commandErr, closer)
 			document, fetchErr := store.FetchManifest(cmd.Context(), releaseVersion)
@@ -322,7 +325,7 @@ func (a *app) newReleaseImportCommand() *cobra.Command {
 			}
 			store, closer, storeErr := a.openReleaseStore(cmd.Context(), sourceLocation)
 			if storeErr != nil {
-				return &ExitError{Code: 2, Err: storeErr}
+				return releaseStoreOpenExitError(storeErr)
 			}
 			defer closeReleaseStore(&commandErr, closer)
 			_, digest, importErr := store.ImportManifest(cmd.Context(), data)
@@ -346,6 +349,13 @@ func closeReleaseStore(commandErr *error, closer io.Closer) {
 	if closeErr := closer.Close(); closeErr != nil && *commandErr == nil {
 		*commandErr = &ExitError{Code: 1, Err: closeErr}
 	}
+}
+
+func releaseStoreOpenExitError(err error) *ExitError {
+	if errors.Is(err, releases.ErrInvalidLocation) || errors.Is(err, releases.ErrUnsupportedBackend) {
+		return &ExitError{Code: 2, Err: err}
+	}
+	return &ExitError{Code: 1, Err: err}
 }
 
 func writeRawReleaseDocument(path string, data []byte) error {

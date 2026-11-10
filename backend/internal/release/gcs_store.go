@@ -109,6 +109,9 @@ func (s *GCSStore) publishManifestData(ctx context.Context, releaseVersion strin
 	if contextErr := ctx.Err(); contextErr != nil {
 		return "", contextErr
 	}
+	if len(data) > maxReleaseDocumentBytes {
+		return "", fmt.Errorf("release manifest exceeds %d byte limit", maxReleaseDocumentBytes)
+	}
 	objectName := s.manifestObjectName(releaseVersion)
 	createErr := s.objects.Create(ctx, objectName, data)
 	if createErr == nil {

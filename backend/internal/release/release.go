@@ -119,12 +119,19 @@ func ParseManifest(data []byte) (Manifest, error) {
 	return manifest, nil
 }
 
+func ValidateExactSemanticVersion(version string) error {
+	if !semVerPattern.MatchString(version) {
+		return fmt.Errorf("must be an exact semantic version: %q", version)
+	}
+	return nil
+}
+
 func (m Manifest) Validate() error {
 	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != ManifestSchemaVersionV2 {
 		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
 	}
-	if !semVerPattern.MatchString(m.Release) {
-		return fmt.Errorf("release must be an exact semantic version: %q", m.Release)
+	if versionErr := ValidateExactSemanticVersion(m.Release); versionErr != nil {
+		return fmt.Errorf("release %w", versionErr)
 	}
 	if !commitPattern.MatchString(m.Source.Commit) {
 		return fmt.Errorf("source commit must be a full Git commit SHA: %q", m.Source.Commit)
@@ -181,8 +188,8 @@ func validateComponents(components map[string]Component) error {
 		if !ok {
 			return fmt.Errorf("manifest is missing %s component", name)
 		}
-		if !semVerPattern.MatchString(component.Version) {
-			return fmt.Errorf("%s component version must be an exact semantic version: %q", name, component.Version)
+		if versionErr := ValidateExactSemanticVersion(component.Version); versionErr != nil {
+			return fmt.Errorf("%s component version %w", name, versionErr)
 		}
 		if imageErr := ValidateImageReference(component.Image); imageErr != nil {
 			return fmt.Errorf("%s component image: %w", name, imageErr)
@@ -204,7 +211,7 @@ func validateDeployment(deployment *Deployment) error {
 		if chart == nil {
 			continue
 		}
-		if !semVerPattern.MatchString(chart.Version) || !digestPattern.MatchString(chart.Digest) {
+		if ValidateExactSemanticVersion(chart.Version) != nil || !digestPattern.MatchString(chart.Digest) {
 			return fmt.Errorf("%s must contain an exact version and sha256 digest", name)
 		}
 	}
@@ -230,7 +237,7 @@ func (index ChannelIndex) Validate() error {
 		if channel != "latest" && channel != "stable" {
 			return fmt.Errorf("unsupported release channel %q", channel)
 		}
-		if !semVerPattern.MatchString(entry.Release) || !digestPattern.MatchString(entry.ManifestDigest) {
+		if ValidateExactSemanticVersion(entry.Release) != nil || !digestPattern.MatchString(entry.ManifestDigest) {
 			return fmt.Errorf("channel %q must reference an exact release and manifest digest", channel)
 		}
 	}

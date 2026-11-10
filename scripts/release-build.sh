@@ -149,15 +149,45 @@ validate_configuration() {
   fi
 }
 
+normalize_local_path() {
+  local path="$1" suffix="" parent base
+  [[ "$path" == /* ]] || path="$PWD/$path"
+  while [[ ! -d "$path" ]]; do
+    base="$(basename "$path")"
+    suffix="/$base$suffix"
+    parent="$(dirname "$path")"
+    [[ "$parent" != "$path" ]] || break
+    path="$parent"
+  done
+  printf '%s%s' "$(cd "$path" && pwd -P)" "$suffix"
+}
+
+normalize_release_source() {
+  local local_path
+  case "$release_source" in
+    file://*)
+      local_path="${release_source#file://}"
+      release_source="file://$(normalize_local_path "$local_path")"
+      ;;
+    *://*)
+      ;;
+    *)
+      release_source="$(normalize_local_path "$release_source")"
+      ;;
+  esac
+}
+
 execute_release_cli() {
-  if [[ -n "$release_cli" ]]; then
-    "$release_cli" "$@"
-    return
-  fi
+  "$release_cli" "$@"
+}
+
+prepare_release_cli() {
+  [[ -n "$release_cli" ]] && return
+  release_cli="$release_temp_dir/coyote"
   (
     cd "$repo_root/backend"
-    go run ./cmd/coyote "$@"
-  )
+    go build -o "$release_cli" ./cmd/coyote
+  ) || fail "could not build the release CLI"
 }
 
 fetch_release_manifest() {
@@ -363,18 +393,12 @@ verify_component_tag() {
 }
 
 publish_manifest() {
-  (
-    cd "$repo_root/backend"
-    go run ./cmd/coyote release publish --manifest "$manifest" --release-source "$release_source"
-  )
+  execute_release_cli release publish --manifest "$manifest" --release-source "$release_source"
 }
 
 advance_channel() {
   [[ -n "$release_channel" ]] || return 0
-  (
-    cd "$repo_root/backend"
-    go run ./cmd/coyote release publish --manifest "$manifest" --release-source "$release_source" --channel "$release_channel"
-  )
+  execute_release_cli release publish --manifest "$manifest" --release-source "$release_source" --channel "$release_channel"
 }
 
 print_plan() {
@@ -402,6 +426,8 @@ print_plan() {
 }
 
 validate_configuration
+normalize_release_source
+prepare_release_cli
 load_previous_release
 
 for component in "${components[@]}"; do

@@ -8,6 +8,7 @@ trap 'rm -rf "$temp_dir"' EXIT
 digest() { printf 'sha256:%064d' 0 | tr '0' "$1"; }
 assert_contains() { [[ "$1" == *"$2"* ]] || { echo "expected output to contain: $2" >&2; exit 1; }; }
 assert_not_contains() { [[ "$1" != *"$2"* ]] || { echo "unexpected output: $2" >&2; exit 1; }; }
+canonical_path() { cd "$1" && pwd -P; }
 
 cat >"$temp_dir/git" <<'EOF'
 #!/usr/bin/env bash
@@ -53,6 +54,20 @@ cat >"$temp_dir/go" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$TEST_GO_LOG"
+if [[ "$1" == build ]]; then
+  output=""
+  for ((i = 1; i <= $#; i++)); do
+    if [[ "${!i}" == -o ]]; then
+      next=$((i + 1))
+      output="${!next}"
+      break
+    fi
+  done
+  [[ -n "$output" ]] || exit 1
+  cp "$0" "$output"
+  chmod +x "$output"
+  exit 0
+fi
 command=""; manifest=""; release_source=""; release_version=""; output=""; channel=false
 for argument in "$@"; do
   if [[ "$argument" == fetch || "$argument" == publish ]]; then
@@ -129,12 +144,16 @@ EOF
 }
 
 run_release() {
-  local store="$1" manifest="$2" docker_log="$3" go_log="$4" state_name tag_state promotion_count channel_log store_root release_channel=latest argument
+  local store="$1" manifest="$2" docker_log="$3" go_log="$4" state_name tag_state promotion_count channel_log store_root release_channel=latest release_source="$1" argument
+  local -a extra_env=()
+	local -a env_command=()
   shift 4
   for argument in "$@"; do
-    if [[ "$argument" == RELEASE_CHANNEL=* ]]; then
-      release_channel="${argument#RELEASE_CHANNEL=}"
-    fi
+    case "$argument" in
+      RELEASE_CHANNEL=*) release_channel="${argument#RELEASE_CHANNEL=}" ;;
+      RELEASE_SOURCE=*) release_source="${argument#RELEASE_SOURCE=}" ;;
+      *) extra_env+=("$argument") ;;
+    esac
   done
   state_name="${TEST_STATE_NAME:-default}"
   tag_state="$temp_dir/tag-state-$state_name"
@@ -148,17 +167,21 @@ run_release() {
     : >"$channel_log"
   fi
   store_root="${TEST_RELEASE_STORE_ROOT:-$store}"
-  env PATH="$temp_dir:$PATH" TEST_MANIFEST="$manifest" TEST_DOCKER_LOG="$docker_log" TEST_GO_LOG="$go_log" \
+  env_command=(env PATH="$temp_dir:$PATH" TEST_MANIFEST="$manifest" TEST_DOCKER_LOG="$docker_log" TEST_GO_LOG="$go_log" \
     TEST_TAG_STATE="$tag_state" TEST_PROMOTION_COUNT="$promotion_count" TEST_CHANNEL_LOG="$channel_log" \
     TEST_RELEASE_STORE_ROOT="$store_root" \
-    VERSION=0.0.10 RELEASE_REGISTRY=registry.example/coyote RELEASE_SOURCE="$store" PREVIOUS_RELEASE=0.0.9 \
+    VERSION=0.0.10 RELEASE_REGISTRY=registry.example/coyote RELEASE_SOURCE="$release_source" PREVIOUS_RELEASE=0.0.9 \
     RELEASE_BUILD_DATE=2026-11-05T00:00:00Z RELEASE_CHANNEL="$release_channel" \
     COMPONENT_SERVER_ACTION=build COMPONENT_SERVER_VERSION=1.1.0 \
     COMPONENT_WORKER_ACTION=build COMPONENT_WORKER_VERSION=1.1.1 \
     COMPONENT_FRONTEND_ACTION=build COMPONENT_FRONTEND_VERSION=2.0.0 \
     COMPONENT_MCP_ACTION=build COMPONENT_MCP_VERSION=0.2.0 \
-    COMPONENT_MIGRATE_ACTION=build COMPONENT_MIGRATE_VERSION=3.0.0 \
-    "$@" bash "$repo_root/scripts/release-build.sh"
+    COMPONENT_MIGRATE_ACTION=build COMPONENT_MIGRATE_VERSION=3.0.0)
+  if [[ ${#extra_env[@]} -gt 0 ]]; then
+    env_command+=("${extra_env[@]}")
+  fi
+  env_command+=(bash "$repo_root/scripts/release-build.sh")
+  "${env_command[@]}"
 }
 
 # All components built: v2 manifest, MCP, separate server/worker build arguments, and component tags.
@@ -169,15 +192,37 @@ contents="$(cat "$manifest")"; log="$(cat "$docker_log")"
 assert_contains "$contents" '"schema_version": 2'; assert_contains "$contents" '"mcp"'; assert_contains "$contents" '"version": "1.1.0"'
 assert_contains "$log" '--target source-runtime'; assert_contains "$log" 'COYOTE_SERVER_VERSION=1.1.0'; assert_contains "$log" 'COYOTE_WORKER_VERSION=1.1.1'; assert_contains "$log" 'COYOTE_APPLICATION_VERSION=0.2.0'
 assert_contains "$log" 'imagetools create --tag registry.example/coyote/coyote-mcp:0.2.0'
-assert_contains "$(cat "$go_log")" "release fetch --version 0.0.9 --release-source $store"
+go_calls="$(cat "$go_log")"; store_location="$(canonical_path "$store")"
+assert_contains "$go_calls" 'build -o '
+assert_contains "$go_calls" "release fetch --version 0.0.9 --release-source $store_location"
+assert_contains "$go_calls" "release fetch --version 0.0.10 --release-source $store_location"
+assert_not_contains "$go_calls" 'run ./cmd/coyote'
+[[ "$(grep -c '^build -o ' "$go_log")" == 1 ]] || { echo 'expected one default release CLI build' >&2; exit 1; }
 
-# A caller-supplied compiled CLI avoids go run collapsing the fetch exit-code contract.
+# A caller-supplied compiled CLI avoids the temporary build.
 store="$temp_dir/compiled-cli-store"; write_v2_previous "$store"
 manifest="$temp_dir/compiled-cli.json"; docker_log="$temp_dir/compiled-cli.docker"; go_log="$temp_dir/compiled-cli.go"
 run_release "$store" "$manifest" "$docker_log" "$go_log" COYOTE_RELEASE_CLI="$temp_dir/go"
 fetch_log="$(grep 'release fetch' "$go_log")"
 assert_contains "$fetch_log" 'release fetch --version 0.0.9'
 assert_not_contains "$fetch_log" 'run ./cmd/coyote'
+assert_not_contains "$(cat "$go_log")" 'build -o '
+
+# Relative local and file:// release sources are resolved from the caller's directory for both CLI paths.
+store="$temp_dir/relative-source-store"; write_v2_previous "$store"
+caller_dir="$temp_dir/relative-source-caller"; mkdir -p "$caller_dir"
+manifest="$temp_dir/relative-source.json"; docker_log="$temp_dir/relative-source.docker"; go_log="$temp_dir/relative-source.go"
+pushd "$caller_dir" >/dev/null
+run_release "$store" "$manifest" "$docker_log" "$go_log" RELEASE_SOURCE=../relative-source-store
+popd >/dev/null
+assert_contains "$(cat "$go_log")" "--release-source $(canonical_path "$store")"
+
+store="$temp_dir/file-url-source-store"; write_v2_previous "$store"
+manifest="$temp_dir/file-url-source.json"; docker_log="$temp_dir/file-url-source.docker"; go_log="$temp_dir/file-url-source.go"
+pushd "$caller_dir" >/dev/null
+run_release "$store" "$manifest" "$docker_log" "$go_log" COYOTE_RELEASE_CLI="$temp_dir/go" RELEASE_SOURCE=file://../file-url-source-store
+popd >/dev/null
+assert_contains "$(cat "$go_log")" "--release-source file://$(canonical_path "$store")"
 
 # Mixed release: server/worker reuse while the other components build; reused components never build, push, or tag.
 store="$temp_dir/mixed-store"; write_v2_previous "$store"
@@ -216,7 +261,7 @@ run_release "$store" "$manifest" "$docker_log" "$go_log" \
   COMPONENT_MIGRATE_ACTION=reuse COMPONENT_MIGRATE_VERSION=1.0.0 \
   COMPONENT_MCP_ACTION=reuse COMPONENT_MCP_VERSION=0.1.0 COMPONENT_MCP_IMAGE="registry.bootstrap/coyote-mcp@$(digest d)"
 assert_contains "$(cat "$manifest")" '"schema_version": 2'; assert_contains "$(cat "$manifest")" 'registry.bootstrap/coyote-mcp@sha256:'
-assert_contains "$(cat "$go_log")" "release fetch --version 0.0.9 --release-source $store"
+assert_contains "$(cat "$go_log")" "release fetch --version 0.0.9 --release-source $(canonical_path "$store")"
 
 # A semantic component tag resolving to different content fails before the platform manifest publishes.
 store="$temp_dir/collision-store"; write_v2_previous "$store"
