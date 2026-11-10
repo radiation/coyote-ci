@@ -174,7 +174,8 @@ load_previous_component() {
 }
 
 load_previous_release() {
-  release_root="${release_source#file://}"
+  release_root="$(cd -- "${release_source#file://}" && pwd)" || fail "release source directory not found: $release_source"
+  release_source="$release_root"
   previous_manifest="$release_root/releases/$previous_release.json"
   [[ -f "$previous_manifest" ]] || fail "previous release manifest not found: $previous_release"
   previous_schema="$(jq -er '.schema_version' "$previous_manifest")" || fail "could not read previous release schema version"
@@ -364,7 +365,7 @@ done
 
 load_existing_release
 
-if [[ "$retry_manifest" == "false" && -z "$build_date" && ! has_build_actions ]]; then
+if [[ "$retry_manifest" == "false" && -z "$build_date" ]] && ! has_build_actions; then
   build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
