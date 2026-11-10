@@ -159,14 +159,19 @@ release_identity() {
       "migrate" => control.dig("images", "migrate"),
       "worker" => worker.dig("images", "worker")
     }
+    mcp_enabled = control.dig("mcp", "enabled") == true
+    images["mcp"] = control.dig("images", "mcp") if mcp_enabled
     abort "release images must use complete SHA-256 digest references" unless images.values.all? { |value| value.is_a?(String) && value.match?(/\A.+@sha256:[0-9a-f]{64}\z/) }
     release = control.fetch("release", {})
+    fingerprint_inputs = images.sort.to_h.merge("release_version" => release["version"], "manifest_digest" => release["manifestDigest"])
+    fingerprint_inputs["mcp_enabled"] = true if mcp_enabled
     record = {
-      "fingerprint" => Digest::SHA256.hexdigest(JSON.generate(images.sort.to_h.merge("release_version" => release["version"], "manifest_digest" => release["manifestDigest"]))),
+      "fingerprint" => Digest::SHA256.hexdigest(JSON.generate(fingerprint_inputs)),
       "images" => images,
       "release_version" => release["version"],
       "manifest_digest" => release["manifestDigest"]
     }
+    record["mcp_enabled"] = true if mcp_enabled
     puts JSON.generate(record)
   ' "$control_values" "$worker_values" "$release_values"
 }
@@ -283,6 +288,7 @@ state_load_and_verify() {
     keys = %w[rollout_id target_environment context cluster_uid control_namespace worker_namespace control_release worker_release migration_job]
     keys.each { |key| puts "#{key}=#{state.fetch(key, "")}" }
     puts "release_fingerprint=#{state.dig("release", "fingerprint")}"
+    puts "release_json=#{JSON.generate(state.fetch("release"))}"
     puts "migration_status=#{state["migration_status"]}"
     puts "last_confirmed_phase=#{state.fetch("phases", {}).select { |_key, value| value == "completed" }.keys.last || "preflight"}"
     puts "intended_replicas_json=#{JSON.generate(state.fetch("intended_replicas"))}"
@@ -304,6 +310,7 @@ state_load_and_verify() {
       worker_release=*) state_worker_release="${item#*=}" ;;
       migration_job=*) state_migration_job="${item#*=}" ;;
       release_fingerprint=*) state_release_fingerprint="${item#*=}" ;;
+      release_json=*) state_release_json="${item#*=}" ;;
       migration_status=*) migration_status="${item#*=}" ;;
       last_confirmed_phase=*) last_confirmed_phase="${item#*=}" ;;
       intended_replicas_json=*) intended_replicas_json="${item#*=}" ;;
@@ -344,21 +351,44 @@ deployment_image() {
 }
 
 capture_observed_images() {
-  observed_images_json="$(ruby -rjson -e 'puts JSON.generate({"server" => ARGV[0], "frontend" => ARGV[1], "worker" => ARGV[2]})' \
+  local mcp_observation
+  mcp_observation='null'
+  if [[ "$mcp_is_desired" == "true" ]]; then
+    if [[ "$mcp_state" == "managed" ]]; then
+      mcp_observation="$(ruby -rjson -e 'puts JSON.generate({"state" => "present", "image" => ARGV.fetch(0)})' "$(deployment_image "$control_namespace" coyote-mcp mcp)")"
+    else
+      mcp_observation='{"state":"absent"}'
+    fi
+  fi
+  observed_images_json="$(ruby -rjson -e '
+    observed = {"server" => ARGV[0], "frontend" => ARGV[1], "worker" => ARGV[2]}
+    observed["mcp"] = JSON.parse(ARGV[3]) unless ARGV[3] == "null"
+    puts JSON.generate(observed)
+  ' \
     "$(deployment_image "$control_namespace" coyote-server server)" \
     "$(deployment_image "$control_namespace" coyote-frontend frontend)" \
-    "$(deployment_image "$worker_namespace" "$worker_deployment" worker)")"
+    "$(deployment_image "$worker_namespace" "$worker_deployment" worker)" \
+    "$mcp_observation")"
 }
 
 validate_resume_reconciliation() {
-  local current_server current_frontend current_worker current_control_revision current_worker_revision
+  local current_server current_frontend current_worker current_mcp current_control_revision current_worker_revision
   current_server="$(deployment_image "$control_namespace" coyote-server server)"
   current_frontend="$(deployment_image "$control_namespace" coyote-frontend frontend)"
   current_worker="$(deployment_image "$worker_namespace" "$worker_deployment" worker)"
+  current_mcp=""
+  if [[ "$mcp_is_desired" == "true" && "$mcp_state" == "managed" ]]; then
+    current_mcp="$(deployment_image "$control_namespace" coyote-mcp mcp)"
+  fi
   ruby -rjson -e '
-    observed, release, server, frontend, worker, control_phase, worker_phase = ARGV
+    observed, checkpoint_release, release, server, frontend, worker, mcp_state, mcp_image, control_phase, worker_phase = ARGV
     observed = JSON.parse(observed)
-    release = JSON.parse(release).fetch("images")
+    checkpoint_release = JSON.parse(checkpoint_release)
+    current_release = JSON.parse(release)
+    checkpoint_mcp_enabled = checkpoint_release.fetch("mcp_enabled", false)
+    mcp_enabled = current_release.fetch("mcp_enabled", false)
+    abort "checkpoint MCP enablement does not match the requested rollout" unless checkpoint_mcp_enabled == mcp_enabled
+    release = current_release.fetch("images")
     actual = {"server" => server, "frontend" => frontend, "worker" => worker}
     actual.each do |name, image|
       allowed = [observed.fetch(name), release.fetch(name)]
@@ -367,7 +397,25 @@ validate_resume_reconciliation() {
     abort "completed control-plane phase is not running target server image" if control_phase == "completed" && server != release.fetch("server")
     abort "completed control-plane phase is not running target frontend image" if control_phase == "completed" && frontend != release.fetch("frontend")
     abort "completed worker phase is not running target worker image" if worker_phase == "completed" && worker != release.fetch("worker")
-  ' "$observed_images_json" "$release_json" "$current_server" "$current_frontend" "$current_worker" "${state_control_phase:-}" "${state_worker_phase:-}" || fail "resume deployment images do not reconcile with the checkpointed rollout"
+    if mcp_enabled
+      checkpoint_mcp_image = checkpoint_release.fetch("images").fetch("mcp")
+      target_mcp_image = release.fetch("mcp")
+      abort "checkpoint MCP image does not match the requested rollout" unless checkpoint_mcp_image == target_mcp_image
+      checkpoint_mcp = observed.fetch("mcp")
+      abort "checkpoint MCP observation is malformed" unless checkpoint_mcp.is_a?(Hash) && %w[absent present].include?(checkpoint_mcp["state"])
+      if checkpoint_mcp["state"] == "absent"
+        abort "absent MCP checkpoint must not contain an image" if checkpoint_mcp.key?("image")
+        allowed = mcp_state == "absent" || (mcp_state == "managed" && mcp_image == target_mcp_image)
+        abort "MCP deployment does not match the first-enablement checkpoint" unless allowed
+      else
+        checkpoint_image = checkpoint_mcp["image"]
+        abort "present MCP checkpoint must contain an image" unless checkpoint_image.is_a?(String) && !checkpoint_image.empty?
+        abort "MCP deployment is missing after being checkpointed as present" unless mcp_state == "managed"
+        abort "MCP image does not match checkpointed or target immutable image" unless [checkpoint_image, target_mcp_image].include?(mcp_image)
+      end
+      abort "completed control-plane phase is not running target MCP image" if control_phase == "completed" && (mcp_state != "managed" || mcp_image != target_mcp_image)
+    end
+  ' "$observed_images_json" "$state_release_json" "$release_json" "$current_server" "$current_frontend" "$current_worker" "$mcp_state" "$current_mcp" "${state_control_phase:-}" "${state_worker_phase:-}" || fail "resume deployment images do not reconcile with the checkpointed rollout"
   current_control_revision="$(helm_revision "$control_release" "$control_namespace")"
   current_worker_revision="$(helm_revision "$worker_release" "$worker_namespace")"
   if [[ "${state_control_revision:-unknown}" != "unknown" && "$current_control_revision" != "$state_control_revision" ]]; then

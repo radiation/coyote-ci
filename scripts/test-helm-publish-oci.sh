@@ -7,6 +7,7 @@ temp_dir="$(mktemp -d)"
 fake_helm="$temp_dir/helm"
 fake_gcloud="$temp_dir/gcloud"
 fake_validator="$temp_dir/validator"
+fake_awk="$temp_dir/awk"
 
 cleanup() {
   rm -rf "$temp_dir"
@@ -18,6 +19,16 @@ cat >"$fake_validator" <<'EOF'
 exit 0
 EOF
 chmod 0644 "$fake_validator"
+
+cat >"$fake_awk" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${FAKE_CHART_VERSION:-}" != "" && "$*" == *'"version"'* && "${!#}" == */Chart.yaml ]]; then
+  printf '%s\n' "$FAKE_CHART_VERSION"
+  exit 0
+fi
+exec /usr/bin/awk "$@"
+EOF
+chmod +x "$fake_awk"
 
 cat >"$fake_helm" <<'EOF'
 #!/usr/bin/env bash
@@ -97,7 +108,13 @@ case "$1 $2 $3" in
       unrelated) printf '[{"package":"us-central1-docker.pkg.dev/example-project/coyote-ci/charts/other","tags":["0.1.0"]}]\n' ;;
       untagged) printf '[{"package":"us-central1-docker.pkg.dev/example-project/coyote-ci/charts/untagged"}]\n' ;;
       malformed) printf '[not-json\n' ;;
-      unexpected) printf '[{"package":1,"tags":["0.1.0"]}]\n' ;;
+      non-array) printf '{}\n' ;;
+      missing-package) printf '[{}]\n' ;;
+      non-string-package) printf '[{"package":1}]\n' ;;
+      non-array-tags) printf '[{"package":"us-central1-docker.pkg.dev/example-project/coyote-ci/charts/coyote-ci","tags":{}}]\n' ;;
+      non-string-tag) printf '[{"package":"us-central1-docker.pkg.dev/example-project/coyote-ci/charts/coyote-ci","tags":[1]}]\n' ;;
+      matching-then-malformed) printf '[{"package":"us-central1-docker.pkg.dev/example-project/coyote-ci/charts/coyote-ci","tags":["0.1.0"]},{"package":1}]\n' ;;
+      normalized-match) printf '[{"package":"us-central1-docker.pkg.dev/example-project/coyote-ci/charts/coyote-ci","tags":["0.1.0_build.7"]}]\n' ;;
       error) echo "request failed" >&2; exit 1 ;;
     esac
     ;;
@@ -114,7 +131,7 @@ run_publisher() {
 run_google_publisher() {
   : >"$temp_dir/helm.log"
   : >"$temp_dir/gcloud.log"
-  HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true "$@" bash "$publisher"
+  PATH="$temp_dir:$PATH" HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true "$@" bash "$publisher"
 }
 
 expect_failure() {
@@ -170,7 +187,13 @@ if grep -q '^artifacts docker images list ' "$temp_dir/gcloud.log"; then
 fi
 expect_failure "Artifact Registry image listing failure" env FAKE_GCLOUD_IMAGES=error HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
 expect_failure "malformed Artifact Registry tag JSON" env FAKE_GCLOUD_IMAGES=malformed HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
-expect_failure "unexpected Artifact Registry tag JSON" env FAKE_GCLOUD_IMAGES=unexpected HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
+for malformed_shape in non-array missing-package non-string-package non-array-tags non-string-tag matching-then-malformed; do
+  expect_failure "malformed Artifact Registry image response: $malformed_shape" env PATH="$temp_dir:$PATH" FAKE_GCLOUD_IMAGES="$malformed_shape" HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
+  grep -q 'unable to parse Artifact Registry chart images' "$temp_dir/output"
+done
+
+expect_failure "normalized Artifact Registry chart version" env PATH="$temp_dir:$PATH" FAKE_CHART_VERSION=0.1.0+build.7 FAKE_GCLOUD_IMAGES=normalized-match HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
+grep -q 'refusing to overwrite existing chart version: oci://us-central1-docker.pkg.dev/example-project/coyote-ci/charts/coyote-ci:0.1.0+build.7' "$temp_dir/output"
 
 run_publisher env HELM_CHART_SELECTION=all >"$temp_dir/success"
 grep -q 'published chart=coyote-ci version=0.1.0 reference=oci://registry.example/coyote-ci/charts/coyote-ci digest=sha256:' "$temp_dir/success"

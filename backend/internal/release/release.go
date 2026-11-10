@@ -15,7 +15,10 @@ import (
 	"time"
 )
 
-const SchemaVersion = 1
+const (
+	SchemaVersion           = 1
+	ManifestSchemaVersionV2 = 2
+)
 
 var (
 	ErrNotFound             = errors.New("release document not found")
@@ -26,14 +29,23 @@ var (
 	digestPattern           = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 )
 
-var requiredComponents = []string{"server", "frontend", "worker", "migrate"}
+var (
+	requiredV1Components = []string{"server", "frontend", "worker", "migrate"}
+	requiredV2Components = []string{"server", "frontend", "worker", "mcp", "migrate"}
+)
 
 type Manifest struct {
-	SchemaVersion int               `json:"schema_version"`
-	Release       string            `json:"release"`
-	Source        SourceIdentity    `json:"source"`
-	Images        map[string]string `json:"images"`
-	Deployment    *Deployment       `json:"deployment,omitempty"`
+	SchemaVersion int                  `json:"schema_version"`
+	Release       string               `json:"release"`
+	Source        SourceIdentity       `json:"source"`
+	Images        map[string]string    `json:"images,omitempty"`
+	Components    map[string]Component `json:"components,omitempty"`
+	Deployment    *Deployment          `json:"deployment,omitempty"`
+}
+
+type Component struct {
+	Version string `json:"version"`
+	Image   string `json:"image"`
 }
 
 type SourceIdentity struct {
@@ -89,7 +101,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 }
 
 func (m Manifest) Validate() error {
-	if m.SchemaVersion != SchemaVersion {
+	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != ManifestSchemaVersionV2 {
 		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
 	}
 	if !semVerPattern.MatchString(m.Release) {
@@ -101,11 +113,31 @@ func (m Manifest) Validate() error {
 	if _, timestampErr := time.Parse(time.RFC3339, m.Source.CreatedAt); timestampErr != nil {
 		return fmt.Errorf("source created_at must be RFC3339: %w", timestampErr)
 	}
-	if len(m.Images) != len(requiredComponents) {
-		return errors.New("manifest images must contain exactly server, frontend, worker, and migrate")
+	switch m.SchemaVersion {
+	case SchemaVersion:
+		if m.Components != nil {
+			return errors.New("schema v1 manifest must not contain components")
+		}
+		if imageErr := validateImages(m.Images, requiredV1Components); imageErr != nil {
+			return imageErr
+		}
+	case ManifestSchemaVersionV2:
+		if m.Images != nil {
+			return errors.New("schema v2 manifest must not contain legacy images")
+		}
+		if componentErr := validateComponents(m.Components); componentErr != nil {
+			return componentErr
+		}
 	}
-	for _, component := range requiredComponents {
-		image, ok := m.Images[component]
+	return validateDeployment(m.Deployment)
+}
+
+func validateImages(images map[string]string, components []string) error {
+	if len(images) != len(components) {
+		return fmt.Errorf("manifest images must contain exactly %s", strings.Join(components, ", "))
+	}
+	for _, component := range components {
+		image, ok := images[component]
 		if !ok {
 			return fmt.Errorf("manifest is missing %s image", component)
 		}
@@ -113,12 +145,36 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("%s image: %w", component, imageErr)
 		}
 	}
-	for component := range m.Images {
-		if !isRequiredComponent(component) {
+	for component := range images {
+		if !isComponent(component, components) {
 			return fmt.Errorf("manifest contains unknown image component %q", component)
 		}
 	}
-	return validateDeployment(m.Deployment)
+	return nil
+}
+
+func validateComponents(components map[string]Component) error {
+	if len(components) != len(requiredV2Components) {
+		return fmt.Errorf("manifest components must contain exactly %s", strings.Join(requiredV2Components, ", "))
+	}
+	for _, name := range requiredV2Components {
+		component, ok := components[name]
+		if !ok {
+			return fmt.Errorf("manifest is missing %s component", name)
+		}
+		if !semVerPattern.MatchString(component.Version) {
+			return fmt.Errorf("%s component version must be an exact semantic version: %q", name, component.Version)
+		}
+		if imageErr := ValidateImageReference(component.Image); imageErr != nil {
+			return fmt.Errorf("%s component image: %w", name, imageErr)
+		}
+	}
+	for name := range components {
+		if !isComponent(name, requiredV2Components) {
+			return fmt.Errorf("manifest contains unknown component %q", name)
+		}
+	}
+	return nil
 }
 
 func validateDeployment(deployment *Deployment) error {
@@ -380,15 +436,25 @@ func WriteValuesOverlay(w io.Writer, resolved Resolved) error {
 	if validateErr := resolved.Manifest.Validate(); validateErr != nil {
 		return validateErr
 	}
-	_, err := fmt.Fprintf(w, "release:\n  version: %s\n  channel: %s\n  manifestDigest: %s\nimages:\n  server: %s\n  frontend: %s\n  worker: %s\n  migrate: %s\n",
-		resolved.Manifest.Release, resolved.Channel, resolved.ManifestDigest,
-		resolved.Manifest.Images["server"], resolved.Manifest.Images["frontend"],
-		resolved.Manifest.Images["worker"], resolved.Manifest.Images["migrate"])
+	images := resolved.Manifest.Images
+	if resolved.Manifest.SchemaVersion == ManifestSchemaVersionV2 {
+		images = make(map[string]string, len(resolved.Manifest.Components))
+		for name, component := range resolved.Manifest.Components {
+			images[name] = component.Image
+		}
+	}
+	format := "release:\n  version: %s\n  channel: %s\n  manifestDigest: %s\nimages:\n  server: %s\n  frontend: %s\n  worker: %s\n  migrate: %s\n"
+	arguments := []any{resolved.Manifest.Release, resolved.Channel, resolved.ManifestDigest, images["server"], images["frontend"], images["worker"], images["migrate"]}
+	if resolved.Manifest.SchemaVersion == ManifestSchemaVersionV2 {
+		format = "release:\n  version: %s\n  channel: %s\n  manifestDigest: %s\nimages:\n  server: %s\n  frontend: %s\n  worker: %s\n  migrate: %s\n  mcp: %s\n"
+		arguments = append(arguments, images["mcp"])
+	}
+	_, err := fmt.Fprintf(w, format, arguments...)
 	return err
 }
 
-func isRequiredComponent(component string) bool {
-	for _, required := range requiredComponents {
+func isComponent(component string, components []string) bool {
+	for _, required := range components {
 		if component == required {
 			return true
 		}
