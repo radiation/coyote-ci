@@ -4,7 +4,6 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 helm_bin="${HELM_BIN:-helm}"
 gcloud_bin="${GCLOUD_BIN:-gcloud}"
-ruby_bin="${RUBY_BIN:-ruby}"
 validator="${HELM_PACKAGE_VALIDATOR:-$repo_root/scripts/helm-package-validate.sh}"
 oci_registry="${OCI_REGISTRY:-}"
 selection="${HELM_CHART_SELECTION:-all}"
@@ -57,7 +56,7 @@ lookup_google_artifact_registry_version() {
   expected_tag="${version//+/_}"
 
   require_command "$gcloud_bin"
-  require_command "$ruby_bin"
+  require_command jq
   if ! repository_format="$("$gcloud_bin" artifacts repositories describe "$repository" --project "$project" --location "$location" --format='value(format)' 2>"$repository_error")"; then
     echo "unable to verify Artifact Registry repository $oci_registry" >&2
     sed 's/[[:cntrl:]]//g' "$repository_error" >&2
@@ -69,18 +68,30 @@ lookup_google_artifact_registry_version() {
     sed 's/[[:cntrl:]]//g' "$tags_error" >&2
     return 1
   fi
-  if ! "$ruby_bin" -rjson -e '
-    image = ARGV.fetch(0)
-    expected_tag = ARGV.fetch(1)
-    images = JSON.parse(STDIN.read)
-    abort "Artifact Registry image response must be an array" unless images.is_a?(Array)
-    images.each do |entry|
-      abort "Artifact Registry image entry has an unexpected shape" unless entry.is_a?(Hash) && entry["package"].is_a?(String)
-      tags = entry.fetch("tags", [])
-      abort "Artifact Registry image tags have an unexpected shape" unless tags.is_a?(Array) && tags.all? { |tag| tag.is_a?(String) }
-      puts entry["package"] if entry["package"] == image && tags.include?(expected_tag)
+  if ! jq -r --arg image "$image" --arg expected_tag "$expected_tag" '
+    def validate_entry:
+      if type != "object" then
+        error("Artifact Registry image entry has an unexpected shape")
+      elif (.package | type) != "string" then
+        error("Artifact Registry image entry has an unexpected shape")
+      elif has("tags") then
+        if (.tags | type) != "array" or any(.tags[]; type != "string") then
+          error("Artifact Registry image tags have an unexpected shape")
+        else
+          .
+        end
+      else
+        .
+      end;
+    if type != "array" then
+      error("Artifact Registry image response must be an array")
+    else
+      map(validate_entry)
+      | .[]
+      | select(.package == $image and ((.tags // []) | index($expected_tag)))
+      | .package
     end
-  ' "$image" "$expected_tag" <"$tags_file" >"$matches_file" 2>"$parse_error"; then
+  ' "$tags_file" >"$matches_file" 2>"$parse_error"; then
     echo "unable to parse Artifact Registry chart images for $oci_registry" >&2
     sed 's/[[:cntrl:]]//g' "$parse_error" >&2
     return 1
