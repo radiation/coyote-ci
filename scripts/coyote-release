@@ -16,6 +16,7 @@ Usage:
   scripts/coyote-release plan --release VERSION --from VERSION|latest|stable --target TARGET --output PATH [options]
   scripts/coyote-release publish --plan PATH --expected-plan-sha256 SHA256 [--profile PATH]
   scripts/coyote-release promote --release VERSION --channel latest|stable --target TARGET [--profile PATH]
+  scripts/coyote-release deploy --release VERSION --target TARGET [--scope control-plane|worker] [--profile PATH]
 
 Options:
   --profile PATH                    Non-secret target profile JSON
@@ -24,8 +25,8 @@ Options:
   --force-reuse COMPONENT           Force reuse from the predecessor (repeatable)
   --component-version NAME=VERSION  Override a built component version (repeatable)
 
-The command only reads Git history, the release source, and the target profile.
-It writes the requested local plan file and never builds, publishes, promotes, or deploys.
+`plan` writes the requested local plan file and never builds, publishes, promotes, or deploys.
+`deploy` only assesses Kubernetes state and never applies Helm releases or changes workloads.
 EOF
 }
 
@@ -47,6 +48,10 @@ is_immutable_image() {
 
 is_clean_profile_value() {
   [[ -n "$1" && "$1" != *[[:space:]]* && ! "$1" =~ [[:cntrl:]] ]]
+}
+
+is_kubernetes_name() {
+  [[ "$1" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]
 }
 
 is_component() {
@@ -102,19 +107,327 @@ load_target_profile() {
   [[ -f "$profile" ]] || fail "target profile does not exist: $profile"
   profile_values="$(jq -er '
     if type != "object" then error("target profile must be an object")
-    elif (keys | sort) != ["registry", "release_source", "schema_version", "target"] then error("target profile has unsupported or missing keys")
+    elif ((keys | sort) != ["registry", "release_source", "schema_version", "target"] and (keys | sort) != ["kubernetes", "registry", "release_source", "schema_version", "target"]) then error("target profile has unsupported or missing keys")
     elif .schema_version != 1 then error("target profile schema_version must be 1")
     elif (.target | type) != "string" or (.release_source | type) != "string" or (.registry | type) != "string" then error("target profile values must be strings")
     elif (.target | length) == 0 or (.release_source | length) == 0 or (.registry | length) == 0 then error("target profile values must not be empty")
     elif any([.target, .release_source, .registry][]; test("[[:space:][:cntrl:]]")) then error("target profile values must not contain whitespace or control characters")
-    else [.target, .release_source, .registry] | @tsv
+    elif has("kubernetes") and (.kubernetes | type != "object") then error("target profile kubernetes must be an object")
+    elif has("kubernetes") and ((.kubernetes | keys | sort) != ["cluster_uid", "context", "control_plane_release"] and (.kubernetes | keys | sort) != ["cluster_uid", "context", "control_plane_release", "worker_release"]) then error("target profile kubernetes has unsupported or missing keys")
+    elif has("kubernetes") and any([.kubernetes.context, .kubernetes.cluster_uid, .kubernetes.control_plane_release, (.kubernetes.worker_release // "")][]; type != "string" or test("[[:space:][:cntrl:]]")) then error("target profile kubernetes values must be clean strings")
+    elif has("kubernetes") and any([.kubernetes.context, .kubernetes.cluster_uid, .kubernetes.control_plane_release][]; length == 0) then error("target profile kubernetes values must not be empty")
+    else [.target, .release_source, .registry, (.kubernetes.context // ""), (.kubernetes.cluster_uid // ""), (.kubernetes.control_plane_release // ""), (.kubernetes.worker_release // "")] | @tsv
     end
   ' "$profile")" || fail "invalid target profile: $profile"
-  IFS=$'\t' read -r profile_target release_source registry <<<"$profile_values"
+  IFS=$'\t' read -r profile_target release_source registry kubernetes_context kubernetes_cluster_uid control_plane_release worker_release <<<"$profile_values"
   [[ "$profile_target" == "$target" ]] || fail "target profile target $profile_target does not match --target $target"
   is_clean_profile_value "$profile_target" || fail "target profile target must not contain whitespace or control characters"
   is_clean_profile_value "$release_source" || fail "target profile release_source must not contain whitespace or control characters"
   is_clean_profile_value "$registry" || fail "target profile registry must not contain whitespace or control characters"
+  if [[ -n "$control_plane_release" ]]; then
+    is_kubernetes_name "$control_plane_release" || fail "target profile control_plane_release must be a Kubernetes-safe name"
+  fi
+  if [[ -n "$worker_release" ]]; then
+    is_kubernetes_name "$worker_release" || fail "target profile worker_release must be a Kubernetes-safe name"
+  fi
+}
+
+image_digest() {
+  if [[ "$1" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+    printf '%s\n' "$1"
+  elif is_immutable_image_reference "$1"; then
+    printf '%s\n' "${1##*@}"
+  else
+    return 1
+  fi
+}
+
+is_immutable_image_reference() {
+  [[ "$1" =~ ^([a-z0-9][a-z0-9._-]*(:[0-9]+)?/)?[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*(:[A-Za-z0-9][A-Za-z0-9._-]*)?@sha256:[a-f0-9]{64}$ ]]
+}
+
+canonical_helm_manifest() {
+  ruby -ryaml -rjson -e '
+    def canonical(value)
+      case value
+      when Hash then value.keys.sort.each_with_object({}) { |key, result| result[key] = canonical(value[key]) }
+      when Array then value.map { |item| canonical(item) }
+      else value
+      end
+    end
+    documents = YAML.load_stream(File.read(ARGV.fetch(0))).compact
+    indexed = documents.each_with_object({}) do |document, result|
+      metadata = document.fetch("metadata", {})
+      key = [document.fetch("apiVersion", ""), document.fetch("kind", ""), metadata.fetch("namespace", ""), metadata.fetch("name", "")]
+      abort "duplicate rendered Helm resource #{key.join("/")}" if result.key?(key)
+      result[key] = document
+    end
+    puts JSON.generate(canonical(indexed))
+  ' "$1"
+}
+
+chart_identity_matches() {
+  local chart_dir="$1" status_file="$2" name version
+  name="$(awk -F ': *' '$1 == "name" { print $2; exit }' "$chart_dir/Chart.yaml")"
+  version="$(awk -F ': *' '$1 == "version" { print $2; exit }' "$chart_dir/Chart.yaml")"
+  [[ -n "$name" && -n "$version" ]] || return 1
+  jq -e --arg chart "$name-$version" '.chart == $chart' "$status_file" >/dev/null
+}
+
+deploy_release() {
+  local deploy_release="" deploy_scope="control-plane" deploy_profile="" release_cli temp_dir manifest manifest_digest manifest_schema manifest_release
+  local control_namespace="coyote-ci" worker_namespace values overlay rendered installed status jobs state_dir
+  local runtime_drift=false helm_input_drift=false helm_metadata_matches=true helm_manifest_matches=false migration_reconciliation=false assessment
+  local server_image frontend_image mcp_image migrate_image mcp_enabled_value mcp_deployment mcp_state job_index job_document_path
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --release) deploy_release="${2:-}"; shift 2 ;;
+      --target) target="${2:-}"; shift 2 ;;
+      --scope) deploy_scope="${2:-}"; shift 2 ;;
+      --profile) deploy_profile="${2:-}"; shift 2 ;;
+      --help|-h) usage; return 0 ;;
+      *) fail "unknown deploy option $1" ;;
+    esac
+  done
+  is_semver "$deploy_release" || fail "--release must be an exact semantic version"
+  [[ "$target" =~ ^[a-z][a-z0-9-]*$ ]] || fail "--target must be a lowercase target name"
+  [[ "$deploy_scope" == control-plane || "$deploy_scope" == worker ]] || fail "--scope must be control-plane or worker"
+  require_command jq
+  require_command shasum
+  require_command helm
+  require_command kubectl
+  profile="$deploy_profile"
+  load_target_profile
+  [[ -n "$kubernetes_context" && -n "$kubernetes_cluster_uid" && -n "$control_plane_release" ]] || fail "deploy requires profile kubernetes context, cluster_uid, and control_plane_release"
+  if [[ "$deploy_scope" == worker ]]; then
+    [[ -n "$worker_release" ]] || fail "worker scope requires profile kubernetes.worker_release; no worker release is assumed"
+    if [[ "$target" == production ]]; then worker_namespace="coyote-ci"; else worker_namespace="coyote-ci-staging"; fi
+  fi
+  release_cli="${COYOTE_RELEASE_CLI:-$repo_root/backend/tmp/coyote}"
+  [[ -x "$release_cli" ]] || fail "COYOTE_RELEASE_CLI or $repo_root/backend/tmp/coyote must name an executable Coyote CLI"
+  [[ "$(kubectl config current-context)" == "$kubernetes_context" ]] || fail "active Kubernetes context does not match the configured target"
+  [[ "$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')" == "$kubernetes_cluster_uid" ]] || fail "active Kubernetes cluster identity does not match the configured target"
+
+  temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/coyote-release-deploy.XXXXXX")"
+  cleanup_deploy() { rm -rf "$temp_dir"; }
+  trap cleanup_deploy RETURN
+  manifest="$temp_dir/manifest.json"
+  "$release_cli" release fetch --version "$deploy_release" --release-source "$release_source" --output "$manifest" >/dev/null
+  manifest_digest="sha256:$(sha256_file "$manifest")"
+  manifest_schema="$(jq -er '.schema_version' "$manifest")" || fail "release manifest is invalid JSON"
+  [[ "$manifest_schema" == 2 ]] || fail "deploy requires a schema version 2 release manifest"
+  manifest_release="$(jq -er '.release | strings' "$manifest")" || fail "release manifest is missing release"
+  [[ "$manifest_release" == "$deploy_release" ]] || fail "release manifest does not match requested release"
+  jq -e '
+    def image: type == "string" and test("^.+@sha256:[a-f0-9]{64}$");
+    . as $manifest | (.components | type == "object") and
+    all(["server", "frontend", "mcp", "migrate", "worker"][]; ($manifest.components[.].image | image))
+  ' "$manifest" >/dev/null || fail "release manifest is missing immutable component images"
+  server_image="$(jq -r '.components.server.image' "$manifest")"
+  frontend_image="$(jq -r '.components.frontend.image' "$manifest")"
+  mcp_image="$(jq -r '.components.mcp.image' "$manifest")"
+  migrate_image="$(jq -r '.components.migrate.image' "$manifest")"
+
+  if [[ "$deploy_scope" == control-plane ]]; then
+  overlay="$temp_dir/release-overlay.json"
+  jq -n --slurpfile manifest "$manifest" --arg digest "$manifest_digest" '
+    $manifest[0] as $document | {images: {server: $document.components.server.image, frontend: $document.components.frontend.image, mcp: $document.components.mcp.image, migrate: $document.components.migrate.image}, release: {version: $document.release, manifestDigest: $digest}, migration: {render: false}}
+  ' >"$overlay"
+  values="$temp_dir/control-values.json"
+  status="$temp_dir/control-status.json"
+  rendered="$temp_dir/control-rendered.yaml"
+  installed="$temp_dir/control-installed.yaml"
+  helm get values "$control_plane_release" --namespace "$control_namespace" --output json >"$values" || fail "could not read control-plane Helm values"
+  helm status "$control_plane_release" --namespace "$control_namespace" --output json >"$status" || fail "could not read control-plane Helm status"
+  jq -e 'type == "object"' "$status" >/dev/null || fail "control-plane Helm status is malformed"
+  helm template "$control_plane_release" "$repo_root/deploy/helm/coyote-ci" --namespace "$control_namespace" --values "$values" --values "$overlay" >"$rendered" || fail "could not render the control-plane release overlay"
+  if ! chart_identity_matches "$repo_root/deploy/helm/coyote-ci" "$status"; then
+    helm_metadata_matches=false
+    echo "Component: control-plane Helm chart metadata differs from the supported chart"
+  fi
+  if helm get manifest "$control_plane_release" --namespace "$control_namespace" >"$installed" 2>/dev/null; then
+    if desired_manifest="$(canonical_helm_manifest "$rendered" 2>/dev/null)" && installed_manifest="$(canonical_helm_manifest "$installed" 2>/dev/null)" && [[ "$desired_manifest" == "$installed_manifest" ]]; then
+      helm_manifest_matches=true
+    else
+      helm_input_drift=true
+      echo "Component: control-plane rendered Helm manifest differs from the installed release"
+    fi
+  else
+    helm_metadata_matches=false
+    echo "Component: control-plane installed Helm manifest is unavailable"
+  fi
+
+  assess_deployment() {
+    local component="$1" deployment="$2" container="$3" intended="$4" document observed intended_digest observed_digest
+    document="$temp_dir/$component-deployment.json"
+    kubectl -n "$control_namespace" get "deployment/$deployment" --ignore-not-found -o json >"$document" || fail "could not inspect deployment/$deployment"
+    if [[ ! -s "$document" ]]; then
+      runtime_drift=true
+      echo "Component: $component drift missing deployment/$deployment"
+      return
+    fi
+    observed="$(jq -er --arg container "$container" '.spec.template.spec.containers[] | select(.name == $container) | .image' "$document" 2>/dev/null || true)"
+    intended_digest="$(image_digest "$intended")" || fail "release manifest has invalid $component image"
+    observed_digest="$(image_digest "$observed" 2>/dev/null || true)"
+    if [[ "$observed_digest" == "$intended_digest" ]]; then
+      echo "Component: $component runtime-equivalent digest=$intended_digest"
+    else
+      runtime_drift=true
+      echo "Component: $component drift intended=$intended_digest observed=${observed_digest:-<not-immutable>}"
+    fi
+  }
+
+  assess_helm_input() {
+    local component="$1" intended="$2" actual intended_digest actual_digest
+    actual="$(jq -er --arg component "$component" '.images[$component] | strings' "$values" 2>/dev/null || true)"
+    intended_digest="$(image_digest "$intended")" || fail "release manifest has invalid $component image"
+    actual_digest="$(image_digest "$actual" 2>/dev/null || true)"
+    if [[ "$actual_digest" != "$intended_digest" ]]; then
+      helm_input_drift=true
+      echo "Component: $component helm-input drift intended=$intended_digest observed=${actual_digest:-<not-immutable>}"
+    fi
+  }
+
+  assess_deployment server coyote-server server "$server_image"
+  assess_deployment frontend coyote-frontend frontend "$frontend_image"
+  assess_helm_input server "$server_image"
+  assess_helm_input frontend "$frontend_image"
+  assess_helm_input migrate "$migrate_image"
+  if ! jq -e --arg release "$deploy_release" --arg digest "$manifest_digest" '.release.version == $release and .release.manifestDigest == $digest' "$values" >/dev/null; then
+    helm_metadata_matches=false
+    echo "Component: control-plane helm-metadata drift release or manifest digest differs"
+  fi
+  mcp_enabled_value="$(jq -er '.mcp.enabled // false | if type == "boolean" then . else error("mcp.enabled must be boolean") end' "$values")" || fail "control-plane Helm values are malformed"
+  mcp_deployment="$(kubectl -n "$control_namespace" get deployment/coyote-mcp --ignore-not-found -o json)" || fail "could not inspect deployment/coyote-mcp"
+  if [[ "$mcp_enabled_value" == true ]]; then
+    if [[ -z "$mcp_deployment" ]]; then
+      runtime_drift=true
+      echo "Component: mcp drift Helm enables MCP but deployment/coyote-mcp is absent"
+    else
+      mcp_state="$(jq -r --arg release "$control_plane_release" --arg namespace "$control_namespace" 'if .metadata.labels["app.kubernetes.io/managed-by"] == "Helm" and .metadata.annotations["meta.helm.sh/release-name"] == $release and .metadata.annotations["meta.helm.sh/release-namespace"] == $namespace then "managed" else "unmanaged" end' <<<"$mcp_deployment")"
+      if [[ "$mcp_state" != managed ]]; then
+        runtime_drift=true
+        echo "Component: mcp drift deployment/coyote-mcp is not managed by Helm release $control_plane_release"
+      else
+        assess_deployment mcp coyote-mcp mcp "$mcp_image"
+      fi
+    fi
+    assess_helm_input mcp "$mcp_image"
+  elif [[ -n "$mcp_deployment" ]]; then
+    runtime_drift=true
+    echo "Component: mcp drift deployment/coyote-mcp exists while Helm disables MCP"
+  else
+    echo "Component: mcp runtime-equivalent disabled by Helm values"
+  fi
+
+  jobs="$temp_dir/migration-jobs.json"
+  kubectl -n "$control_namespace" get jobs -l app.kubernetes.io/name=coyote-migrate -o json >"$jobs" || fail "could not inspect migration Jobs"
+  state_dir="${COYOTE_RELEASE_ROLLOUT_STATE_DIR:-$repo_root/.local/helm/rollouts}"
+  migration_job_is_reconciled() {
+    local job_name="$1" job_document="$2" candidates=() state_file actual_image actual_digest expected_image expected_digest completion
+    shopt -s nullglob
+    for state_file in "$state_dir/$target-"*.json; do
+      if jq -e --arg job "$job_name" '.schema_version == 1 and .migration_job == $job' "$state_file" >/dev/null 2>&1; then
+        candidates+=("$state_file")
+      fi
+    done
+    shopt -u nullglob
+    [[ ${#candidates[@]} == 1 ]] || return 1
+    state_file="${candidates[0]}"
+    completion="$(jq -r '[(.status.conditions // [])[] | select(.type == "Complete" and .status == "True")] | length > 0' "$job_document")"
+    [[ "$completion" == true ]] || return 1
+    actual_image="$(jq -er '.spec.template.spec.containers[] | select(.name == "migrate") | .image' "$job_document" 2>/dev/null || true)"
+    actual_digest="$(image_digest "$actual_image" 2>/dev/null || true)"
+    expected_image="$(jq -er '.release.images.migrate | strings' "$state_file" 2>/dev/null || true)"
+    expected_digest="$(image_digest "$expected_image" 2>/dev/null || true)"
+    [[ -n "$actual_digest" && "$actual_digest" == "$expected_digest" ]] || return 1
+    jq -e \
+      --arg target "$target" \
+      --arg context "$kubernetes_context" \
+      --arg uid "$kubernetes_cluster_uid" \
+      --arg namespace "$control_namespace" \
+      --arg release "$control_plane_release" \
+      --arg job "$job_name" '
+        .target_environment == $target and
+        .context == $context and
+        .cluster_uid == $uid and
+        .control_namespace == $namespace and
+        .control_release == $release and
+        .migration_job == $job and
+        .rollout_id != null and
+        .migration_job == ("coyote-migrate-" + .rollout_id) and
+        .migration_status == "complete" and
+        .phases.migration == "completed" and
+        .failure == null and
+        (.release.fingerprint | type == "string" and length > 0)
+      ' "$state_file" >/dev/null
+  }
+  if jq -e '(.items // []) | length == 0' "$jobs" >/dev/null; then
+    echo "Component: migrate rendered=valid historical-jobs=none"
+  else
+    job_index=0
+    while IFS=$'\t' read -r job_name job_document; do
+      job_index=$((job_index + 1))
+      job_document_path="$temp_dir/migration-job-$job_index.json"
+      printf '%s\n' "$job_document" >"$job_document_path"
+      if migration_job_is_reconciled "$job_name" "$job_document_path"; then
+        echo "Component: migrate checkpointed historical-job=$job_name"
+      else
+        migration_reconciliation=true
+        echo "Component: migrate reconciliation-required ambiguous-or-mismatched-job=$job_name"
+      fi
+    done < <(jq -rc '.items[]? | select(.metadata.name | type == "string") | [.metadata.name, tojson] | @tsv' "$jobs")
+  fi
+  fi
+
+  if [[ "$deploy_scope" == worker ]]; then
+    local worker_values worker_overlay worker_render worker_installed worker_status worker_deployment worker_name worker_image worker_actual worker_expected_digest worker_actual_digest
+    worker_values="$temp_dir/worker-values.json"
+    worker_overlay="$temp_dir/worker-overlay.json"
+    worker_render="$temp_dir/worker-rendered.yaml"
+    worker_installed="$temp_dir/worker-installed.yaml"
+    worker_status="$temp_dir/worker-status.json"
+    worker_image="$(jq -r '.components.worker.image' "$manifest")"
+    helm get values "$worker_release" --namespace "$worker_namespace" --output json >"$worker_values" || fail "could not read worker Helm values"
+    helm status "$worker_release" --namespace "$worker_namespace" --output json >"$worker_status" || fail "could not read worker Helm status"
+    jq -e 'type == "object"' "$worker_status" >/dev/null || fail "worker Helm status is malformed"
+    jq -n --slurpfile manifest "$manifest" --arg digest "$manifest_digest" '$manifest[0] as $document | {images: {worker: $document.components.worker.image}, release: {version: $document.release, manifestDigest: $digest}}' >"$worker_overlay"
+    helm template "$worker_release" "$repo_root/deploy/helm/coyote-ci-worker" --namespace "$worker_namespace" --values "$worker_values" --values "$worker_overlay" >"$worker_render" || fail "could not render the worker release overlay"
+    if ! chart_identity_matches "$repo_root/deploy/helm/coyote-ci-worker" "$worker_status"; then helm_metadata_matches=false; echo "Component: worker Helm chart metadata differs from the supported chart"; fi
+    if helm get manifest "$worker_release" --namespace "$worker_namespace" >"$worker_installed" 2>/dev/null; then
+      if desired_manifest="$(canonical_helm_manifest "$worker_render" 2>/dev/null)" && installed_manifest="$(canonical_helm_manifest "$worker_installed" 2>/dev/null)" && [[ "$desired_manifest" == "$installed_manifest" ]]; then helm_manifest_matches=true; else helm_input_drift=true; echo "Component: worker rendered Helm manifest differs from the installed release"; fi
+    else
+      helm_metadata_matches=false
+      echo "Component: worker installed Helm manifest is unavailable"
+    fi
+    worker_name="$(jq -er '.worker.name | strings' "$worker_values")" || fail "worker Helm values are missing worker.name"
+    worker_actual="$(jq -er '.images.worker | strings' "$worker_values" 2>/dev/null || true)"
+    worker_expected_digest="$(image_digest "$worker_image")"
+    worker_actual_digest="$(image_digest "$worker_actual" 2>/dev/null || true)"
+    if [[ "$worker_actual_digest" != "$worker_expected_digest" ]]; then helm_input_drift=true; echo "Component: worker helm-input drift intended=$worker_expected_digest observed=${worker_actual_digest:-<not-immutable>}"; fi
+    if ! jq -e --arg release "$deploy_release" --arg digest "$manifest_digest" '.release.version == $release and .release.manifestDigest == $digest' "$worker_values" >/dev/null; then helm_metadata_matches=false; echo "Component: worker helm-metadata drift release or manifest digest differs"; fi
+    worker_deployment="$temp_dir/worker-deployment.json"
+    kubectl -n "$worker_namespace" get "deployment/$worker_name" --ignore-not-found -o json >"$worker_deployment" || fail "could not inspect worker deployment"
+    if [[ ! -s "$worker_deployment" ]]; then
+      runtime_drift=true
+      echo "Component: worker drift missing deployment/$worker_name"
+    else
+      worker_actual="$(jq -er '.spec.template.spec.containers[] | select(.name == "worker") | .image' "$worker_deployment" 2>/dev/null || true)"
+      worker_actual_digest="$(image_digest "$worker_actual" 2>/dev/null || true)"
+      if [[ "$worker_actual_digest" == "$worker_expected_digest" ]]; then echo "Component: worker runtime-equivalent digest=$worker_expected_digest"; else runtime_drift=true; echo "Component: worker drift intended=$worker_expected_digest observed=${worker_actual_digest:-<not-immutable>}"; fi
+    fi
+  fi
+
+  if [[ "$migration_reconciliation" == true ]]; then assessment=migration-reconciliation-required
+  elif [[ "$runtime_drift" == true || "$helm_input_drift" == true ]]; then assessment=drift
+  elif [[ "$helm_metadata_matches" == true && "$helm_manifest_matches" == true ]]; then assessment=release-equivalent
+  else assessment=runtime-equivalent
+  fi
+  echo "Deployment assessment: $assessment"
+  echo "Release: $deploy_release ($manifest_digest)"
+  echo "Target: $target context=$kubernetes_context cluster_uid=$kubernetes_cluster_uid scope=$deploy_scope"
+  trap - RETURN
+  rm -rf "$temp_dir"
 }
 
 promote_release() {
@@ -275,6 +588,10 @@ if [[ "$command" == "publish" ]]; then
 fi
 if [[ "$command" == "promote" ]]; then
   promote_release "$@"
+  exit 0
+fi
+if [[ "$command" == "deploy" ]]; then
+  deploy_release "$@"
   exit 0
 fi
 [[ "$command" == "plan" ]] || fail "unsupported command $command"

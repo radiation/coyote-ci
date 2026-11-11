@@ -179,3 +179,66 @@ Run the focused promotion checks with:
 ```sh
 make release-promote-test
 ```
+
+## Deployment Assessment
+
+Assess a published V2 release against a selected Kubernetes target without
+changing that target:
+
+```sh
+scripts/coyote-release deploy \
+  --release 0.0.10 \
+  --target production
+```
+
+`deploy` requires a non-secret `kubernetes` object in the target profile:
+
+```json
+{
+  "kubernetes": {
+    "context": "production-context",
+    "cluster_uid": "kube-system-namespace-uid",
+    "control_plane_release": "coyote-ci",
+    "worker_release": "coyote-ci-worker"
+  }
+}
+```
+
+`worker_release` is optional and is only used with `--scope worker`; the
+default `control-plane` scope never queries or operates on a worker release.
+The assessor validates the active context and `kube-system` namespace UID
+before it fetches the immutable manifest from the profile's release source.
+
+It renders a temporary manifest-derived Helm overlay, reads Helm values,
+status, and the installed Helm manifest, and compares immutable image digests
+for server, frontend, and a Helm-managed MCP deployment. Image references compare by digest, so
+`tag@sha256:...` and digest-only references are equivalent. Migration images
+are checked through the manifest and render input; historical migration Jobs
+are not runtime workloads.
+
+The result is one of:
+
+- `runtime-equivalent`: workload topology and immutable runtime digests match,
+  while supported Helm release metadata or values do not.
+- `release-equivalent`: runtime equivalence plus matching supported chart
+  identity, release version and manifest-digest values, effective image inputs,
+  and a canonical comparison between the temporary rendered manifest and the
+  installed Helm manifest. If installed-manifest evidence is unavailable, the
+  assessor reports only `runtime-equivalent`.
+- `drift`: a workload, Helm-managed MCP topology, or required Helm input differs.
+- `migration-reconciliation-required`: a historical migration Job has no
+  unique completed matching local rollout checkpoint, or its checkpoint does
+  not match the target context, cluster UID, namespace, control release,
+  rollout ID, migration image, and completed migration phase.
+
+The command only calls release fetch, Helm read/template operations, and
+Kubernetes read operations. It never runs Helm upgrade/install, creates or
+deletes migration Jobs, writes checkpoints, scales deployments, promotes a
+channel, or publishes a release. It intentionally does not suggest an apply
+operation when target identity or migration lineage is unresolved.
+
+Run the focused assessment checks with:
+
+```sh
+make release-deploy-test
+```
