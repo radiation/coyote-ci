@@ -103,3 +103,49 @@ Run the focused planner checks with:
 ```sh
 make release-plan-test
 ```
+
+## Approved Plan Publication
+
+After an operator has inspected the plan, publish that exact plan by supplying
+both the file and its displayed hash:
+
+```sh
+scripts/coyote-release publish \
+  --plan .local/coyote/release-plans/0.0.11.json \
+  --expected-plan-sha256 sha256:... \
+  --profile .local/coyote/release-targets/production.json
+```
+
+`publish` first validates the complete plan shape, recomputes its canonical
+hash, and requires it to equal the explicit operator value. It then recreates
+the plan from the recorded selector, profile, fixed timestamp, overrides, and
+component version declarations. The current worktree, HEAD, predecessor
+manifest bytes, target profile, source classification, component provenance,
+and resolved decisions must produce the same canonical plan. Any
+`manual_review` decision or rebuilt component without a fixed `build_date`
+rejects publication.
+
+Only after that validation does the facade delegate to
+`scripts/release-build.sh`. The existing publisher remains the sole authority
+for image construction, immutable manifest publication, retries, and semantic
+component tags. The facade always sets `RELEASE_CHANNEL` to an empty value, so
+approved-plan publication never advances `latest` or `stable`; channel
+promotion remains a separate operator action.
+
+Revalidation and the delegated publisher run in isolated environments. All
+release-control variables are set from the approved plan, including
+`RELEASE_PLAN=false`, the source commit, build date, component actions,
+versions, and empty component image overrides. The facade preserves only
+operational settings needed to use
+local Docker credentials and GCS ADC: `HOME`, `PATH`, optional temporary/XDG
+directories, Docker connection/configuration settings, Google credential/config
+settings, proxy settings, and TLS certificate locations. Stale `RELEASE_*`,
+`COMPONENT_*`, `GIT_*`, and unrelated `COYOTE_*` shell variables cannot alter
+the publication. The executable selected by `COYOTE_RELEASE_CLI` and the
+executables available through `PATH` remain local operator trust boundaries.
+
+Run the focused publication checks with:
+
+```sh
+make release-publish-test
+```

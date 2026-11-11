@@ -14,6 +14,7 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/coyote-release plan --release VERSION --from VERSION|latest|stable --target TARGET --output PATH [options]
+  scripts/coyote-release publish --plan PATH --expected-plan-sha256 SHA256 [--profile PATH]
 
 Options:
   --profile PATH                    Non-secret target profile JSON
@@ -70,6 +71,130 @@ component_value() {
   eval "printf '%s' \"\${$variable-}\""
 }
 
+canonical_plan_hash() {
+  jq 'del(.plan_sha256)' "$1" | jq -S -c . | shasum -a 256 | awk '{print "sha256:" $1}'
+}
+
+append_inherited_environment() {
+  local destination="$1" name value is_set
+  shift
+  for name in "$@"; do
+    eval "is_set=\${$name+x}"
+    [[ -n "$is_set" ]] || continue
+    eval "value=\${$name}"
+    eval "$destination+=(\"$name=\$value\")"
+  done
+}
+
+validate_plan_document() {
+  jq -e '
+    def semver: type == "string" and test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$");
+    def digest: type == "string" and test("^sha256:[a-f0-9]{64}$");
+    def image: type == "string" and test("^[^@]+/[^@/:]+@sha256:[a-f0-9]{64}$");
+    def component:
+      (keys | sort) == ["action", "classification", "image", "override", "predecessor_image", "provenance", "reason", "version", "version_source"] and
+      (.action | IN("build", "reuse", "manual_review")) and
+      (.reason | type == "string") and
+      (.classification | type == "object" and (.action | IN("build", "reuse", "manual_review")) and (.reason | type == "string")) and
+      (.override == null or (.override | type == "object" and (keys | sort) == ["action"] and (.action | IN("build", "reuse")))) and
+      (.provenance == null or (.provenance | type == "string")) and
+      (.version == null or (.version | semver)) and
+      (.version_source | IN("unresolved", "predecessor", "operator_supplied_predecessor", "product_release", "operator_override")) and
+      (.image == null or (.image | image)) and
+      (.predecessor_image == null or (.predecessor_image | image));
+    type == "object" and
+    (keys | sort) == ["classifier_version", "components", "fixed_inputs", "plan_sha256", "predecessor", "registry", "release", "release_source", "schema_version", "source", "target", "target_profile_sha256"] and
+    .schema_version == 1 and .classifier_version == 1 and
+    (.release | semver) and (.target | type == "string" and test("^[a-z][a-z0-9-]*$")) and
+    (.release_source | type == "string" and length > 0) and (.registry | type == "string" and length > 0) and (.target_profile_sha256 | digest) and (.plan_sha256 | digest) and
+    (.predecessor | type == "object" and (keys | sort) == ["manifest_digest", "release", "selector", "source_commit"] and (.selector | type == "string") and (.release | semver) and (.manifest_digest | digest) and (.source_commit | type == "string" and test("^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"))) and
+    (.source | type == "object" and (keys | sort) == ["changed_paths", "commit", "unknown_paths"] and (.commit | type == "string" and test("^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$")) and (.changed_paths | type == "array" and all(.[]; type == "string")) and (.unknown_paths | type == "array" and all(.[]; type == "string"))) and
+    (.fixed_inputs | type == "object" and (keys | sort) == ["build_date"] and (.build_date == null or (.build_date | type == "string"))) and
+    (.components | type == "object" and (keys | sort) == ["frontend", "mcp", "migrate", "server", "worker"] and all(.[]; component))
+  ' "$1" >/dev/null
+}
+
+publish_plan() {
+  local plan_path="" expected_hash="" publish_profile="" option component action override version version_source build_date replan profile_digest actual_hash embedded_hash release_cli
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --plan) plan_path="${2:-}"; shift 2 ;;
+      --expected-plan-sha256) expected_hash="${2:-}"; shift 2 ;;
+      --profile) publish_profile="${2:-}"; shift 2 ;;
+      --help|-h) usage; return 0 ;;
+      *) fail "unknown publish option $1" ;;
+    esac
+  done
+  [[ -n "$plan_path" && -n "$expected_hash" ]] || fail "publish requires --plan and --expected-plan-sha256"
+  [[ -f "$plan_path" ]] || fail "plan does not exist: $plan_path"
+  require_command jq
+  require_command shasum
+  validate_plan_document "$plan_path" || fail "plan has missing, malformed, or unsupported fields"
+  embedded_hash="$(jq -r '.plan_sha256' "$plan_path")"
+  actual_hash="$(canonical_plan_hash "$plan_path")"
+  [[ "$embedded_hash" == "$actual_hash" ]] || fail "embedded plan SHA-256 does not match canonical plan content"
+  [[ "$expected_hash" == "$embedded_hash" ]] || fail "--expected-plan-sha256 does not match the approved plan"
+
+  release="$(jq -r '.release' "$plan_path")"
+  from="$(jq -r '.predecessor.selector' "$plan_path")"
+  target="$(jq -r '.target' "$plan_path")"
+  build_date="$(jq -r '.fixed_inputs.build_date // empty' "$plan_path")"
+  if [[ -z "$publish_profile" ]]; then
+    publish_profile="$repo_root/.local/coyote/release-targets/$target.json"
+    [[ -f "$publish_profile" ]] || publish_profile="$repo_root/deploy/release-targets/$target.json"
+  fi
+  [[ -f "$publish_profile" ]] || fail "target profile does not exist: $publish_profile"
+  profile_digest="sha256:$(sha256_file "$publish_profile")"
+  [[ "$profile_digest" == "$(jq -r '.target_profile_sha256' "$plan_path")" ]] || fail "target profile content differs from the approved plan"
+  release_cli="${COYOTE_RELEASE_CLI:-$repo_root/backend/tmp/coyote}"
+  [[ -x "$release_cli" ]] || fail "COYOTE_RELEASE_CLI or $repo_root/backend/tmp/coyote must name an executable Coyote CLI"
+
+  replan="$(mktemp "${TMPDIR:-/tmp}/coyote-release-approved-plan.XXXXXX")"
+  trap 'rm -f "$replan"' RETURN
+  plan_args=(plan --release "$release" --from "$from" --target "$target" --profile "$publish_profile" --output "$replan")
+  [[ -z "$build_date" ]] || plan_args+=(--build-date "$build_date")
+  for component in "${components[@]}"; do
+    action="$(jq -r --arg component "$component" '.components[$component].action' "$plan_path")"
+    override="$(jq -r --arg component "$component" '.components[$component].override.action // empty' "$plan_path")"
+    version="$(jq -r --arg component "$component" '.components[$component].version // empty' "$plan_path")"
+    version_source="$(jq -r --arg component "$component" '.components[$component].version_source' "$plan_path")"
+    [[ "$action" != manual_review ]] || fail "approved plan has unresolved manual_review decision for $component"
+    case "$override" in
+      build) plan_args+=(--force-build "$component") ;;
+      reuse) plan_args+=(--force-reuse "$component") ;;
+      '') ;;
+      *) fail "plan has unsupported override for $component" ;;
+    esac
+    if [[ "$version_source" == operator_override || "$version_source" == operator_supplied_predecessor ]]; then
+      plan_args+=(--component-version "$component=$version")
+    fi
+  done
+  if jq -e '[.components[] | select(.action == "build")] | length > 0' "$plan_path" >/dev/null; then
+    is_rfc3339 "$build_date" || fail "approved plan requires a fixed RFC3339 build_date for rebuilt components"
+  fi
+  replan_env=(env -i "PATH=$PATH" "HOME=${HOME:-}" "COYOTE_RELEASE_CLI=$release_cli")
+  append_inherited_environment replan_env TMPDIR XDG_CONFIG_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR GOOGLE_APPLICATION_CREDENTIALS CLOUDSDK_CONFIG GOOGLE_CLOUD_QUOTA_PROJECT SSL_CERT_FILE SSL_CERT_DIR HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY http_proxy https_proxy no_proxy all_proxy
+  "${replan_env[@]}" bash "$repo_root/scripts/coyote-release" "${plan_args[@]}" >/dev/null
+  [[ "$(canonical_plan_hash "$replan")" == "$embedded_hash" ]] || fail "current source, predecessor, target profile, or component classification differs from the approved plan"
+
+  registry="$(jq -r '.registry' "$plan_path")"
+  release_source="$(jq -r '.release_source' "$plan_path")"
+  predecessor_release="$(jq -r '.predecessor.release' "$plan_path")"
+  source_commit="$(jq -r '.source.commit' "$plan_path")"
+  env_args=(env -i "PATH=$PATH" "HOME=${HOME:-}" RELEASE_PLAN=false VERSION="$release" RELEASE_REGISTRY="$registry" RELEASE_SOURCE="$release_source" PREVIOUS_RELEASE="$predecessor_release" RELEASE_CHANNEL= RELEASE_COMMIT="$source_commit" COYOTE_RELEASE_CLI="$release_cli")
+  append_inherited_environment env_args TMPDIR XDG_CONFIG_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR DOCKER_CONFIG DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH GOOGLE_APPLICATION_CREDENTIALS CLOUDSDK_CONFIG GOOGLE_CLOUD_QUOTA_PROJECT SSL_CERT_FILE SSL_CERT_DIR HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY http_proxy https_proxy no_proxy all_proxy
+  [[ -z "$build_date" ]] || env_args+=(RELEASE_BUILD_DATE="$build_date")
+  for component in "${components[@]}"; do
+    action="$(jq -r --arg component "$component" '.components[$component].action' "$plan_path")"
+    version="$(jq -r --arg component "$component" '.components[$component].version' "$plan_path")"
+    upper_component="$(printf '%s' "$component" | tr '[:lower:]' '[:upper:]')"
+    env_args+=("COMPONENT_${upper_component}_ACTION=$action" "COMPONENT_${upper_component}_VERSION=$version" "COMPONENT_${upper_component}_IMAGE=")
+  done
+  "${env_args[@]}" bash "$repo_root/scripts/release-build.sh"
+  rm -f "$replan"
+  trap - RETURN
+}
+
 release=""
 from=""
 target=""
@@ -80,7 +205,11 @@ build_date=""
 [[ $# -gt 0 ]] || { usage >&2; exit 2; }
 command="$1"
 shift
-[[ "$command" == "plan" ]] || fail "unsupported command $command; only plan is implemented"
+if [[ "$command" == "publish" ]]; then
+  publish_plan "$@"
+  exit 0
+fi
+[[ "$command" == "plan" ]] || fail "unsupported command $command"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
