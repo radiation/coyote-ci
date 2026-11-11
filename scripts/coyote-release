@@ -15,6 +15,7 @@ usage() {
 Usage:
   scripts/coyote-release plan --release VERSION --from VERSION|latest|stable --target TARGET --output PATH [options]
   scripts/coyote-release publish --plan PATH --expected-plan-sha256 SHA256 [--profile PATH]
+  scripts/coyote-release promote --release VERSION --channel latest|stable --target TARGET [--profile PATH]
 
 Options:
   --profile PATH                    Non-secret target profile JSON
@@ -84,6 +85,69 @@ append_inherited_environment() {
     eval "value=\${$name}"
     eval "$destination+=(\"$name=\$value\")"
   done
+}
+
+load_target_profile() {
+  if [[ -z "$profile" ]]; then
+    local_profile="$repo_root/.local/coyote/release-targets/$target.json"
+    repository_profile="$repo_root/deploy/release-targets/$target.json"
+    if [[ -f "$local_profile" ]]; then
+      profile="$local_profile"
+    elif [[ -f "$repository_profile" ]]; then
+      profile="$repository_profile"
+    else
+      fail "no target profile found; pass --profile or create $local_profile"
+    fi
+  fi
+  [[ -f "$profile" ]] || fail "target profile does not exist: $profile"
+  profile_values="$(jq -er '
+    if type != "object" then error("target profile must be an object")
+    elif (keys | sort) != ["registry", "release_source", "schema_version", "target"] then error("target profile has unsupported or missing keys")
+    elif .schema_version != 1 then error("target profile schema_version must be 1")
+    elif (.target | type) != "string" or (.release_source | type) != "string" or (.registry | type) != "string" then error("target profile values must be strings")
+    elif (.target | length) == 0 or (.release_source | length) == 0 or (.registry | length) == 0 then error("target profile values must not be empty")
+    elif any([.target, .release_source, .registry][]; test("[[:space:][:cntrl:]]")) then error("target profile values must not contain whitespace or control characters")
+    else [.target, .release_source, .registry] | @tsv
+    end
+  ' "$profile")" || fail "invalid target profile: $profile"
+  IFS=$'\t' read -r profile_target release_source registry <<<"$profile_values"
+  [[ "$profile_target" == "$target" ]] || fail "target profile target $profile_target does not match --target $target"
+  is_clean_profile_value "$profile_target" || fail "target profile target must not contain whitespace or control characters"
+  is_clean_profile_value "$release_source" || fail "target profile release_source must not contain whitespace or control characters"
+  is_clean_profile_value "$registry" || fail "target profile registry must not contain whitespace or control characters"
+}
+
+promote_release() {
+  local promote_release="" promote_channel="" promote_profile="" release_cli manifest manifest_release manifest_schema
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --release) promote_release="${2:-}"; shift 2 ;;
+      --channel) promote_channel="${2:-}"; shift 2 ;;
+      --target) target="${2:-}"; shift 2 ;;
+      --profile) promote_profile="${2:-}"; shift 2 ;;
+      --help|-h) usage; return 0 ;;
+      *) fail "unknown promote option $1" ;;
+    esac
+  done
+  is_semver "$promote_release" || fail "--release must be an exact semantic version"
+  [[ "$promote_channel" == latest || "$promote_channel" == stable ]] || fail "--channel must be latest or stable"
+  [[ "$target" =~ ^[a-z][a-z0-9-]*$ ]] || fail "--target must be a lowercase target name"
+  require_command jq
+  require_command shasum
+  profile="$promote_profile"
+  load_target_profile
+  release_cli="${COYOTE_RELEASE_CLI:-$repo_root/backend/tmp/coyote}"
+  [[ -x "$release_cli" ]] || fail "COYOTE_RELEASE_CLI or $repo_root/backend/tmp/coyote must name an executable Coyote CLI"
+  manifest="$(mktemp "${TMPDIR:-/tmp}/coyote-release-promote-manifest.XXXXXX")"
+  trap 'rm -f "$manifest"' RETURN
+  "$release_cli" release fetch --version "$promote_release" --release-source "$release_source" --output "$manifest" >/dev/null
+  manifest_schema="$(jq -er '.schema_version' "$manifest")" || fail "release manifest is invalid JSON"
+  [[ "$manifest_schema" == 1 || "$manifest_schema" == 2 ]] || fail "unsupported release manifest schema version: $manifest_schema"
+  manifest_release="$(jq -er '.release | strings' "$manifest")" || fail "release manifest is missing release"
+  [[ "$manifest_release" == "$promote_release" ]] || fail "release manifest does not match requested release"
+  "$release_cli" release promote-channel --release "$promote_release" --channel "$promote_channel" --release-source "$release_source"
+  rm -f "$manifest"
+  trap - RETURN
 }
 
 validate_plan_document() {
@@ -209,6 +273,10 @@ if [[ "$command" == "publish" ]]; then
   publish_plan "$@"
   exit 0
 fi
+if [[ "$command" == "promote" ]]; then
+  promote_release "$@"
+  exit 0
+fi
 [[ "$command" == "plan" ]] || fail "unsupported command $command"
 
 while [[ $# -gt 0 ]]; do
@@ -256,34 +324,7 @@ require_command ruby
 release_cli="${COYOTE_RELEASE_CLI:-$repo_root/backend/tmp/coyote}"
 [[ -x "$release_cli" ]] || fail "COYOTE_RELEASE_CLI or $repo_root/backend/tmp/coyote must name an executable Coyote CLI"
 
-if [[ -z "$profile" ]]; then
-  local_profile="$repo_root/.local/coyote/release-targets/$target.json"
-  repository_profile="$repo_root/deploy/release-targets/$target.json"
-  if [[ -f "$local_profile" ]]; then
-    profile="$local_profile"
-  elif [[ -f "$repository_profile" ]]; then
-    profile="$repository_profile"
-  else
-    fail "no target profile found; pass --profile or create $local_profile"
-  fi
-fi
-[[ -f "$profile" ]] || fail "target profile does not exist: $profile"
-
-profile_values="$(jq -er '
-  if type != "object" then error("target profile must be an object")
-  elif (keys | sort) != ["registry", "release_source", "schema_version", "target"] then error("target profile has unsupported or missing keys")
-  elif .schema_version != 1 then error("target profile schema_version must be 1")
-  elif (.target | type) != "string" or (.release_source | type) != "string" or (.registry | type) != "string" then error("target profile values must be strings")
-  elif (.target | length) == 0 or (.release_source | length) == 0 or (.registry | length) == 0 then error("target profile values must not be empty")
-  elif any([.target, .release_source, .registry][]; test("[[:space:][:cntrl:]]")) then error("target profile values must not contain whitespace or control characters")
-  else [.target, .release_source, .registry] | @tsv
-  end
-' "$profile")" || fail "invalid target profile: $profile"
-IFS=$'\t' read -r profile_target release_source registry <<<"$profile_values"
-[[ "$profile_target" == "$target" ]] || fail "target profile target $profile_target does not match --target $target"
-is_clean_profile_value "$profile_target" || fail "target profile target must not contain whitespace or control characters"
-is_clean_profile_value "$release_source" || fail "target profile release_source must not contain whitespace or control characters"
-is_clean_profile_value "$registry" || fail "target profile registry must not contain whitespace or control characters"
+load_target_profile
 
 [[ -z "$(git -C "$repo_root" status --porcelain --untracked-files=all)" ]] || fail "release planning requires a clean worktree, including untracked files"
 head_commit="$(git -C "$repo_root" rev-parse HEAD)"

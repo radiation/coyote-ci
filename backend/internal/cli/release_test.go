@@ -105,6 +105,83 @@ func TestReleaseCommandFailures(t *testing.T) {
 	}
 }
 
+func TestReleasePromoteChannelCommand(t *testing.T) {
+	manifestPath := writeCLIManifest(t, t.TempDir())
+	source := t.TempDir()
+	stderr := &bytes.Buffer{}
+	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: stderr, Args: []string{"release", "publish", "--manifest", manifestPath, "--release-source", source}}); code != 0 {
+		t.Fatalf("publish exit=%d stderr=%s", code, stderr.String())
+	}
+
+	stdout := &bytes.Buffer{}
+	args := []string{"release", "promote-channel", "--release", "2.5.1", "--channel", "latest", "--release-source", source}
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Args: args}); code != 0 {
+		t.Fatalf("promote exit=%d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "Previous target: <none>") || !strings.Contains(output, "New target: 2.5.1") || !strings.Contains(output, "Changed: true") {
+		t.Fatalf("unexpected promote output: %s", output)
+	}
+
+	stdout.Reset()
+	if code := Run(Dependencies{Stdout: stdout, Stderr: stderr, Args: args}); code != 0 {
+		t.Fatalf("repeat promote exit=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Changed: false") {
+		t.Fatalf("repeat promotion was not idempotent: %s", stdout.String())
+	}
+
+	channels, readErr := os.ReadFile(filepath.Join(source, "channels.json"))
+	if readErr != nil {
+		t.Fatalf("read channels: %v", readErr)
+	}
+	manifestData, manifestReadErr := os.ReadFile(filepath.Join(source, "releases", "2.5.1.json"))
+	if manifestReadErr != nil {
+		t.Fatalf("read stored manifest: %v", manifestReadErr)
+	}
+	var index releases.ChannelIndex
+	if decodeErr := json.Unmarshal(channels, &index); decodeErr != nil {
+		t.Fatalf("decode channels: %v", decodeErr)
+	}
+	if entry, found := index.Channels["latest"]; !found || entry != (releases.ChannelEntry{Release: "2.5.1", ManifestDigest: releases.Digest(manifestData)}) || index.Channels["stable"] != (releases.ChannelEntry{}) {
+		t.Fatalf("unexpected channel state=%+v", index)
+	}
+
+	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: stderr, Args: []string{"release", "promote-channel", "--release", "2.5.2", "--channel", "latest", "--release-source", source}}); code != releaseFetchNotFoundExitCode {
+		t.Fatalf("missing release promote exit=%d want %d", code, releaseFetchNotFoundExitCode)
+	}
+	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: stderr, Args: []string{"release", "promote-channel", "--release", "2.5.1", "--channel", "preview", "--release-source", source}}); code != 2 {
+		t.Fatalf("invalid channel promote exit=%d want 2", code)
+	}
+}
+
+func TestReleasePromoteChannelReportsAmbiguousOutcome(t *testing.T) {
+	manifestPath := writeCLIManifest(t, t.TempDir())
+	manifestData, readErr := os.ReadFile(manifestPath)
+	if readErr != nil {
+		t.Fatalf("read manifest: %v", readErr)
+	}
+	digest := releases.Digest(manifestData)
+	store := &releaseStoreFake{
+		document:        releases.Document{Data: manifestData, Digest: digest},
+		promotionResult: releases.ChannelPromotionResult{Current: releases.ChannelEntry{Release: "2.5.1", ManifestDigest: digest}},
+	}
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	code := Run(Dependencies{
+		Stdout: stdout,
+		Stderr: stderr,
+		OpenReleaseStore: func(context.Context, string) (releases.Store, io.Closer, error) {
+			return store, nil, nil
+		},
+		Args: []string{"release", "promote-channel", "--release", "2.5.1", "--channel", "latest", "--release-source", "gs://release-bucket/releases"},
+	})
+	if code != 0 {
+		t.Fatalf("promote exit=%d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "Previous target: <unknown>") || !strings.Contains(output, "Changed: unknown") {
+		t.Fatalf("unexpected ambiguous promotion output: %s", output)
+	}
+}
+
 func TestReleaseRawImportAndFetchFilesystem(t *testing.T) {
 	manifestPath := writeCLIManifest(t, t.TempDir())
 	raw, readErr := os.ReadFile(manifestPath)
@@ -318,9 +395,11 @@ func TestReleaseGCSStoreSelectionContextAndCleanup(t *testing.T) {
 }
 
 type releaseStoreFake struct {
-	document     releases.Document
-	fetchErr     error
-	fetchContext context.Context
+	document        releases.Document
+	fetchErr        error
+	fetchContext    context.Context
+	promotionResult releases.ChannelPromotionResult
+	promoteErr      error
 }
 
 func (s *releaseStoreFake) FetchManifest(ctx context.Context, _ string) (releases.Document, error) {
@@ -346,8 +425,8 @@ func (s *releaseStoreFake) ImportManifest(context.Context, []byte) (releases.Man
 	return releases.Manifest{}, "", errors.New("not implemented")
 }
 
-func (s *releaseStoreFake) PromoteChannel(context.Context, string, string, string) error {
-	return errors.New("not implemented")
+func (s *releaseStoreFake) PromoteChannel(context.Context, string, string, string) (releases.ChannelPromotionResult, error) {
+	return s.promotionResult, s.promoteErr
 }
 
 func (s *releaseStoreFake) PromoteCoyoteLatestIfNewer(context.Context, string, string) (bool, error) {

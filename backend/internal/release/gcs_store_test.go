@@ -163,21 +163,28 @@ func TestGCSStoreChannelPromotionUsesCompareAndSwap(t *testing.T) {
 	latestDigest := "sha256:" + strings.Repeat("a", 64)
 	stableDigest := "sha256:" + strings.Repeat("b", 64)
 	start := make(chan struct{})
-	errorsSeen := make(chan error, 2)
+	type promotionOutcome struct {
+		result ChannelPromotionResult
+		err    error
+	}
+	outcomes := make(chan promotionOutcome, 2)
 	go func() {
 		<-start
-		errorsSeen <- first.PromoteChannel(context.Background(), "latest", "0.0.10", latestDigest)
+		result, promoteErr := first.PromoteChannel(context.Background(), "latest", "0.0.10", latestDigest)
+		outcomes <- promotionOutcome{result: result, err: promoteErr}
 	}()
 	go func() {
 		<-start
-		errorsSeen <- second.PromoteChannel(context.Background(), "stable", "0.0.9", stableDigest)
+		result, promoteErr := second.PromoteChannel(context.Background(), "stable", "0.0.9", stableDigest)
+		outcomes <- promotionOutcome{result: result, err: promoteErr}
 	}()
 	close(start)
 	<-synchronized.replaceReady
 	close(synchronized.replaceProceed)
 	for range 2 {
-		if promotionErr := <-errorsSeen; promotionErr != nil {
-			t.Fatalf("PromoteChannel: %v", promotionErr)
+		outcome := <-outcomes
+		if outcome.err != nil || !outcome.result.ChangedKnown || !outcome.result.Changed || !outcome.result.PreviousKnown {
+			t.Fatalf("PromoteChannel outcome=%+v err=%v", outcome.result, outcome.err)
 		}
 	}
 	index, fetchErr := first.FetchChannelIndex(context.Background())
@@ -197,12 +204,16 @@ func TestGCSStoreChannelPromotionReconcilesAmbiguousWrite(t *testing.T) {
 	}
 	initialDigest := "sha256:" + strings.Repeat("a", 64)
 	updatedDigest := "sha256:" + strings.Repeat("b", 64)
-	if channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.10", initialDigest); channelErr != nil {
+	if _, channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.10", initialDigest); channelErr != nil {
 		t.Fatalf("initial promotion: %v", channelErr)
 	}
 	objects.replaceAfterWriteErr = errors.New("connection reset")
-	if channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.11", updatedDigest); channelErr != nil {
+	result, channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.11", updatedDigest)
+	if channelErr != nil {
 		t.Fatalf("ambiguous promotion: %v", channelErr)
+	}
+	if result.ChangedKnown || result.PreviousKnown {
+		t.Fatalf("ambiguous promotion result=%+v", result)
 	}
 	index, fetchErr := store.FetchChannelIndex(context.Background())
 	if fetchErr != nil || index.Channels["latest"] != (ChannelEntry{Release: "0.0.11", ManifestDigest: updatedDigest}) {
@@ -219,7 +230,7 @@ func TestGCSStoreChannelPromotionDoesNotRollbackAfterAmbiguousWrite(t *testing.T
 	initialDigest := "sha256:" + strings.Repeat("a", 64)
 	requestedDigest := "sha256:" + strings.Repeat("b", 64)
 	newerDigest := "sha256:" + strings.Repeat("c", 64)
-	if channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.10", initialDigest); channelErr != nil {
+	if _, channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.10", initialDigest); channelErr != nil {
 		t.Fatalf("initial promotion: %v", channelErr)
 	}
 	writeErr := errors.New("connection reset")
@@ -234,7 +245,7 @@ func TestGCSStoreChannelPromotionDoesNotRollbackAfterAmbiguousWrite(t *testing.T
 		s.objects[name] = releaseObject{data: data, generation: s.nextGeneration}
 		s.nextGeneration++
 	}
-	channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.11", requestedDigest)
+	_, channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.11", requestedDigest)
 	if !errors.Is(channelErr, writeErr) {
 		t.Fatalf("ambiguous promotion error=%v", channelErr)
 	}
@@ -254,12 +265,12 @@ func TestGCSStoreChannelPromotionPreservesPermissionError(t *testing.T) {
 		t.Fatalf("newGCSStore: %v", storeErr)
 	}
 	initialDigest := "sha256:" + strings.Repeat("a", 64)
-	if channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.10", initialDigest); channelErr != nil {
+	if _, channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.10", initialDigest); channelErr != nil {
 		t.Fatalf("initial promotion: %v", channelErr)
 	}
 	permissionErr := errors.New("permission denied")
 	objects.replaceErr = permissionErr
-	channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.11", "sha256:"+strings.Repeat("b", 64))
+	_, channelErr := store.PromoteChannel(context.Background(), "latest", "0.0.11", "sha256:"+strings.Repeat("b", 64))
 	if !errors.Is(channelErr, permissionErr) {
 		t.Fatalf("promotion error=%v", channelErr)
 	}
@@ -307,10 +318,10 @@ func TestGCSStoreCoyoteLatestAndCancellation(t *testing.T) {
 	if _, publishErr := store.PublishManifest(ctx, validManifest()); !errors.Is(publishErr, context.Canceled) {
 		t.Fatalf("canceled publish error=%v", publishErr)
 	}
-	if channelErr := store.PromoteChannel(ctx, "stable", "0.0.10", digest); !errors.Is(channelErr, context.Canceled) {
+	if _, channelErr := store.PromoteChannel(ctx, "stable", "0.0.10", digest); !errors.Is(channelErr, context.Canceled) {
 		t.Fatalf("canceled channel promotion error=%v", channelErr)
 	}
-	if channelErr := store.PromoteChannel(context.Background(), "preview", "0.0.10", digest); channelErr == nil {
+	if _, channelErr := store.PromoteChannel(context.Background(), "preview", "0.0.10", digest); channelErr == nil {
 		t.Fatal("expected unsupported channel error")
 	}
 	if _, publishErr := store.PublishManifest(context.Background(), Manifest{}); publishErr == nil {

@@ -78,6 +78,14 @@ type ChannelEntry struct {
 	ManifestDigest string `json:"manifest_digest"`
 }
 
+type ChannelPromotionResult struct {
+	Previous      *ChannelEntry
+	PreviousKnown bool
+	Current       ChannelEntry
+	Changed       bool
+	ChangedKnown  bool
+}
+
 type Document struct {
 	Data   []byte
 	Digest string
@@ -91,7 +99,7 @@ type Source interface {
 type Publisher interface {
 	PublishManifest(context.Context, Manifest) (string, error)
 	ImportManifest(context.Context, []byte) (Manifest, string, error)
-	PromoteChannel(context.Context, string, string, string) error
+	PromoteChannel(context.Context, string, string, string) (ChannelPromotionResult, error)
 	PromoteCoyoteLatestIfNewer(context.Context, string, string) (bool, error)
 }
 
@@ -492,17 +500,17 @@ func (p *FilePublisher) PublishChannels(index ChannelIndex) error {
 	return writeAtomic(filepath.Join(p.root, "channels.json"), append(data, '\n'))
 }
 
-func (p *FilePublisher) PromoteChannel(ctx context.Context, channel, releaseVersion, manifestDigest string) error {
+func (p *FilePublisher) PromoteChannel(ctx context.Context, channel, releaseVersion, manifestDigest string) (ChannelPromotionResult, error) {
 	if channel != "latest" && channel != "stable" {
-		return fmt.Errorf("unsupported release channel %q", channel)
+		return ChannelPromotionResult{}, fmt.Errorf("unsupported release channel %q", channel)
 	}
 
 	if !semVerPattern.MatchString(releaseVersion) || !digestPattern.MatchString(manifestDigest) {
-		return errors.New("channel promotion requires an exact release and manifest digest")
+		return ChannelPromotionResult{}, errors.New("channel promotion requires an exact release and manifest digest")
 	}
 	releaseLock, lockErr := p.acquireLock(ctx, filepath.Join(p.root, ".channels.lock"))
 	if lockErr != nil {
-		return lockErr
+		return ChannelPromotionResult{}, lockErr
 	}
 	defer func() {
 		_ = os.Remove(releaseLock)
@@ -512,13 +520,25 @@ func (p *FilePublisher) PromoteChannel(ctx context.Context, channel, releaseVers
 	if errors.Is(indexErr, ErrNotFound) {
 		index = ChannelIndex{SchemaVersion: SchemaVersion, Channels: map[string]ChannelEntry{}}
 	} else if indexErr != nil {
-		return indexErr
+		return ChannelPromotionResult{}, indexErr
 	}
 	if validateErr := index.Validate(); validateErr != nil {
-		return validateErr
+		return ChannelPromotionResult{}, validateErr
 	}
-	index.Channels[channel] = ChannelEntry{Release: releaseVersion, ManifestDigest: manifestDigest}
-	return p.PublishChannels(index)
+	current := ChannelEntry{Release: releaseVersion, ManifestDigest: manifestDigest}
+	result := ChannelPromotionResult{Current: current, PreviousKnown: true, ChangedKnown: true}
+	if previous, found := index.Channels[channel]; found {
+		result.Previous = &previous
+		if previous == current {
+			return result, nil
+		}
+	}
+	index.Channels[channel] = current
+	if publishErr := p.PublishChannels(index); publishErr != nil {
+		return ChannelPromotionResult{}, publishErr
+	}
+	result.Changed = true
+	return result, nil
 }
 
 func (p *FilePublisher) acquireLock(ctx context.Context, lockPath string) (string, error) {

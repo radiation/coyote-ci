@@ -149,3 +149,33 @@ Run the focused publication checks with:
 ```sh
 make release-publish-test
 ```
+
+## Channel Promotion
+
+Promote an already published immutable release as a separate operation:
+
+```sh
+scripts/coyote-release promote \
+  --release 0.0.11 \
+  --channel latest \
+  --target production
+```
+
+`promote` accepts only exact semantic versions and the `latest` or `stable`
+channels. It validates the target profile, fetches and checks the existing
+manifest before mutation, then calls the release CLI's existing store-backed
+channel promotion operation. The result reports the previous channel target,
+new target, manifest digest, and whether a channel-index write occurred.
+Repeating a promotion of the same release is idempotent. Filesystem and
+successful GCS CAS operations report their exact prior entry and change result.
+After an ambiguous GCS transport failure, when the store can only confirm that
+the requested entry is now present, the prior target and `Changed` are reported
+as `<unknown>` rather than inferred. Filesystem and GCS stores retain their
+existing locking and generation-based CAS behavior.
+Promotion does not build images, publish manifests, or deploy workloads.
+
+Run the focused promotion checks with:
+
+```sh
+make release-promote-test
+```

@@ -397,7 +397,7 @@ func TestFilePublisherPromotionHonorsCanceledContext(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := publisher.PromoteChannel(ctx, "latest", "2.5.1", "sha256:"+strings.Repeat("a", 64))
+	_, err := publisher.PromoteChannel(ctx, "latest", "2.5.1", "sha256:"+strings.Repeat("a", 64))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("PromoteChannel() error=%v, want context cancellation", err)
 	}
@@ -462,10 +462,12 @@ func TestPromoteChannelPreservesConcurrentUpdates(t *testing.T) {
 	stableDigest := "sha256:" + strings.Repeat("b", 64)
 	promotionErrors := make(chan error, 2)
 	go func() {
-		promotionErrors <- publisher.PromoteChannel(context.Background(), "latest", "2.5.2", latestDigest)
+		_, promoteErr := publisher.PromoteChannel(context.Background(), "latest", "2.5.2", latestDigest)
+		promotionErrors <- promoteErr
 	}()
 	go func() {
-		promotionErrors <- publisher.PromoteChannel(context.Background(), "stable", "2.5.1", stableDigest)
+		_, promoteErr := publisher.PromoteChannel(context.Background(), "stable", "2.5.1", stableDigest)
+		promotionErrors <- promoteErr
 	}()
 	for range 2 {
 		if promotionErr := <-promotionErrors; promotionErr != nil {
