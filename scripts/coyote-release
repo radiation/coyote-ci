@@ -1,0 +1,437 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+components=(server worker frontend mcp migrate)
+classifier_version=1
+
+fail() {
+  echo "$*" >&2
+  exit 2
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/coyote-release plan --release VERSION --from VERSION|latest|stable --target TARGET --output PATH [options]
+
+Options:
+  --profile PATH                    Non-secret target profile JSON
+  --build-date RFC3339              Fixed build timestamp for a later publish
+  --force-build COMPONENT           Force a component to build (repeatable)
+  --force-reuse COMPONENT           Force reuse from the predecessor (repeatable)
+  --component-version NAME=VERSION  Override a built component version (repeatable)
+
+The command only reads Git history, the release source, and the target profile.
+It writes the requested local plan file and never builds, publishes, promotes, or deploys.
+EOF
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+is_semver() {
+  [[ "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+}
+
+is_rfc3339() {
+  [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$ ]]
+}
+
+is_immutable_image() {
+  [[ "$1" =~ ^[^@]+/[^@/:]+@sha256:[a-f0-9]{64}$ ]]
+}
+
+is_clean_profile_value() {
+  [[ -n "$1" && "$1" != *[[:space:]]* && ! "$1" =~ [[:cntrl:]] ]]
+}
+
+is_component() {
+  local component="$1"
+  for candidate in "${components[@]}"; do
+    [[ "$candidate" == "$component" ]] && return 0
+  done
+  return 1
+}
+
+sha256_file() {
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+
+set_component_value() {
+  local field="$1" component="$2" value="$3"
+  printf -v "${field}_${component}" '%s' "$value"
+}
+
+component_value() {
+  local field="$1" component="$2" variable
+  variable="${field}_${component}"
+  eval "printf '%s' \"\${$variable-}\""
+}
+
+release=""
+from=""
+target=""
+output=""
+profile=""
+build_date=""
+
+[[ $# -gt 0 ]] || { usage >&2; exit 2; }
+command="$1"
+shift
+[[ "$command" == "plan" ]] || fail "unsupported command $command; only plan is implemented"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --release) release="${2:-}"; shift 2 ;;
+    --from) from="${2:-}"; shift 2 ;;
+    --target) target="${2:-}"; shift 2 ;;
+    --output) output="${2:-}"; shift 2 ;;
+    --profile) profile="${2:-}"; shift 2 ;;
+    --build-date) build_date="${2:-}"; shift 2 ;;
+    --force-build|--force-reuse)
+      option="$1"
+      component="${2:-}"
+      is_component "$component" || fail "$option requires a supported component"
+      action="${option#--force-}"
+      existing_action="$(component_value forced_action "$component")"
+      [[ -z "$existing_action" || "$existing_action" == "$action" ]] || fail "conflicting forced actions for $component"
+      set_component_value forced_action "$component" "$action"
+      shift 2
+      ;;
+    --component-version)
+      assignment="${2:-}"
+      component="${assignment%%=*}"
+      version="${assignment#*=}"
+      [[ "$assignment" == *=* ]] && is_component "$component" && is_semver "$version" || fail "--component-version must be COMPONENT=SEMVER"
+      set_component_value component_version "$component" "$version"
+      shift 2
+      ;;
+    --help|-h) usage; exit 0 ;;
+    *) fail "unknown option $1" ;;
+  esac
+done
+
+is_semver "$release" || fail "--release must be an exact semantic version"
+[[ "$from" == "latest" || "$from" == "stable" ]] || is_semver "$from" || fail "--from must be an exact semantic version, latest, or stable"
+[[ "$target" =~ ^[a-z][a-z0-9-]*$ ]] || fail "--target must be a lowercase target name"
+[[ -n "$output" ]] || fail "--output is required"
+[[ -z "$build_date" ]] || is_rfc3339 "$build_date" || fail "--build-date must be RFC3339 with seconds"
+
+require_command git
+require_command jq
+require_command shasum
+require_command ruby
+
+release_cli="${COYOTE_RELEASE_CLI:-$repo_root/backend/tmp/coyote}"
+[[ -x "$release_cli" ]] || fail "COYOTE_RELEASE_CLI or $repo_root/backend/tmp/coyote must name an executable Coyote CLI"
+
+if [[ -z "$profile" ]]; then
+  local_profile="$repo_root/.local/coyote/release-targets/$target.json"
+  repository_profile="$repo_root/deploy/release-targets/$target.json"
+  if [[ -f "$local_profile" ]]; then
+    profile="$local_profile"
+  elif [[ -f "$repository_profile" ]]; then
+    profile="$repository_profile"
+  else
+    fail "no target profile found; pass --profile or create $local_profile"
+  fi
+fi
+[[ -f "$profile" ]] || fail "target profile does not exist: $profile"
+
+profile_values="$(jq -er '
+  if type != "object" then error("target profile must be an object")
+  elif (keys | sort) != ["registry", "release_source", "schema_version", "target"] then error("target profile has unsupported or missing keys")
+  elif .schema_version != 1 then error("target profile schema_version must be 1")
+  elif (.target | type) != "string" or (.release_source | type) != "string" or (.registry | type) != "string" then error("target profile values must be strings")
+  elif (.target | length) == 0 or (.release_source | length) == 0 or (.registry | length) == 0 then error("target profile values must not be empty")
+  elif any([.target, .release_source, .registry][]; test("[[:space:][:cntrl:]]")) then error("target profile values must not contain whitespace or control characters")
+  else [.target, .release_source, .registry] | @tsv
+  end
+' "$profile")" || fail "invalid target profile: $profile"
+IFS=$'\t' read -r profile_target release_source registry <<<"$profile_values"
+[[ "$profile_target" == "$target" ]] || fail "target profile target $profile_target does not match --target $target"
+is_clean_profile_value "$profile_target" || fail "target profile target must not contain whitespace or control characters"
+is_clean_profile_value "$release_source" || fail "target profile release_source must not contain whitespace or control characters"
+is_clean_profile_value "$registry" || fail "target profile registry must not contain whitespace or control characters"
+
+[[ -z "$(git -C "$repo_root" status --porcelain --untracked-files=all)" ]] || fail "release planning requires a clean worktree, including untracked files"
+head_commit="$(git -C "$repo_root" rev-parse HEAD)"
+[[ "$head_commit" =~ ^[0-9a-fA-F]{40,64}$ ]] || fail "could not resolve current HEAD to a full commit SHA"
+
+temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/coyote-release-plan.XXXXXX")"
+cleanup() { rm -rf "$temp_dir"; }
+trap cleanup EXIT
+
+predecessor_release="$from"
+if [[ "$from" == "latest" || "$from" == "stable" ]]; then
+  overlay="$temp_dir/resolve.yaml"
+  "$release_cli" release resolve --channel "$from" --release-source "$release_source" --output "$overlay" >/dev/null
+  predecessor_release="$(ruby -ryaml -e 'values = YAML.load_file(ARGV.fetch(0)); release = values.fetch("release", {}).fetch("version", ""); abort "resolved release version is missing" unless release.is_a?(String); print release' "$overlay")" || fail "could not resolve channel $from"
+  is_semver "$predecessor_release" || fail "resolved channel $from does not identify an exact semantic version"
+fi
+
+manifest="$temp_dir/predecessor.json"
+"$release_cli" release fetch --version "$predecessor_release" --release-source "$release_source" --output "$manifest" >/dev/null
+predecessor_digest="sha256:$(sha256_file "$manifest")"
+
+manifest_schema="$(jq -er '.schema_version' "$manifest")" || fail "predecessor manifest is invalid JSON"
+[[ "$manifest_schema" == "1" || "$manifest_schema" == "2" ]] || fail "unsupported predecessor manifest schema version: $manifest_schema"
+manifest_release="$(jq -er '.release' "$manifest")" || fail "predecessor manifest is missing release"
+[[ "$manifest_release" == "$predecessor_release" ]] || fail "predecessor manifest release does not match selected release"
+predecessor_commit="$(jq -er '.source.commit' "$manifest")" || fail "predecessor manifest is missing source.commit"
+[[ "$predecessor_commit" =~ ^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$ ]] || fail "predecessor manifest source.commit is not a full SHA"
+git -C "$repo_root" cat-file -e "${predecessor_commit}^{commit}" 2>/dev/null || fail "predecessor manifest commit is not available in this checkout: $predecessor_commit"
+git -C "$repo_root" merge-base --is-ancestor "$predecessor_commit" "$head_commit" || fail "predecessor manifest commit is not an ancestor of current HEAD"
+
+changed_paths=()
+while IFS= read -r path; do
+  [[ -n "$path" ]] && changed_paths+=("$path")
+done < <(git -C "$repo_root" diff --name-only "$predecessor_commit" "$head_commit" | LC_ALL=C sort -u)
+
+for component in "${components[@]}"; do
+  set_component_value changed "$component" false
+  set_component_value reason "$component" ""
+done
+unknown_paths=()
+
+add_reason() {
+  local component="$1" reason="$2"
+  local existing_reason
+  existing_reason="$(component_value reason "$component")"
+  if [[ -z "$existing_reason" ]]; then
+    set_component_value reason "$component" "$reason"
+  else
+    set_component_value reason "$component" "$existing_reason;$reason"
+  fi
+}
+
+if [[ ${#changed_paths[@]} -gt 0 ]]; then
+  for path in "${changed_paths[@]}"; do
+    case "$path" in
+      frontend/*)
+        set_component_value changed frontend true
+        add_reason frontend "frontend_input:$path"
+        ;;
+      backend/cmd/server/*|backend/cmd/worker/*)
+        set_component_value changed server true
+        set_component_value changed worker true
+        add_reason server "runtime_input:$path"
+        add_reason worker "runtime_input:$path"
+        ;;
+      backend/cmd/mcp/*)
+        set_component_value changed mcp true
+        add_reason mcp "mcp_input:$path"
+        ;;
+      backend/internal/*|backend/go.mod|backend/go.sum)
+        set_component_value changed server true
+        set_component_value changed worker true
+        set_component_value changed mcp true
+        add_reason server "shared_backend_input:$path"
+        add_reason worker "shared_backend_input:$path"
+        add_reason mcp "shared_backend_input:$path"
+        ;;
+      backend/db/migrations/*)
+        set_component_value changed migrate true
+        add_reason migrate "migration_input:$path"
+        ;;
+      backend/Dockerfile)
+        set_component_value changed server true
+        set_component_value changed worker true
+        set_component_value changed mcp true
+        set_component_value changed migrate true
+        add_reason server "dockerfile_input:$path"
+        add_reason worker "dockerfile_input:$path"
+        add_reason mcp "dockerfile_input:$path"
+        add_reason migrate "dockerfile_input:$path"
+        ;;
+      *) unknown_paths+=("$path") ;;
+    esac
+  done
+fi
+
+for component in "${components[@]}"; do
+  if [[ ${#unknown_paths[@]} -gt 0 ]]; then
+    set_component_value classification_action "$component" manual_review
+    set_component_value classification_reason "$component" "unknown_source_change:${unknown_paths[0]}"
+  elif [[ "$(component_value changed "$component")" == true ]]; then
+    set_component_value classification_action "$component" build
+    set_component_value classification_reason "$component" "$(component_value reason "$component")"
+  else
+    set_component_value classification_action "$component" reuse
+    set_component_value classification_reason "$component" no_relevant_source_change
+  fi
+  set_component_value action "$component" "$(component_value classification_action "$component")"
+done
+
+runtime_forced=""
+for component in server worker; do
+  forced_action="$(component_value forced_action "$component")"
+  if [[ -n "$forced_action" ]]; then
+    [[ -z "$runtime_forced" || "$runtime_forced" == "$forced_action" ]] || fail "server and worker forced actions must agree"
+    runtime_forced="$forced_action"
+  fi
+done
+if [[ -n "$runtime_forced" ]]; then
+  set_component_value action server "$runtime_forced"
+  set_component_value action worker "$runtime_forced"
+  set_component_value override_action server "$runtime_forced"
+  set_component_value override_action worker "$runtime_forced"
+fi
+for component in frontend mcp migrate; do
+  forced_action="$(component_value forced_action "$component")"
+  if [[ -n "$forced_action" ]]; then
+    set_component_value action "$component" "$forced_action"
+    set_component_value override_action "$component" "$forced_action"
+  fi
+done
+
+if [[ "$manifest_schema" == "2" ]]; then
+  for component in "${components[@]}"; do
+    predecessor_version="$(jq -er --arg component "$component" '.components[$component].version | strings' "$manifest")" || fail "predecessor manifest is missing a string $component version"
+    predecessor_image="$(jq -er --arg component "$component" '.components[$component].image | strings' "$manifest")" || fail "predecessor manifest is missing a string $component image"
+    is_semver "$predecessor_version" || fail "predecessor manifest has invalid $component version"
+    is_immutable_image "$predecessor_image" || fail "predecessor manifest has invalid $component image"
+    set_component_value predecessor_version "$component" "$predecessor_version"
+    set_component_value predecessor_image "$component" "$predecessor_image"
+  done
+else
+  for component in server worker frontend migrate; do
+    predecessor_image="$(jq -er --arg component "$component" '.images[$component] | strings' "$manifest")" || fail "predecessor v1 manifest is missing a string $component image"
+    is_immutable_image "$predecessor_image" || fail "predecessor v1 manifest has invalid $component image"
+    set_component_value predecessor_image "$component" "$predecessor_image"
+  done
+fi
+
+for component in "${components[@]}"; do
+  action="$(component_value action "$component")"
+  requested_version="$(component_value component_version "$component")"
+  predecessor_version="$(component_value predecessor_version "$component")"
+  predecessor_image="$(component_value predecessor_image "$component")"
+  if [[ "$action" == reuse && "$manifest_schema" == "2" && -n "$requested_version" && "$requested_version" != "$predecessor_version" ]]; then
+    fail "--component-version for reused $component must match predecessor version $predecessor_version"
+  fi
+  if [[ "$action" == reuse && "$manifest_schema" != "2" ]]; then
+    if [[ -n "$predecessor_image" && -n "$requested_version" ]]; then
+      set_component_value predecessor_version "$component" "$requested_version"
+      set_component_value provenance "$component" operator_supplied_predecessor_version
+    else
+      set_component_value action "$component" manual_review
+      set_component_value provenance "$component" missing_predecessor_component_version
+    fi
+  fi
+done
+
+[[ "$(component_value action server)" == "$(component_value action worker)" ]] || fail "server and worker actions must remain coupled after provenance validation"
+
+components_json="$temp_dir/components.json"
+printf '{}\n' >"$components_json"
+for component in "${components[@]}"; do
+  action="$(component_value action "$component")"
+  requested_version="$(component_value component_version "$component")"
+  predecessor_version="$(component_value predecessor_version "$component")"
+  predecessor_image="$(component_value predecessor_image "$component")"
+  classification_action="$(component_value classification_action "$component")"
+  classification_reason="$(component_value classification_reason "$component")"
+  override_action="$(component_value override_action "$component")"
+  provenance="$(component_value provenance "$component")"
+  version=""
+  version_source=unresolved
+  case "$action" in
+    reuse)
+      version="$predecessor_version"
+      version_source=predecessor
+      [[ "$provenance" != operator_supplied_predecessor_version ]] || version_source=operator_supplied_predecessor
+      ;;
+    build)
+      version="${requested_version:-$release}"
+      version_source=product_release
+      [[ -z "$requested_version" ]] || version_source=operator_override
+      ;;
+    manual_review)
+      version="$requested_version"
+      [[ -z "$requested_version" ]] || version_source=operator_override
+      ;;
+  esac
+  image=""
+  if [[ "$action" == reuse ]]; then
+    [[ -n "$predecessor_image" && -n "$predecessor_version" ]] || fail "cannot reuse $component without v2 component provenance"
+    image="$predecessor_image"
+  fi
+  jq --arg component "$component" --arg action "$action" --arg classification_action "$classification_action" --arg classification_reason "$classification_reason" --arg override_action "$override_action" --arg provenance "$provenance" --arg version "$version" --arg version_source "$version_source" --arg image "$image" --arg predecessor_image "$predecessor_image" '
+    . + {($component): {
+      action: $action,
+      reason: $classification_reason,
+      classification: {action: $classification_action, reason: $classification_reason},
+      override: (if $override_action == "" then null else {action: $override_action} end),
+      provenance: (if $provenance == "" then null else $provenance end),
+      version: (if $version == "" then null else $version end),
+      version_source: $version_source,
+      image: (if $image == "" then null else $image end),
+      predecessor_image: (if $predecessor_image == "" then null else $predecessor_image end)
+    }}
+  ' "$components_json" >"$components_json.tmp"
+  mv "$components_json.tmp" "$components_json"
+done
+
+unknown_json="$temp_dir/unknown.json"
+printf '%s\n' "${unknown_paths[@]:-}" | jq -Rsc 'split("\n") | map(select(length > 0))' >"$unknown_json"
+changed_json="$temp_dir/changed.json"
+printf '%s\n' "${changed_paths[@]:-}" | jq -Rsc 'split("\n") | map(select(length > 0))' >"$changed_json"
+profile_digest="sha256:$(sha256_file "$profile")"
+
+base_plan="$temp_dir/plan-without-hash.json"
+jq -n \
+  --arg release "$release" \
+  --arg target "$target" \
+  --arg release_source "$release_source" \
+  --arg registry "$registry" \
+  --arg profile_digest "$profile_digest" \
+  --arg from_selector "$from" \
+  --arg predecessor_release "$predecessor_release" \
+  --arg predecessor_digest "$predecessor_digest" \
+  --arg predecessor_commit "$predecessor_commit" \
+  --arg source_commit "$head_commit" \
+  --arg build_date "$build_date" \
+  --argjson components "$(cat "$components_json")" \
+  --argjson changed_paths "$(cat "$changed_json")" \
+  --argjson unknown_paths "$(cat "$unknown_json")" \
+  --argjson classifier_version "$classifier_version" '
+  {
+    schema_version: 1,
+    classifier_version: $classifier_version,
+    release: $release,
+    target: $target,
+    release_source: $release_source,
+    registry: $registry,
+    target_profile_sha256: $profile_digest,
+    predecessor: {
+      selector: $from_selector,
+      release: $predecessor_release,
+      manifest_digest: $predecessor_digest,
+      source_commit: $predecessor_commit
+    },
+    source: {commit: $source_commit, changed_paths: $changed_paths, unknown_paths: $unknown_paths},
+    fixed_inputs: {build_date: (if $build_date == "" then null else $build_date end)},
+    components: $components
+  }
+' | jq -S . >"$base_plan"
+
+plan_hash="sha256:$(jq -S -c . "$base_plan" | shasum -a 256 | awk '{print $1}')"
+mkdir -p "$(dirname "$output")"
+jq -S --arg plan_hash "$plan_hash" '. + {plan_sha256: $plan_hash}' "$base_plan" >"$output.tmp"
+mv "$output.tmp" "$output"
+
+echo "Release plan: $release"
+echo "Target: $target"
+echo "Predecessor: $predecessor_release ($predecessor_digest)"
+echo "Source: $head_commit"
+for component in "${components[@]}"; do
+  action="$(jq -r --arg component "$component" '.components[$component].action' "$output")"
+  version="$(jq -r --arg component "$component" '.components[$component].version // "<unresolved>"' "$output")"
+  reason="$(jq -r --arg component "$component" '.components[$component].reason' "$output")"
+  echo "Component: $component action=$action version=$version reason=$reason"
+done
+echo "Plan SHA-256: $plan_hash"
+echo "Wrote release plan to $output"

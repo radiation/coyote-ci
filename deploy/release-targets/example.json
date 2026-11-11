@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "target": "example",
+  "release_source": "gs://example-coyote-releases",
+  "registry": "us-central1-docker.pkg.dev/example-project/coyote-ci"
+}
