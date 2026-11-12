@@ -852,6 +852,15 @@ done
 
 [[ "$(component_value action server)" == "$(component_value action worker)" ]] || fail "server and worker actions must remain coupled after provenance validation"
 
+if [[ -z "$build_date" ]]; then
+  for component in "${components[@]}"; do
+    if [[ "$(component_value action "$component")" == build ]]; then
+      build_date="$(TZ=UTC date '+%Y-%m-%dT%H:%M:%SZ')"
+      break
+    fi
+  done
+fi
+
 components_json="$temp_dir/components.json"
 printf '{}\n' >"$components_json"
 for component in "${components[@]}"; do

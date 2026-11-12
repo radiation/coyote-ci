@@ -86,6 +86,7 @@ run_plan all-reuse >/dev/null
 for component in server worker frontend mcp migrate; do
   assert_eq "$(jq -r ".components.$component.action" "$temp_dir/all-reuse.json")" reuse
 done
+assert_eq "$(jq -r '.fixed_inputs.build_date' "$temp_dir/all-reuse.json")" null
 assert_contains "$(cat "$temp_dir/all-reuse.coyote")" 'release resolve --channel latest --release-source file://'
 assert_contains "$(cat "$temp_dir/all-reuse.coyote")" 'release fetch --version 0.0.10'
 
@@ -93,6 +94,7 @@ TEST_CHANGED_FILES='frontend/src/App.tsx'
 run_plan frontend >/dev/null
 assert_eq "$(jq -r '.components.frontend.action' "$temp_dir/frontend.json")" build
 assert_eq "$(jq -r '.components.server.action' "$temp_dir/frontend.json")" reuse
+jq -e '.fixed_inputs.build_date | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")' "$temp_dir/frontend.json" >/dev/null
 
 TEST_CHANGED_FILES=$'Makefile\ndeploy/release-targets/example.json\nscripts/gke-helm-rollout.sh\nbackend/internal/cli/release.go'
 run_plan tooling-only >/dev/null
@@ -188,8 +190,8 @@ fi
 
 TEST_MANIFEST="$(write_v2_manifest)"
 TEST_CHANGED_FILES='frontend/src/App.tsx'
-run_plan deterministic-first >/dev/null
-run_plan deterministic-second >/dev/null
+run_plan deterministic-first --build-date 2026-11-11T12:00:00Z >/dev/null
+run_plan deterministic-second --build-date 2026-11-11T12:00:00Z >/dev/null
 cmp "$temp_dir/deterministic-first.json" "$temp_dir/deterministic-second.json"
 assert_eq "$(jq -r '.plan_sha256' "$temp_dir/deterministic-first.json")" "sha256:$(jq 'del(.plan_sha256)' "$temp_dir/deterministic-first.json" | jq -S -c . | shasum -a 256 | awk '{print $1}')"
 
