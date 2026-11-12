@@ -31,6 +31,20 @@ EOF
 cat >"$temp_dir/bin/helm" <<'EOF'
 #!/usr/bin/env bash
 printf 'helm %s\n' "$*" >>"$COMMAND_LOG"
+if [[ "${HELM_VALIDATE_RELEASE_CHANNEL:-false}" == "true" && "$1" == "upgrade" && "$2" == "coyote-ci" ]]; then
+  ruby -ryaml -e '
+    def merge(left, right)
+      left.merge(right) { |_key, old, new| old.is_a?(Hash) && new.is_a?(Hash) ? merge(old, new) : new }
+    end
+    values = {}
+    ARGV.each_with_index do |argument, index|
+      next unless argument == "--values"
+      values = merge(values, YAML.load_file(ARGV.fetch(index + 1)) || {})
+    end
+    release = values["release"]
+    abort "release.channel must be a string when supplied" if release.is_a?(Hash) && release.key?("channel") && !release["channel"].is_a?(String)
+  ' "$@"
+fi
 if [[ "${HELM_FAIL_CONTROL_UPGRADE:-false}" == "true" && "$1" == "upgrade" && "$2" == "coyote-ci" ]]; then
   exit 1
 fi
@@ -72,9 +86,9 @@ images:
 migration: {render: false}
 mcp: {enabled: false}
 serviceAccounts:
-  migrate: {name: coyote-migrate, gsaEmail: coyote-ci-migrate@bryanchoate.iam.gserviceaccount.com}
+  migrate: {name: coyote-migrate, gsaEmail: coyote-gke-migrate@bryanchoate.iam.gserviceaccount.com}
 cloudSql: {connectionName: "bryanchoate:us-central1:bryanchoate-postgres"}
-secrets: {databaseUrl: coyote-ci-database-url}
+secrets: {databaseUrl: coyote-staging-database-url}
 VALUES
   fi
   exit 0
@@ -355,6 +369,49 @@ grep -q -- "--values $release_values" "$routine_log" || {
   exit 1
 }
 
+release_channel_empty_values="$temp_dir/release-channel-empty.yaml"
+release_channel_null_values="$temp_dir/release-channel-null.yaml"
+ruby -ryaml -e '
+  values = YAML.load_file(ARGV.fetch(0))
+  values["release"] = {"channel" => ARGV.fetch(2) == "null" ? nil : ""}
+  File.write(ARGV.fetch(1), YAML.dump(values))
+' "$release_values" "$release_channel_empty_values" empty
+ruby -ryaml -e '
+  values = YAML.load_file(ARGV.fetch(0))
+  values["release"] = {"channel" => nil}
+  File.write(ARGV.fetch(1), YAML.dump(values))
+' "$release_values" "$release_channel_null_values"
+
+for release_channel_case in missing empty null; do
+  case "$release_channel_case" in
+    missing) release_channel_values="$release_values" ;;
+    empty) release_channel_values="$release_channel_empty_values" ;;
+    null) release_channel_values="$release_channel_null_values" ;;
+  esac
+  release_channel_log="$temp_dir/routine-release-channel-${release_channel_case}.log"
+  PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$release_channel_log" \
+  HELM_VALIDATE_RELEASE_CHANNEL=true \
+  KUBECTL_MCP_DEPLOYMENT_STATE=absent \
+  GKE_HELM_TARGET_ENVIRONMENT=production \
+  GKE_HELM_EXPECTED_CONTEXT=test-context \
+  GKE_HELM_EXPECTED_CLUSTER_UID=test-cluster-uid \
+  GKE_HELM_DEPLOYMENT_TOPOLOGY=control-plane-only \
+  GKE_HELM_MIGRATION_MODE=none \
+  GKE_HELM_MIGRATION_FREE_CONFIRMED=true \
+  GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml" \
+  GKE_HELM_RELEASE_VALUES="$release_channel_values" \
+  "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
+done
+ruby -e '
+  upgrades = File.readlines(ARGV.fetch(0), chomp: true).grep(/^helm upgrade coyote-ci /)
+  abort "expected dry-run and live routine upgrades" unless upgrades.length == 2
+  values = upgrades.map { |line| line.split.each_cons(2).select { |left, _right| left == "--values" }.map(&:last) }
+  abort "routine dry-run and live upgrades used different values files" unless values.uniq.length == 1
+  abort "routine upgrade reused the null release overlay" if values.flatten.include?(ARGV.fetch(1))
+' "$temp_dir/routine-release-channel-null.log" "$release_channel_null_values"
+
 routine_changed_migrate_values="$temp_dir/routine-changed-migrate-release-images.yaml"
 cp "$release_values" "$routine_changed_migrate_values"
 ruby -ryaml -e 'values = YAML.load_file(ARGV.fetch(0)); values.fetch("images")["migrate"] = "example.invalid/coyote-migrate@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; File.write(ARGV.fetch(1), YAML.dump(values))' "$release_values" "$routine_changed_migrate_values"
@@ -484,7 +541,7 @@ if PATH="$temp_dir/bin:$PATH" \
   echo "routine rollout must reject rendered migration Jobs or hooks" >&2
   exit 1
 fi
-if [[ -f "$routine_hook_log" ]] && grep -q 'helm upgrade' "$routine_hook_log"; then
+if [[ -f "$routine_hook_log" ]] && grep 'helm upgrade' "$routine_hook_log" | grep -qv -- '--dry-run=client'; then
   echo "rendered migration Job or hook reached a routine Helm upgrade" >&2
   cat "$routine_hook_log" >&2
   exit 1

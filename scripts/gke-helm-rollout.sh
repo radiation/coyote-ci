@@ -192,6 +192,7 @@ verify_routine_effective_values() {
     control = YAML.load_file(control_path) || {}
     release = release_path.empty? ? {} : (YAML.load_file(release_path) || {})
     effective = merge(merge(deployed, control), release)
+    effective["release"]["channel"] = "" if effective["release"].is_a?(Hash) && effective["release"].key?("channel") && effective["release"]["channel"].nil?
     abort "routine migration-free rollout changes migration configuration inputs from deployed Helm values" unless migration_inputs(deployed) == migration_inputs(effective)
     abort "routine migration-free rollout requires inherited migration.render=false" unless effective.dig("migration", "render") == false
     images = {"server" => effective.dig("images", "server"), "frontend" => effective.dig("images", "frontend"), "migrate" => effective.dig("images", "migrate")}
@@ -824,11 +825,16 @@ if [[ "$migration_mode" == "none" ]]; then
   helm get values "$control_release" --namespace "$control_namespace" --all --output yaml >"$routine_deployed_values"
   verify_routine_effective_values "$routine_deployed_values" "$routine_effective_values" || fail "routine migration-free preflight rejected the effective Helm values"
   rm -f "$routine_deployed_values"
-  routine_rendered_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" --values "$routine_effective_values")"
-  rm -f "$routine_effective_values"
+  routine_values_args=(--values "$routine_effective_values")
+  if ! helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" "${routine_values_args[@]}" --reuse-values --wait --timeout "${timeout_seconds}s" --dry-run=client >/dev/null; then
+    rm -f "$routine_effective_values"
+    fail "routine migration-free preflight rejected the Helm upgrade values"
+  fi
+  routine_rendered_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${routine_values_args[@]}")"
   verify_routine_manifest <<<"$routine_rendered_manifest" || fail "routine migration-free preflight rejected rendered Jobs or hooks"
   echo "Routine control-plane-only Helm upgrade; no migration Job or workload quiescence is authorized."
-  run helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" --reuse-values --wait --timeout "${timeout_seconds}s"
+  run helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" "${routine_values_args[@]}" --reuse-values --wait --timeout "${timeout_seconds}s"
+  rm -f "$routine_effective_values"
   run kubectl -n "$control_namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
   run kubectl -n "$control_namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
   if [[ "$mcp_is_desired" == "true" && "$mcp_state" == "managed" ]]; then
