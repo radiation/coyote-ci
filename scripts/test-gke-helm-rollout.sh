@@ -16,6 +16,7 @@ images:
   frontend: example.invalid/coyote-frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   worker: example.invalid/coyote-worker@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
   migrate: example.invalid/coyote-migrate@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  mcp: example.invalid/coyote-mcp@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 EOF
 v2_release_values="$temp_dir/v2-release-images.yaml"
 cat >"$v2_release_values" <<'EOF'
@@ -860,12 +861,13 @@ grep -q 'refusing a rollout that would delete it' "$temp_dir/managed-disable.err
 production_log="$temp_dir/production-commands.log"
 PATH="$temp_dir/bin:$PATH" \
 COMMAND_LOG="$production_log" \
-KUBECTL_MCP_DEPLOYMENT_STATE=absent \
+KUBECTL_MCP_DEPLOYMENT_STATE=managed \
 HELM_ROLLOUT_ID=test-production \
 GKE_HELM_DRY_RUN=false \
 GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml" \
 GKE_HELM_WORKER_VALUES="$repo_root/deploy/helm/examples/gke-production-worker-values.yaml" \
 GKE_HELM_WORKER_NAMESPACE=coyote-ci \
+GKE_HELM_RELEASE_VALUES="$v2_release_values" \
 "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
 
 grep -q 'kubectl -n coyote-ci patch deployment/coyote-kubernetes-worker .*replicas.:0' "$production_log" || {

@@ -34,16 +34,16 @@ auth:
   publicURL: https://coyote-ci.bryanchoate.com
 server: {replicas: 1, replicasManagedExternally: true}
 frontend: {replicas: 1, replicasManagedExternally: true}
-# The existing coyote-mcp Deployment is intentionally not managed until its
-# live ownership and database contract are verified during cutover.
 mcp:
-  enabled: false
+  enabled: true
   replicas: 1
   replicasManagedExternally: true
   service: {port: 8081}
   terminationGracePeriodSeconds: 30
-  resources: {}
-  auth: {allowedOrigins: [], allowDisabledAuth: false}
+  resources:
+    limits: {cpu: 500m, memory: 512Mi}
+    requests: {cpu: 100m, memory: 128Mi}
+  auth: {allowedOrigins: [], allowDisabledAuth: false, omitEmptyAllowedOrigins: false}
 gateway:
   enabled: true
   hostname: coyote-ci.bryanchoate.com
