@@ -354,6 +354,61 @@ grep -q -- "--values $release_values" "$routine_log" || {
   exit 1
 }
 
+routine_changed_migrate_values="$temp_dir/routine-changed-migrate-release-images.yaml"
+cp "$release_values" "$routine_changed_migrate_values"
+ruby -ryaml -e 'values = YAML.load_file(ARGV.fetch(0)); values.fetch("images")["migrate"] = "example.invalid/coyote-migrate@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; File.write(ARGV.fetch(1), YAML.dump(values))' "$release_values" "$routine_changed_migrate_values"
+routine_changed_migrate_log="$temp_dir/routine-changed-migrate-commands.log"
+PATH="$temp_dir/bin:$PATH" \
+COMMAND_LOG="$routine_changed_migrate_log" \
+KUBECTL_MCP_DEPLOYMENT_STATE=absent \
+GKE_HELM_TARGET_ENVIRONMENT=production \
+GKE_HELM_EXPECTED_CONTEXT=test-context \
+GKE_HELM_EXPECTED_CLUSTER_UID=test-cluster-uid \
+GKE_HELM_DEPLOYMENT_TOPOLOGY=control-plane-only \
+GKE_HELM_MIGRATION_MODE=none \
+GKE_HELM_MIGRATION_FREE_CONFIRMED=true \
+GKE_HELM_DRY_RUN=false \
+GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml" \
+GKE_HELM_WORKER_VALUES="$temp_dir/no-worker-values.yaml" \
+GKE_HELM_RELEASE_VALUES="$routine_changed_migrate_values" \
+"$repo_root/scripts/gke-helm-rollout.sh" >/dev/null
+grep -q 'helm upgrade coyote-ci ' "$routine_changed_migrate_log" || {
+  echo "routine rollout must allow a changed digest-pinned migrate image" >&2
+  cat "$routine_changed_migrate_log" >&2
+  exit 1
+}
+! grep -Eq 'get job/|migration-job|lease/' "$routine_changed_migrate_log" || {
+  echo "changed migrate image invoked migration operations" >&2
+  cat "$routine_changed_migrate_log" >&2
+  exit 1
+}
+
+routine_changed_migration_config_values="$temp_dir/routine-changed-migration-config-release-values.yaml"
+ruby -ryaml -e 'values = YAML.load_file(ARGV.fetch(0)); values["secrets"] = {"databaseUrl" => "different-database-url"}; File.write(ARGV.fetch(1), YAML.dump(values))' "$release_values" "$routine_changed_migration_config_values"
+routine_changed_migration_config_log="$temp_dir/routine-changed-migration-config-commands.log"
+if PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$routine_changed_migration_config_log" \
+  KUBECTL_MCP_DEPLOYMENT_STATE=absent \
+  GKE_HELM_TARGET_ENVIRONMENT=production \
+  GKE_HELM_EXPECTED_CONTEXT=test-context \
+  GKE_HELM_EXPECTED_CLUSTER_UID=test-cluster-uid \
+  GKE_HELM_DEPLOYMENT_TOPOLOGY=control-plane-only \
+  GKE_HELM_MIGRATION_MODE=none \
+  GKE_HELM_MIGRATION_FREE_CONFIRMED=true \
+  GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml" \
+  GKE_HELM_WORKER_VALUES="$temp_dir/no-worker-values.yaml" \
+  GKE_HELM_RELEASE_VALUES="$routine_changed_migration_config_values" \
+  "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>&1; then
+  echo "routine rollout must reject changed migration configuration" >&2
+  exit 1
+fi
+if [[ -f "$routine_changed_migration_config_log" ]] && grep -q 'helm upgrade' "$routine_changed_migration_config_log"; then
+  echo "changed migration configuration reached a routine Helm upgrade" >&2
+  cat "$routine_changed_migration_config_log" >&2
+  exit 1
+fi
+
 routine_confirmation_log="$temp_dir/routine-missing-confirmation.log"
 if PATH="$temp_dir/bin:$PATH" \
   COMMAND_LOG="$routine_confirmation_log" \

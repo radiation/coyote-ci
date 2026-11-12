@@ -179,7 +179,6 @@ verify_routine_effective_values() {
 
     def migration_inputs(values)
       {
-        "image" => values.dig("images", "migrate"),
         "migration" => values["migration"],
         "migrate_service_account" => values.dig("serviceAccounts", "migrate"),
         "cloud_sql" => values["cloudSql"],
@@ -193,7 +192,7 @@ verify_routine_effective_values() {
     control = YAML.load_file(control_path) || {}
     release = release_path.empty? ? {} : (YAML.load_file(release_path) || {})
     effective = merge(merge(deployed, control), release)
-    abort "routine migration-free rollout changes migration image or inputs from deployed Helm values" unless migration_inputs(deployed) == migration_inputs(effective)
+    abort "routine migration-free rollout changes migration configuration inputs from deployed Helm values" unless migration_inputs(deployed) == migration_inputs(effective)
     abort "routine migration-free rollout requires inherited migration.render=false" unless effective.dig("migration", "render") == false
     images = {"server" => effective.dig("images", "server"), "frontend" => effective.dig("images", "frontend"), "migrate" => effective.dig("images", "migrate")}
     images["mcp"] = effective.dig("images", "mcp") if effective.dig("mcp", "enabled") == true
