@@ -94,10 +94,34 @@ run_plan frontend >/dev/null
 assert_eq "$(jq -r '.components.frontend.action' "$temp_dir/frontend.json")" build
 assert_eq "$(jq -r '.components.server.action' "$temp_dir/frontend.json")" reuse
 
+TEST_CHANGED_FILES=$'Makefile\ndeploy/release-targets/example.json\nscripts/gke-helm-rollout.sh\nbackend/internal/cli/release.go'
+run_plan tooling-only >/dev/null
+for component in server worker frontend mcp migrate; do
+  assert_eq "$(jq -r ".components.$component.action" "$temp_dir/tooling-only.json")" reuse
+done
+
+TEST_CHANGED_FILES=$'README.md\ndocs/release-planning.md\nbackend/docs/swagger.yaml'
+run_plan documentation-only >/dev/null
+for component in server worker frontend mcp migrate; do
+  assert_eq "$(jq -r ".components.$component.action" "$temp_dir/documentation-only.json")" reuse
+done
+
+TEST_CHANGED_FILES='backend/docs/docs.go'
+run_plan generated-server-docs >/dev/null
+assert_eq "$(jq -r '.components.server.action' "$temp_dir/generated-server-docs.json")" build
+assert_eq "$(jq -r '.components.worker.action' "$temp_dir/generated-server-docs.json")" build
+assert_eq "$(jq -r '.components.mcp.action' "$temp_dir/generated-server-docs.json")" reuse
+
 TEST_CHANGED_FILES=$'frontend/src/App.tsx\nbackend/cmd/mcp/main.go'
 run_plan cross-component-move >/dev/null
 assert_eq "$(jq -r '.components.frontend.action' "$temp_dir/cross-component-move.json")" build
 assert_eq "$(jq -r '.components.mcp.action' "$temp_dir/cross-component-move.json")" build
+
+TEST_CHANGED_FILES=$'frontend/src/App.tsx\nbackend/go.mod'
+run_plan mixed-backend-frontend >/dev/null
+for component in server worker frontend mcp migrate; do
+  assert_eq "$(jq -r ".components.$component.action" "$temp_dir/mixed-backend-frontend.json")" build
+done
 
 TEST_CHANGED_FILES='frontend/src/App.tsx'
 if TEST_DIFF_FAILURE=true run_plan diff-failure >/dev/null 2>&1; then
@@ -121,19 +145,19 @@ run_plan migration >/dev/null
 assert_eq "$(jq -r '.components.migrate.action' "$temp_dir/migration.json")" build
 assert_eq "$(jq -r '.components.frontend.action' "$temp_dir/migration.json")" reuse
 
-TEST_CHANGED_FILES='README.md'
+TEST_CHANGED_FILES='.goreleaser.yml'
 run_plan unknown >/dev/null
 for component in server worker frontend mcp migrate; do
   assert_eq "$(jq -r ".components.$component.action" "$temp_dir/unknown.json")" manual_review
 done
 
-TEST_CHANGED_FILES='README.md'
+TEST_CHANGED_FILES='.goreleaser.yml'
 run_plan forced --force-build frontend --force-reuse server >/dev/null
 assert_eq "$(jq -r '.components.frontend.action' "$temp_dir/forced.json")" build
 assert_eq "$(jq -r '.components.server.action' "$temp_dir/forced.json")" reuse
 assert_eq "$(jq -r '.components.worker.action' "$temp_dir/forced.json")" reuse
 assert_eq "$(jq -r '.components.server.classification.action' "$temp_dir/forced.json")" manual_review
-assert_eq "$(jq -r '.components.server.reason' "$temp_dir/forced.json")" 'unknown_source_change:README.md'
+assert_eq "$(jq -r '.components.server.reason' "$temp_dir/forced.json")" 'unknown_source_change:.goreleaser.yml'
 assert_eq "$(jq -r '.components.server.override.action' "$temp_dir/forced.json")" reuse
 
 TEST_CHANGED_FILES='frontend/src/App.tsx'

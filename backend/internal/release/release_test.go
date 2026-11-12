@@ -163,7 +163,7 @@ func TestResolveAndOverlay(t *testing.T) {
 		if overlayErr := WriteValuesOverlay(&output, resolved); overlayErr != nil {
 			t.Fatalf("overlay: %v", overlayErr)
 		}
-		if !strings.Contains(output.String(), "worker: "+manifest.Images["worker"]) || !strings.Contains(output.String(), "manifestDigest: "+digest) {
+		if !strings.Contains(output.String(), "worker: "+manifest.Images["worker"]) || !strings.Contains(output.String(), "manifestDigest: "+digest) || !strings.Contains(output.String(), "channel: \""+selector.channel+"\"") {
 			t.Fatalf("unexpected overlay: %s", output.String())
 		}
 	}
@@ -195,7 +195,7 @@ func TestV2ManifestParsingResolutionAndOverlay(t *testing.T) {
 	if overlayErr := WriteValuesOverlay(&output, resolved); overlayErr != nil {
 		t.Fatalf("overlay: %v", overlayErr)
 	}
-	want := "release:\n  version: 0.0.10\n  channel: \n  manifestDigest: " + digest + "\nimages:\n  server: " + manifest.Components["server"].Image + "\n  frontend: " + manifest.Components["frontend"].Image + "\n  worker: " + manifest.Components["worker"].Image + "\n  migrate: " + manifest.Components["migrate"].Image + "\n  mcp: " + manifest.Components["mcp"].Image + "\n"
+	want := "release:\n  version: 0.0.10\n  channel: \"\"\n  manifestDigest: " + digest + "\nimages:\n  server: " + manifest.Components["server"].Image + "\n  frontend: " + manifest.Components["frontend"].Image + "\n  worker: " + manifest.Components["worker"].Image + "\n  migrate: " + manifest.Components["migrate"].Image + "\n  mcp: " + manifest.Components["mcp"].Image + "\n"
 	if output.String() != want {
 		t.Fatalf("unexpected overlay:\n%s", output.String())
 	}

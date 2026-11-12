@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 components=(server worker frontend mcp migrate)
-classifier_version=1
+classifier_version=2
 
 fail() {
   echo "$*" >&2
@@ -251,7 +251,7 @@ deploy_release() {
   if [[ "$deploy_scope" == control-plane ]]; then
   overlay="$temp_dir/release-overlay.json"
   jq -n --slurpfile manifest "$manifest" --arg digest "$manifest_digest" '
-    $manifest[0] as $document | {images: {server: $document.components.server.image, frontend: $document.components.frontend.image, mcp: $document.components.mcp.image, migrate: $document.components.migrate.image}, release: {version: $document.release, manifestDigest: $digest}, migration: {render: false}}
+    $manifest[0] as $document | {images: {server: $document.components.server.image, frontend: $document.components.frontend.image, mcp: $document.components.mcp.image, migrate: $document.components.migrate.image}, release: {version: $document.release, channel: "", manifestDigest: $digest}, migration: {render: false}}
   ' >"$overlay"
   values="$temp_dir/control-values.json"
   status="$temp_dir/control-status.json"
@@ -501,7 +501,7 @@ validate_plan_document() {
       (.predecessor_image == null or (.predecessor_image | image));
     type == "object" and
     (keys | sort) == ["classifier_version", "components", "fixed_inputs", "plan_sha256", "predecessor", "registry", "release", "release_source", "schema_version", "source", "target", "target_profile_sha256"] and
-    .schema_version == 1 and .classifier_version == 1 and
+    .schema_version == 1 and (.classifier_version == 1 or .classifier_version == 2) and
     (.release | semver) and (.target | type == "string" and test("^[a-z][a-z0-9-]*$")) and
     (.release_source | type == "string" and length > 0) and (.registry | type == "string" and length > 0) and (.target_profile_sha256 | digest) and (.plan_sha256 | digest) and
     (.predecessor | type == "object" and (keys | sort) == ["manifest_digest", "release", "selector", "source_commit"] and (.selector | type == "string") and (.release | semver) and (.manifest_digest | digest) and (.source_commit | type == "string" and test("^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"))) and
@@ -719,6 +719,8 @@ add_reason() {
 if [[ ${#changed_paths[@]} -gt 0 ]]; then
   for path in "${changed_paths[@]}"; do
     case "$path" in
+      Makefile|README.md|LICENSE|AGENTS.md|codecov.yml|docker-compose.yml|docker-compose.prod.yml|go.work|docs/*|deploy/*|dev/*|release/*|scripts/*|.github/*|.claude/*|backend/README.md|backend/.air.toml|backend/architecture/*|backend/cmd/coyote/*|backend/internal/cli/*|backend/*_test.go|frontend/README.md)
+        ;;
       frontend/*)
         set_component_value changed frontend true
         add_reason frontend "frontend_input:$path"
@@ -733,13 +735,31 @@ if [[ ${#changed_paths[@]} -gt 0 ]]; then
         set_component_value changed mcp true
         add_reason mcp "mcp_input:$path"
         ;;
-      backend/internal/*|backend/go.mod|backend/go.sum)
+      backend/docs/docs.go)
+        set_component_value changed server true
+        set_component_value changed worker true
+        add_reason server "runtime_input:$path"
+        add_reason worker "runtime_input:$path"
+        ;;
+      backend/docs/*)
+        ;;
+      backend/internal/*)
         set_component_value changed server true
         set_component_value changed worker true
         set_component_value changed mcp true
         add_reason server "shared_backend_input:$path"
         add_reason worker "shared_backend_input:$path"
         add_reason mcp "shared_backend_input:$path"
+        ;;
+      backend/go.mod|backend/go.sum)
+        set_component_value changed server true
+        set_component_value changed worker true
+        set_component_value changed mcp true
+        set_component_value changed migrate true
+        add_reason server "shared_go_dependency_input:$path"
+        add_reason worker "shared_go_dependency_input:$path"
+        add_reason mcp "shared_go_dependency_input:$path"
+        add_reason migrate "shared_go_dependency_input:$path"
         ;;
       backend/db/migrations/*)
         set_component_value changed migrate true
