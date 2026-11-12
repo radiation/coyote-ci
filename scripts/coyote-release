@@ -719,7 +719,7 @@ add_reason() {
 if [[ ${#changed_paths[@]} -gt 0 ]]; then
   for path in "${changed_paths[@]}"; do
     case "$path" in
-      Makefile|README.md|LICENSE|AGENTS.md|codecov.yml|docker-compose.yml|docker-compose.prod.yml|go.work|docs/*|deploy/*|dev/*|release/*|scripts/*|.github/*|.claude/*|backend/README.md|backend/.air.toml|backend/architecture/*|backend/cmd/coyote/*|backend/internal/cli/*|backend/*_test.go|frontend/README.md)
+      Makefile|README.md|LICENSE|AGENTS.md|codecov.yml|docker-compose.yml|docker-compose.prod.yml|go.work|.env.example|docs/*|deploy/*|dev/*|release/*|scripts/*|.github/*|.claude/*|.coyote/*|backend/README.md|backend/.air.toml|backend/architecture/*|backend/cmd/coyote/*|backend/internal/cli/*|backend/*_test.go|frontend/README.md)
         ;;
       frontend/*)
         set_component_value changed frontend true

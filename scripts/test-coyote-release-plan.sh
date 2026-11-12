@@ -96,7 +96,7 @@ assert_eq "$(jq -r '.components.frontend.action' "$temp_dir/frontend.json")" bui
 assert_eq "$(jq -r '.components.server.action' "$temp_dir/frontend.json")" reuse
 jq -e '.fixed_inputs.build_date | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")' "$temp_dir/frontend.json" >/dev/null
 
-TEST_CHANGED_FILES=$'Makefile\ndeploy/release-targets/example.json\nscripts/gke-helm-rollout.sh\nbackend/internal/cli/release.go'
+TEST_CHANGED_FILES=$'Makefile\n.env.example\n.coyote/pipeline.yml\ndeploy/release-targets/example.json\nscripts/gke-helm-rollout.sh\nbackend/internal/cli/release.go'
 run_plan tooling-only >/dev/null
 for component in server worker frontend mcp migrate; do
   assert_eq "$(jq -r ".components.$component.action" "$temp_dir/tooling-only.json")" reuse
