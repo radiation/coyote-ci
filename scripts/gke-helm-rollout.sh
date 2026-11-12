@@ -166,7 +166,7 @@ worker_deployment_name() {
 }
 
 mcp_enabled() {
-  ruby -ryaml -e 'puts YAML.load_file(ARGV.fetch(0)).fetch("mcp", {}).fetch("enabled", false) == true' "$control_values"
+  ruby -ryaml -e 'puts YAML.load_file(ARGV.fetch(0)).fetch("mcp", {}).fetch("enabled", false) == true' "$1"
 }
 
 verify_routine_effective_values() {
@@ -182,6 +182,7 @@ verify_routine_effective_values() {
         "migration" => values["migration"],
         "migrate_service_account" => values.dig("serviceAccounts", "migrate"),
         "cloud_sql" => values["cloudSql"],
+        "database_secret_project" => values.dig("secrets", "project"),
         "database_secret" => values.dig("secrets", "databaseUrl"),
         "gke" => values["gke"]
       }
@@ -782,12 +783,6 @@ if [[ "$migration_mode" == "required" ]]; then
     worker_values_args+=(--values "$release_values")
   fi
 fi
-mcp_replicas=""
-mcp_is_desired=false
-if [[ "$(mcp_enabled)" == "true" ]]; then
-  mcp_is_desired=true
-  mcp_replicas="$(external_replica_value "$control_values" mcp)"
-fi
 
 release_json="$(release_identity)"
 release_fingerprint="$(ruby -rjson -e 'puts JSON.parse(STDIN.read).fetch("fingerprint")' <<<"$release_json")"
@@ -802,6 +797,25 @@ if [[ "$operation" == "status" ]]; then
 fi
 
 verify_target_identity
+
+if [[ "$migration_mode" == "none" ]]; then
+  lease_acquire
+  start_lease_renewal
+  routine_deployed_values="$(mktemp "${TMPDIR:-/tmp}/coyote-routine-values.XXXXXX")"
+  routine_effective_values="$(mktemp "${TMPDIR:-/tmp}/coyote-routine-values.XXXXXX")"
+  helm get values "$control_release" --namespace "$control_namespace" --all --output yaml >"$routine_deployed_values"
+  verify_routine_effective_values "$routine_deployed_values" "$routine_effective_values" || fail "routine migration-free preflight rejected the effective Helm values"
+  rm -f "$routine_deployed_values"
+  mcp_values="$routine_effective_values"
+else
+  mcp_values="$control_values"
+fi
+mcp_replicas=""
+mcp_is_desired=false
+if [[ "$(mcp_enabled "$mcp_values")" == "true" ]]; then
+  mcp_is_desired=true
+  mcp_replicas="$(external_replica_value "$mcp_values" mcp)"
+fi
 
 # Rendering validates the supplied digest-pinned images and chart-required inputs before mutation.
 helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" >/dev/null
@@ -820,11 +834,6 @@ case "$mcp_state:$mcp_is_desired" in
 esac
 
 if [[ "$migration_mode" == "none" ]]; then
-  routine_deployed_values="$(mktemp "${TMPDIR:-/tmp}/coyote-routine-values.XXXXXX")"
-  routine_effective_values="$(mktemp "${TMPDIR:-/tmp}/coyote-routine-values.XXXXXX")"
-  helm get values "$control_release" --namespace "$control_namespace" --all --output yaml >"$routine_deployed_values"
-  verify_routine_effective_values "$routine_deployed_values" "$routine_effective_values" || fail "routine migration-free preflight rejected the effective Helm values"
-  rm -f "$routine_deployed_values"
   routine_values_args=(--values "$routine_effective_values")
   if ! helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" "${routine_values_args[@]}" --reuse-values --wait --timeout "${timeout_seconds}s" --dry-run=client >/dev/null; then
     rm -f "$routine_effective_values"
@@ -840,6 +849,7 @@ if [[ "$migration_mode" == "none" ]]; then
   if [[ "$mcp_is_desired" == "true" && "$mcp_state" == "managed" ]]; then
     run kubectl -n "$control_namespace" rollout status deployment/coyote-mcp --timeout="${timeout_seconds}s"
   fi
+  lease_release
   echo "Routine control-plane-only Helm upgrade completed."
   exit 0
 fi

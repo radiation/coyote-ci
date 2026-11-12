@@ -43,7 +43,7 @@ if [[ "${HELM_VALIDATE_RELEASE_CHANNEL:-false}" == "true" && "$1" == "upgrade" &
     end
     release = values["release"]
     abort "release.channel must be a string when supplied" if release.is_a?(Hash) && release.key?("channel") && !release["channel"].is_a?(String)
-  ' "$@"
+  ' "$@" || exit $?
 fi
 if [[ "${HELM_FAIL_CONTROL_UPGRADE:-false}" == "true" && "$1" == "upgrade" && "$2" == "coyote-ci" ]]; then
   exit 1
@@ -88,7 +88,7 @@ mcp: {enabled: false}
 serviceAccounts:
   migrate: {name: coyote-migrate, gsaEmail: coyote-gke-migrate@bryanchoate.iam.gserviceaccount.com}
 cloudSql: {connectionName: "bryanchoate:us-central1:bryanchoate-postgres"}
-secrets: {databaseUrl: coyote-staging-database-url}
+secrets: {project: bryanchoate, databaseUrl: coyote-staging-database-url}
 VALUES
   fi
   exit 0
@@ -363,11 +363,71 @@ grep -q -- "--values $release_values" "$routine_log" || {
   cat "$routine_log" >&2
   exit 1
 }
-! grep -Eq 'coyote-ci-worker|patch deployment/|apply -f -|get job/|migration-job|lease/' "$routine_log" || {
-  echo "routine rollout invoked worker, migration, Lease, or scale-down operations" >&2
+grep -q 'get lease/coyote-rollout-coyote-ci' "$routine_log" || {
+  echo "routine rollout did not acquire the release Lease" >&2
   cat "$routine_log" >&2
   exit 1
 }
+! grep -Eq 'coyote-ci-worker|patch deployment/|apply -f -|get job/|migration-job' "$routine_log" || {
+  echo "routine rollout invoked worker, migration, or scale-down operations" >&2
+  cat "$routine_log" >&2
+  exit 1
+}
+
+routine_active_lease_log="$temp_dir/routine-active-lease-commands.log"
+if PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$routine_active_lease_log" \
+  KUBECTL_MCP_DEPLOYMENT_STATE=absent \
+  KUBECTL_LEASE_JSON='{"metadata":{"uid":"active-lease-uid","resourceVersion":"1"},"spec":{"holderIdentity":"guarded-rollout","renewTime":"2099-01-01T00:00:00Z","leaseDurationSeconds":900}}' \
+  GKE_HELM_TARGET_ENVIRONMENT=production \
+  GKE_HELM_EXPECTED_CONTEXT=test-context \
+  GKE_HELM_EXPECTED_CLUSTER_UID=test-cluster-uid \
+  GKE_HELM_DEPLOYMENT_TOPOLOGY=control-plane-only \
+  GKE_HELM_MIGRATION_MODE=none \
+  GKE_HELM_MIGRATION_FREE_CONFIRMED=true \
+  GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml" \
+  GKE_HELM_WORKER_VALUES="$temp_dir/no-worker-values.yaml" \
+  GKE_HELM_RELEASE_VALUES="$release_values" \
+  "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>&1; then
+  echo "routine rollout must reject an active release Lease" >&2
+  exit 1
+fi
+if [[ -f "$routine_active_lease_log" ]] && grep -Eq 'helm get values|helm upgrade' "$routine_active_lease_log"; then
+  echo "active release Lease allowed routine Helm work" >&2
+  cat "$routine_active_lease_log" >&2
+  exit 1
+fi
+
+routine_mcp_disable_values="$temp_dir/routine-mcp-disable-release-values.yaml"
+cp "$release_values" "$routine_mcp_disable_values"
+cat >>"$routine_mcp_disable_values" <<'EOF'
+mcp:
+  enabled: false
+EOF
+routine_mcp_disable_log="$temp_dir/routine-mcp-disable-commands.log"
+if PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$routine_mcp_disable_log" \
+  KUBECTL_MCP_DEPLOYMENT_STATE=managed \
+  GKE_HELM_TARGET_ENVIRONMENT=production \
+  GKE_HELM_EXPECTED_CONTEXT=test-context \
+  GKE_HELM_EXPECTED_CLUSTER_UID=test-cluster-uid \
+  GKE_HELM_DEPLOYMENT_TOPOLOGY=control-plane-only \
+  GKE_HELM_MIGRATION_MODE=none \
+  GKE_HELM_MIGRATION_FREE_CONFIRMED=true \
+  GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml" \
+  GKE_HELM_WORKER_VALUES="$temp_dir/no-worker-values.yaml" \
+  GKE_HELM_RELEASE_VALUES="$routine_mcp_disable_values" \
+  "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>&1; then
+  echo "routine rollout must reject a release overlay that disables managed MCP" >&2
+  exit 1
+fi
+if [[ -f "$routine_mcp_disable_log" ]] && grep -q 'helm upgrade' "$routine_mcp_disable_log"; then
+  echo "managed MCP disable reached a routine Helm upgrade" >&2
+  cat "$routine_mcp_disable_log" >&2
+  exit 1
+fi
 
 release_channel_empty_values="$temp_dir/release-channel-empty.yaml"
 release_channel_null_values="$temp_dir/release-channel-null.yaml"
@@ -435,7 +495,7 @@ grep -q 'helm upgrade coyote-ci ' "$routine_changed_migrate_log" || {
   cat "$routine_changed_migrate_log" >&2
   exit 1
 }
-! grep -Eq 'get job/|migration-job|lease/' "$routine_changed_migrate_log" || {
+! grep -Eq 'get job/|migration-job' "$routine_changed_migrate_log" || {
   echo "changed migrate image invoked migration operations" >&2
   cat "$routine_changed_migrate_log" >&2
   exit 1
@@ -464,6 +524,32 @@ fi
 if [[ -f "$routine_changed_migration_config_log" ]] && grep -q 'helm upgrade' "$routine_changed_migration_config_log"; then
   echo "changed migration configuration reached a routine Helm upgrade" >&2
   cat "$routine_changed_migration_config_log" >&2
+  exit 1
+fi
+
+routine_changed_migration_secret_project_values="$temp_dir/routine-changed-migration-secret-project-release-values.yaml"
+ruby -ryaml -e 'values = YAML.load_file(ARGV.fetch(0)); values["secrets"] = {"project" => "different-project"}; File.write(ARGV.fetch(1), YAML.dump(values))' "$release_values" "$routine_changed_migration_secret_project_values"
+routine_changed_migration_secret_project_log="$temp_dir/routine-changed-migration-secret-project-commands.log"
+if PATH="$temp_dir/bin:$PATH" \
+  COMMAND_LOG="$routine_changed_migration_secret_project_log" \
+  KUBECTL_MCP_DEPLOYMENT_STATE=absent \
+  GKE_HELM_TARGET_ENVIRONMENT=production \
+  GKE_HELM_EXPECTED_CONTEXT=test-context \
+  GKE_HELM_EXPECTED_CLUSTER_UID=test-cluster-uid \
+  GKE_HELM_DEPLOYMENT_TOPOLOGY=control-plane-only \
+  GKE_HELM_MIGRATION_MODE=none \
+  GKE_HELM_MIGRATION_FREE_CONFIRMED=true \
+  GKE_HELM_DRY_RUN=false \
+  GKE_HELM_CONTROL_PLANE_VALUES="$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml" \
+  GKE_HELM_WORKER_VALUES="$temp_dir/no-worker-values.yaml" \
+  GKE_HELM_RELEASE_VALUES="$routine_changed_migration_secret_project_values" \
+  "$repo_root/scripts/gke-helm-rollout.sh" >/dev/null 2>&1; then
+  echo "routine rollout must reject a changed migration secret project" >&2
+  exit 1
+fi
+if [[ -f "$routine_changed_migration_secret_project_log" ]] && grep -q 'helm upgrade' "$routine_changed_migration_secret_project_log"; then
+  echo "changed migration secret project reached a routine Helm upgrade" >&2
+  cat "$routine_changed_migration_secret_project_log" >&2
   exit 1
 fi
 
