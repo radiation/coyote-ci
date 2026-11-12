@@ -487,6 +487,36 @@ func TestPromoteChannelPreservesConcurrentUpdates(t *testing.T) {
 	}
 }
 
+func TestFilePublisherPromotionResult(t *testing.T) {
+	publisher, publisherErr := NewFilePublisher(t.TempDir())
+	if publisherErr != nil {
+		t.Fatalf("publisher: %v", publisherErr)
+	}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	result, promoteErr := publisher.PromoteChannel(context.Background(), "latest", "2.5.1", digest)
+	if promoteErr != nil {
+		t.Fatalf("initial promotion: %v", promoteErr)
+	}
+	if !result.PreviousKnown || result.Previous != nil || !result.ChangedKnown || !result.Changed || result.Current != (ChannelEntry{Release: "2.5.1", ManifestDigest: digest}) {
+		t.Fatalf("unexpected initial result: %+v", result)
+	}
+
+	result, promoteErr = publisher.PromoteChannel(context.Background(), "latest", "2.5.1", digest)
+	if promoteErr != nil {
+		t.Fatalf("repeated promotion: %v", promoteErr)
+	}
+	if result.Previous == nil || *result.Previous != result.Current || !result.PreviousKnown || !result.ChangedKnown || result.Changed {
+		t.Fatalf("unexpected repeated result: %+v", result)
+	}
+
+	if _, invalidChannelErr := publisher.PromoteChannel(context.Background(), "preview", "2.5.1", digest); invalidChannelErr == nil {
+		t.Fatal("expected unsupported channel error")
+	}
+	if _, invalidVersionErr := publisher.PromoteChannel(context.Background(), "latest", "2.5", digest); invalidVersionErr == nil {
+		t.Fatal("expected invalid release error")
+	}
+}
+
 func TestPublishManifestPreservesConcurrentImmutability(t *testing.T) {
 	root := t.TempDir()
 	firstPublisher, firstPublisherErr := NewFilePublisher(root)

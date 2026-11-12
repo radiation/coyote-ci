@@ -182,6 +182,80 @@ func TestReleasePromoteChannelReportsAmbiguousOutcome(t *testing.T) {
 	}
 }
 
+func TestReleasePromoteChannelCommandFailures(t *testing.T) {
+	manifestPath := writeCLIManifest(t, t.TempDir())
+	manifestData, readErr := os.ReadFile(manifestPath)
+	if readErr != nil {
+		t.Fatalf("read manifest: %v", readErr)
+	}
+	mismatchedManifest := bytes.Replace(manifestData, []byte(`"2.5.1"`), []byte(`"2.5.2"`), 1)
+	validDigest := releases.Digest(manifestData)
+
+	tests := []struct {
+		name    string
+		args    []string
+		store   *releaseStoreFake
+		openErr error
+		want    int
+	}{
+		{name: "missing required flags", args: []string{"release", "promote-channel"}, want: 2},
+		{name: "invalid version", args: []string{"release", "promote-channel", "--release", "1.2", "--channel", "latest", "--release-source", "test"}, want: 2},
+		{name: "store error", args: []string{"release", "promote-channel", "--release", "2.5.1", "--channel", "latest", "--release-source", "test"}, openErr: errors.New("store unavailable"), want: 1},
+		{name: "fetch error", args: []string{"release", "promote-channel", "--release", "2.5.1", "--channel", "latest", "--release-source", "test"}, store: &releaseStoreFake{fetchErr: errors.New("permission denied")}, want: 1},
+		{name: "invalid manifest", args: []string{"release", "promote-channel", "--release", "2.5.1", "--channel", "latest", "--release-source", "test"}, store: &releaseStoreFake{document: releases.Document{Data: []byte("{")}}, want: 1},
+		{name: "mismatched manifest", args: []string{"release", "promote-channel", "--release", "2.5.1", "--channel", "latest", "--release-source", "test"}, store: &releaseStoreFake{document: releases.Document{Data: mismatchedManifest}}, want: 1},
+		{name: "promotion error", args: []string{"release", "promote-channel", "--release", "2.5.1", "--channel", "latest", "--release-source", "test"}, store: &releaseStoreFake{document: releases.Document{Data: manifestData, Digest: validDigest}, promoteErr: errors.New("promotion failed")}, want: 1},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			code := Run(Dependencies{
+				Stdout: &bytes.Buffer{},
+				Stderr: &bytes.Buffer{},
+				OpenReleaseStore: func(context.Context, string) (releases.Store, io.Closer, error) {
+					return testCase.store, nil, testCase.openErr
+				},
+				Args: testCase.args,
+			})
+			if code != testCase.want {
+				t.Fatalf("promote exit=%d want %d", code, testCase.want)
+			}
+		})
+	}
+}
+
+func TestReleasePromoteChannelReportsPreviousTarget(t *testing.T) {
+	manifestPath := writeCLIManifest(t, t.TempDir())
+	manifestData, readErr := os.ReadFile(manifestPath)
+	if readErr != nil {
+		t.Fatalf("read manifest: %v", readErr)
+	}
+	digest := releases.Digest(manifestData)
+	previous := releases.ChannelEntry{Release: "2.5.0", ManifestDigest: "sha256:" + strings.Repeat("a", 64)}
+	store := &releaseStoreFake{
+		document: releases.Document{Data: manifestData, Digest: digest},
+		promotionResult: releases.ChannelPromotionResult{
+			Previous: &previous, PreviousKnown: true,
+			Current: releases.ChannelEntry{Release: "2.5.1", ManifestDigest: digest},
+			Changed: true, ChangedKnown: true,
+		},
+	}
+	stdout := &bytes.Buffer{}
+	code := Run(Dependencies{
+		Stdout: stdout,
+		Stderr: &bytes.Buffer{},
+		OpenReleaseStore: func(context.Context, string) (releases.Store, io.Closer, error) {
+			return store, nil, nil
+		},
+		Args: []string{"release", "promote-channel", "--release", "2.5.1", "--channel", "latest", "--release-source", "test"},
+	})
+	if code != 0 {
+		t.Fatalf("promote exit=%d", code)
+	}
+	if output := stdout.String(); !strings.Contains(output, "Previous target: 2.5.0 ("+previous.ManifestDigest+")") || !strings.Contains(output, "Changed: true") {
+		t.Fatalf("unexpected promote output: %s", output)
+	}
+}
+
 func TestReleaseRawImportAndFetchFilesystem(t *testing.T) {
 	manifestPath := writeCLIManifest(t, t.TempDir())
 	raw, readErr := os.ReadFile(manifestPath)

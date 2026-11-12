@@ -279,6 +279,93 @@ func TestGCSStoreChannelPromotionPreservesPermissionError(t *testing.T) {
 	}
 }
 
+func TestGCSStoreChannelPromotionFailureOutcomes(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+
+	t.Run("invalid input", func(t *testing.T) {
+		store, storeErr := newGCSStore(newReleaseObjectStoreFake(), "")
+		if storeErr != nil {
+			t.Fatalf("newGCSStore: %v", storeErr)
+		}
+		if _, promoteErr := store.PromoteChannel(context.Background(), "latest", "2.5", digest); promoteErr == nil {
+			t.Fatal("expected invalid release error")
+		}
+	})
+
+	t.Run("canceled context", func(t *testing.T) {
+		store, storeErr := newGCSStore(newReleaseObjectStoreFake(), "")
+		if storeErr != nil {
+			t.Fatalf("newGCSStore: %v", storeErr)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, promoteErr := store.PromoteChannel(ctx, "latest", "2.5.1", digest); !errors.Is(promoteErr, context.Canceled) {
+			t.Fatalf("promotion error=%v", promoteErr)
+		}
+	})
+
+	t.Run("channel index read error", func(t *testing.T) {
+		objects := newReleaseObjectStoreFake()
+		objects.readErr = errors.New("read failed")
+		store, storeErr := newGCSStore(objects, "")
+		if storeErr != nil {
+			t.Fatalf("newGCSStore: %v", storeErr)
+		}
+		if _, promoteErr := store.PromoteChannel(context.Background(), "latest", "2.5.1", digest); !errors.Is(promoteErr, objects.readErr) {
+			t.Fatalf("promotion error=%v", promoteErr)
+		}
+	})
+
+	t.Run("idempotent promotion", func(t *testing.T) {
+		store, storeErr := newGCSStore(newReleaseObjectStoreFake(), "")
+		if storeErr != nil {
+			t.Fatalf("newGCSStore: %v", storeErr)
+		}
+		if _, promoteErr := store.PromoteChannel(context.Background(), "latest", "2.5.1", digest); promoteErr != nil {
+			t.Fatalf("initial promotion: %v", promoteErr)
+		}
+		result, promoteErr := store.PromoteChannel(context.Background(), "latest", "2.5.1", digest)
+		if promoteErr != nil || result.Previous == nil || !result.PreviousKnown || !result.ChangedKnown || result.Changed {
+			t.Fatalf("idempotent result=%+v err=%v", result, promoteErr)
+		}
+	})
+
+	t.Run("reconciliation read error", func(t *testing.T) {
+		objects := newReleaseObjectStoreFake()
+		store, storeErr := newGCSStore(objects, "")
+		if storeErr != nil {
+			t.Fatalf("newGCSStore: %v", storeErr)
+		}
+		if _, promoteErr := store.PromoteChannel(context.Background(), "latest", "2.5.1", digest); promoteErr != nil {
+			t.Fatalf("initial promotion: %v", promoteErr)
+		}
+		writeErr := errors.New("write failed")
+		readErr := errors.New("reconciliation read failed")
+		objects.replaceErr = writeErr
+		objects.replaceErrAfter = func(s *releaseObjectStoreFake, _ string) {
+			s.readErr = readErr
+		}
+		if _, promoteErr := store.PromoteChannel(context.Background(), "latest", "2.5.2", digest); !errors.Is(promoteErr, writeErr) || !errors.Is(promoteErr, readErr) {
+			t.Fatalf("promotion error=%v", promoteErr)
+		}
+	})
+
+	t.Run("precondition retry exhaustion", func(t *testing.T) {
+		objects := newReleaseObjectStoreFake()
+		store, storeErr := newGCSStore(objects, "")
+		if storeErr != nil {
+			t.Fatalf("newGCSStore: %v", storeErr)
+		}
+		if _, promoteErr := store.PromoteChannel(context.Background(), "latest", "2.5.1", digest); promoteErr != nil {
+			t.Fatalf("initial promotion: %v", promoteErr)
+		}
+		objects.replaceErr = errGCSPrecondition
+		if _, promoteErr := store.PromoteChannel(context.Background(), "latest", "2.5.2", digest); !errors.Is(promoteErr, ErrChannelPromotionBusy) {
+			t.Fatalf("promotion error=%v", promoteErr)
+		}
+	})
+}
+
 func TestGCSReleasePreconditionErrorClassification(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
@@ -383,6 +470,7 @@ type releaseObjectStoreFake struct {
 	createErr            error
 	createAfterWriteErr  error
 	replaceErr           error
+	replaceErrAfter      func(*releaseObjectStoreFake, string)
 	replaceAfterWriteErr error
 	replaceAfterWrite    func(*releaseObjectStoreFake, string)
 	replaceCalls         int
@@ -440,6 +528,9 @@ func (s *releaseObjectStoreFake) Replace(ctx context.Context, name string, gener
 	defer s.mu.Unlock()
 	s.replaceCalls++
 	if s.replaceErr != nil {
+		if s.replaceErrAfter != nil {
+			s.replaceErrAfter(s, name)
+		}
 		return s.replaceErr
 	}
 	object, found := s.objects[name]

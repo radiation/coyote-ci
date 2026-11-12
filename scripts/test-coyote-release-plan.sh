@@ -22,7 +22,11 @@ case "$1" in
   rev-parse) printf '%s\n' "${TEST_HEAD_COMMIT}" ;;
   cat-file) [[ "${TEST_PREDECESSOR_AVAILABLE:-true}" == true ]] ;;
   merge-base) [[ "${TEST_PREDECESSOR_ANCESTOR:-true}" == true ]] ;;
-  diff) printf '%s\n' "${TEST_CHANGED_FILES:-}" ;;
+  diff)
+    [[ "$2" == --no-renames && "$3" == --name-only ]] || exit 1
+    [[ "${TEST_DIFF_FAILURE:-false}" != true ]] || exit 1
+    printf '%s\n' "${TEST_CHANGED_FILES:-}"
+    ;;
   *) exit 1 ;;
 esac
 EOF
@@ -70,7 +74,7 @@ write_v1_manifest() {
 run_plan() {
   local name="$1"
   shift
-  TEST_HEAD_COMMIT="$commit_b" TEST_PREDECESSOR_VERSION=0.0.10 TEST_MANIFEST="$TEST_MANIFEST" TEST_CHANGED_FILES="${TEST_CHANGED_FILES:-}" TEST_COYOTE_LOG="$temp_dir/$name.coyote" \
+  TEST_HEAD_COMMIT="$commit_b" TEST_PREDECESSOR_VERSION=0.0.10 TEST_MANIFEST="$TEST_MANIFEST" TEST_CHANGED_FILES="${TEST_CHANGED_FILES:-}" TEST_DIFF_FAILURE="${TEST_DIFF_FAILURE:-false}" TEST_COYOTE_LOG="$temp_dir/$name.coyote" \
     PATH="$temp_dir:$PATH" COYOTE_RELEASE_CLI="$temp_dir/coyote" \
     bash "$repo_root/scripts/coyote-release" plan --release 0.0.11 --from latest --target production --profile "$profile" --output "$temp_dir/$name.json" "$@"
 }
@@ -89,6 +93,17 @@ TEST_CHANGED_FILES='frontend/src/App.tsx'
 run_plan frontend >/dev/null
 assert_eq "$(jq -r '.components.frontend.action' "$temp_dir/frontend.json")" build
 assert_eq "$(jq -r '.components.server.action' "$temp_dir/frontend.json")" reuse
+
+TEST_CHANGED_FILES=$'frontend/src/App.tsx\nbackend/cmd/mcp/main.go'
+run_plan cross-component-move >/dev/null
+assert_eq "$(jq -r '.components.frontend.action' "$temp_dir/cross-component-move.json")" build
+assert_eq "$(jq -r '.components.mcp.action' "$temp_dir/cross-component-move.json")" build
+
+TEST_CHANGED_FILES='frontend/src/App.tsx'
+if TEST_DIFF_FAILURE=true run_plan diff-failure >/dev/null 2>&1; then
+  echo 'expected git diff failure to abort release planning' >&2
+  exit 1
+fi
 
 TEST_CHANGED_FILES='backend/internal/service/build/lifecycle.go'
 run_plan shared-backend >/dev/null

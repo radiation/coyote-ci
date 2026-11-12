@@ -39,7 +39,14 @@ printf 'helm %s\n' "$*" >>"$COMMAND_LOG"
 case "$1" in
   get)
     if [[ "$2" == manifest ]]; then
-      if [[ "${TEST_HELM_MANIFEST_DRIFT:-false}" == true ]]; then printf '%s\n' 'apiVersion: v1' 'kind: Secret'; else printf '%s\n' 'apiVersion: v1' 'kind: ConfigMap'; fi
+      if [[ "${TEST_HELM_MANIFEST_DRIFT:-false}" == true ]]; then
+        printf '%s\n' 'apiVersion: v1' 'kind: Secret'
+      elif [[ "${TEST_HELM_TAGGED_MANIFEST_IMAGES:-false}" == true ]]; then
+        if [[ "$3" == coyote-ci-worker ]]; then image="$TEST_WORKER_IMAGE"; else image="registry.example/coyote-server@$TEST_SERVER_IMAGE"; fi
+        printf '%s\n' 'apiVersion: apps/v1' 'kind: Deployment' 'spec:' '  template:' '    spec:' '      containers:' "      - name: test" "        image: ${image%@*}:0.0.10@${image#*@}"
+      else
+        printf '%s\n' 'apiVersion: v1' 'kind: ConfigMap'
+      fi
       exit 0
     fi
     [[ "$2" == values ]] || exit 1
@@ -57,7 +64,14 @@ case "$1" in
   status)
     if [[ "$2" == coyote-ci-worker ]]; then printf '%s\n' '{"chart":"coyote-ci-worker-0.1.0","version":1}'; else printf '%s\n' '{"chart":"coyote-ci-0.1.0","version":1}'; fi
     ;;
-  template) printf '%s\n' 'apiVersion: v1' 'kind: ConfigMap' ;;
+  template)
+    if [[ "${TEST_HELM_TAGGED_MANIFEST_IMAGES:-false}" == true ]]; then
+      if [[ "$2" == coyote-ci-worker ]]; then image="$TEST_WORKER_IMAGE"; else image="registry.example/coyote-server@$TEST_SERVER_IMAGE"; fi
+      printf '%s\n' 'apiVersion: apps/v1' 'kind: Deployment' 'spec:' '  template:' '    spec:' '      containers:' '      - name: test' "        image: $image"
+    else
+      printf '%s\n' 'apiVersion: v1' 'kind: ConfigMap'
+    fi
+    ;;
   *) exit 1 ;;
 esac
 EOF
@@ -146,6 +160,10 @@ output="$(run_deploy production)"
 assert_contains "$output" 'Deployment assessment: release-equivalent'
 assert_read_only
 
+output="$(TEST_HELM_TAGGED_MANIFEST_IMAGES=true run_deploy production)"
+assert_contains "$output" 'Deployment assessment: release-equivalent'
+assert_read_only
+
 output="$(TEST_HELM_MANIFEST_DRIFT=true run_deploy production)"
 assert_contains "$output" 'rendered Helm manifest differs from the installed release'
 assert_contains "$output" 'Deployment assessment: drift'
@@ -176,6 +194,10 @@ assert_read_only
 
 output="$(run_deploy staging --scope worker)"
 assert_contains "$output" 'Component: worker runtime-equivalent'
+assert_contains "$output" 'Deployment assessment: release-equivalent'
+assert_read_only
+
+output="$(TEST_HELM_TAGGED_MANIFEST_IMAGES=true run_deploy staging --scope worker)"
 assert_contains "$output" 'Deployment assessment: release-equivalent'
 assert_read_only
 

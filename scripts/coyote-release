@@ -148,6 +148,26 @@ is_immutable_image_reference() {
 
 canonical_helm_manifest() {
   ruby -ryaml -rjson -e '
+    def immutable_image_digest(image)
+      match = /\A(?:[a-z0-9][a-z0-9._-]*(?::[0-9]+)?\/)?[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?@(sha256:[a-f0-9]{64})\z/.match(image)
+      match && match[1]
+    end
+
+    def normalize_deployment_images(document)
+      return document unless document.is_a?(Hash) && document["kind"] == "Deployment"
+
+      containers = document.dig("spec", "template", "spec", "containers")
+      return document unless containers.is_a?(Array)
+
+      containers.each do |container|
+        next unless container.is_a?(Hash) && container["image"].is_a?(String)
+
+        digest = immutable_image_digest(container["image"])
+        container["image"] = digest unless digest.nil?
+      end
+      document
+    end
+
     def canonical(value)
       case value
       when Hash then value.keys.sort.each_with_object({}) { |key, result| result[key] = canonical(value[key]) }
@@ -155,7 +175,7 @@ canonical_helm_manifest() {
       else value
       end
     end
-    documents = YAML.load_stream(File.read(ARGV.fetch(0))).compact
+    documents = YAML.load_stream(File.read(ARGV.fetch(0))).compact.map { |document| normalize_deployment_images(document) }
     indexed = documents.each_with_object({}) do |document, result|
       metadata = document.fetch("metadata", {})
       key = [document.fetch("apiVersion", ""), document.fetch("kind", ""), metadata.fetch("namespace", ""), metadata.fetch("name", "")]
@@ -171,7 +191,7 @@ chart_identity_matches() {
   name="$(awk -F ': *' '$1 == "name" { print $2; exit }' "$chart_dir/Chart.yaml")"
   version="$(awk -F ': *' '$1 == "version" { print $2; exit }' "$chart_dir/Chart.yaml")"
   [[ -n "$name" && -n "$version" ]] || return 1
-  jq -e --arg chart "$name-$version" '.chart == $chart' "$status_file" >/dev/null
+  jq -e --arg name "$name" --arg version "$version" '.chart.metadata.name == $name and .chart.metadata.version == $version' "$status_file" >/dev/null
 }
 
 deploy_release() {
@@ -297,7 +317,7 @@ deploy_release() {
     helm_metadata_matches=false
     echo "Component: control-plane helm-metadata drift release or manifest digest differs"
   fi
-  mcp_enabled_value="$(jq -er '.mcp.enabled // false | if type == "boolean" then . else error("mcp.enabled must be boolean") end' "$values")" || fail "control-plane Helm values are malformed"
+  mcp_enabled_value="$(jq -r '.mcp.enabled // false | if type == "boolean" then . else error("mcp.enabled must be boolean") end' "$values")" || fail "control-plane Helm values are malformed"
   mcp_deployment="$(kubectl -n "$control_namespace" get deployment/coyote-mcp --ignore-not-found -o json)" || fail "could not inspect deployment/coyote-mcp"
   if [[ "$mcp_enabled_value" == true ]]; then
     if [[ -z "$mcp_deployment" ]]; then
@@ -388,7 +408,7 @@ deploy_release() {
     worker_installed="$temp_dir/worker-installed.yaml"
     worker_status="$temp_dir/worker-status.json"
     worker_image="$(jq -r '.components.worker.image' "$manifest")"
-    helm get values "$worker_release" --namespace "$worker_namespace" --output json >"$worker_values" || fail "could not read worker Helm values"
+    helm get values "$worker_release" --namespace "$worker_namespace" --all --output json >"$worker_values" || fail "could not read worker Helm values"
     helm status "$worker_release" --namespace "$worker_namespace" --output json >"$worker_status" || fail "could not read worker Helm status"
     jq -e 'type == "object"' "$worker_status" >/dev/null || fail "worker Helm status is malformed"
     jq -n --slurpfile manifest "$manifest" --arg digest "$manifest_digest" '$manifest[0] as $document | {images: {worker: $document.components.worker.image}, release: {version: $document.release, manifestDigest: $digest}}' >"$worker_overlay"
@@ -673,9 +693,11 @@ git -C "$repo_root" cat-file -e "${predecessor_commit}^{commit}" 2>/dev/null || 
 git -C "$repo_root" merge-base --is-ancestor "$predecessor_commit" "$head_commit" || fail "predecessor manifest commit is not an ancestor of current HEAD"
 
 changed_paths=()
+changed_paths_file="$temp_dir/changed-paths.txt"
+git -C "$repo_root" diff --no-renames --name-only "$predecessor_commit" "$head_commit" | LC_ALL=C sort -u >"$changed_paths_file"
 while IFS= read -r path; do
   [[ -n "$path" ]] && changed_paths+=("$path")
-done < <(git -C "$repo_root" diff --name-only "$predecessor_commit" "$head_commit" | LC_ALL=C sort -u)
+done <"$changed_paths_file"
 
 for component in "${components[@]}"; do
   set_component_value changed "$component" false
