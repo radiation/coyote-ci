@@ -19,8 +19,8 @@ secrets:
   project: bryanchoate
   databaseUrl: coyote-staging-database-url
   workspaceHelperCapability: coyote-workspace-helper-capability-secret
-  oidcClient: coyote-ci-oidc-client-secret
-  session: coyote-ci-session-secret
+  oidcClient: coyote-staging-oidc-client-secret
+  session: coyote-staging-session-secret
 storage:
   project: bryanchoate
   artifacts: {bucket: example-production-artifacts, prefix: builds}
