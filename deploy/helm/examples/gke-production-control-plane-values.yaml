@@ -12,12 +12,12 @@ images:
   migrate: example.invalid/coyote-migrate@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 serviceAccounts:
   server: {name: coyote-server, gsaEmail: coyote-ci-server@bryanchoate.iam.gserviceaccount.com}
-  migrate: {name: coyote-migrate, gsaEmail: coyote-ci-migrate@bryanchoate.iam.gserviceaccount.com}
+  migrate: {name: coyote-migrate, gsaEmail: coyote-gke-migrate@bryanchoate.iam.gserviceaccount.com}
   mcp: {name: coyote-mcp, gsaEmail: coyote-gke-mcp@bryanchoate.iam.gserviceaccount.com}
 cloudSql: {connectionName: "bryanchoate:us-central1:bryanchoate-postgres"}
 secrets:
   project: bryanchoate
-  databaseUrl: coyote-ci-database-url
+  databaseUrl: coyote-staging-database-url
   workspaceHelperCapability: coyote-workspace-helper-capability-secret
   oidcClient: coyote-ci-oidc-client-secret
   session: coyote-ci-session-secret
