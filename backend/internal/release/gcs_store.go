@@ -120,19 +120,58 @@ func (s *GCSStore) publishManifestData(ctx context.Context, releaseVersion strin
 	return s.reconcileManifestPublication(ctx, objectName, data, createErr)
 }
 
-func (s *GCSStore) PromoteChannel(ctx context.Context, channel, releaseVersion, manifestDigest string) error {
+func (s *GCSStore) PromoteChannel(ctx context.Context, channel, releaseVersion, manifestDigest string) (ChannelPromotionResult, error) {
 	if channel != "latest" && channel != "stable" {
-		return fmt.Errorf("unsupported release channel %q", channel)
+		return ChannelPromotionResult{}, fmt.Errorf("unsupported release channel %q", channel)
 	}
 	if !semVerPattern.MatchString(releaseVersion) || !digestPattern.MatchString(manifestDigest) {
-		return errors.New("channel promotion requires an exact release and manifest digest")
+		return ChannelPromotionResult{}, errors.New("channel promotion requires an exact release and manifest digest")
 	}
 	requested := ChannelEntry{Release: releaseVersion, ManifestDigest: manifestDigest}
-	_, promoteErr := s.promoteChannels(ctx, func(index *ChannelIndex) (bool, error) {
+	ctx = releaseContext(ctx)
+	for attempt := 0; attempt < channelCASAttempts; attempt++ {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return ChannelPromotionResult{}, contextErr
+		}
+		index, generation, readErr := s.readChannels(ctx)
+		if readErr != nil {
+			return ChannelPromotionResult{}, readErr
+		}
+		result := ChannelPromotionResult{Current: requested, PreviousKnown: true, ChangedKnown: true}
+		if previous, found := index.Channels[channel]; found {
+			result.Previous = &previous
+			if previous == requested {
+				return result, nil
+			}
+		}
 		index.Channels[channel] = requested
-		return true, nil
-	}, channelPromotionApplied(channel, requested))
-	return promoteErr
+		data, marshalErr := marshalChannelIndex(index)
+		if marshalErr != nil {
+			return ChannelPromotionResult{}, marshalErr
+		}
+		var writeErr error
+		if generation == 0 {
+			writeErr = s.objects.Create(ctx, s.channelsObjectName(), data)
+		} else {
+			writeErr = s.objects.Replace(ctx, s.channelsObjectName(), generation, data)
+		}
+		if writeErr == nil {
+			result.Changed = true
+			return result, nil
+		}
+		if errors.Is(writeErr, errGCSPrecondition) {
+			continue
+		}
+		index, _, readErr = s.readChannels(ctx)
+		if readErr != nil {
+			return ChannelPromotionResult{}, reconciliationError("promote channel", writeErr, readErr)
+		}
+		if channelPromotionApplied(channel, requested)(index) {
+			return ChannelPromotionResult{Current: requested}, nil
+		}
+		return ChannelPromotionResult{}, writeErr
+	}
+	return ChannelPromotionResult{}, ErrChannelPromotionBusy
 }
 
 func (s *GCSStore) PromoteCoyoteLatestIfNewer(ctx context.Context, releaseVersion, manifestDigest string) (bool, error) {

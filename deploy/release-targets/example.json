@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "target": "example",
+  "release_source": "gs://example-coyote-releases",
+  "registry": "us-central1-docker.pkg.dev/example-project/coyote-ci",
+  "kubernetes": {
+    "context": "example-context",
+    "cluster_uid": "replace-with-kube-system-namespace-uid",
+    "control_plane_release": "coyote-ci"
+  }
+}

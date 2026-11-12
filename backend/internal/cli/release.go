@@ -20,11 +20,74 @@ func (a *app) newReleaseCommand() *cobra.Command {
 	command := &cobra.Command{Use: "release", Short: "Resolve and publish Coyote software releases"}
 	command.AddCommand(a.newReleaseResolveCommand())
 	command.AddCommand(a.newReleasePublishCommand())
+	command.AddCommand(a.newReleasePromoteChannelCommand())
 	command.AddCommand(a.newReleasePublishCoyoteCommand())
 	command.AddCommand(a.newReleaseFetchCommand())
 	command.AddCommand(a.newReleaseImportCommand())
 	command.AddCommand(a.newApplicationReleaseShowCommand())
 	command.AddCommand(a.newApplicationReleasePromoteCommand())
+	return command
+}
+
+func (a *app) newReleasePromoteChannelCommand() *cobra.Command {
+	var releaseVersion, channel, sourceLocation string
+	command := &cobra.Command{
+		Use:   "promote-channel",
+		Short: "Promote an existing immutable release to a channel",
+		RunE: func(cmd *cobra.Command, _ []string) (commandErr error) {
+			releaseVersion = strings.TrimSpace(releaseVersion)
+			channel = strings.TrimSpace(channel)
+			sourceLocation = strings.TrimSpace(sourceLocation)
+			if releaseVersion == "" || channel == "" || sourceLocation == "" {
+				return &ExitError{Code: 2, Err: errors.New("--release, --channel, and --release-source are required")}
+			}
+			if versionErr := releases.ValidateExactSemanticVersion(releaseVersion); versionErr != nil {
+				return &ExitError{Code: 2, Err: fmt.Errorf("--release %w", versionErr)}
+			}
+			if channel != "latest" && channel != "stable" {
+				return &ExitError{Code: 2, Err: fmt.Errorf("unsupported release channel %q", channel)}
+			}
+			store, closer, storeErr := a.openReleaseStore(cmd.Context(), sourceLocation)
+			if storeErr != nil {
+				return releaseStoreOpenExitError(storeErr)
+			}
+			defer closeReleaseStore(&commandErr, closer)
+			document, fetchErr := store.FetchManifest(cmd.Context(), releaseVersion)
+			if fetchErr != nil {
+				if errors.Is(fetchErr, releases.ErrNotFound) {
+					return &ExitError{Code: releaseFetchNotFoundExitCode, Err: fetchErr}
+				}
+				return &ExitError{Code: 1, Err: fetchErr}
+			}
+			manifest, parseErr := releases.ParseManifest(document.Data)
+			if parseErr != nil {
+				return &ExitError{Code: 1, Err: parseErr}
+			}
+			if manifest.Release != releaseVersion {
+				return &ExitError{Code: 1, Err: fmt.Errorf("release source returned manifest %q for requested release %q", manifest.Release, releaseVersion)}
+			}
+			digest := releases.Digest(document.Data)
+			promotion, promoteErr := store.PromoteChannel(cmd.Context(), channel, releaseVersion, digest)
+			if promoteErr != nil {
+				return &ExitError{Code: 1, Err: promoteErr}
+			}
+			previousTarget := "<unknown>"
+			if promotion.PreviousKnown && promotion.Previous == nil {
+				previousTarget = "<none>"
+			} else if promotion.Previous != nil {
+				previousTarget = fmt.Sprintf("%s (%s)", promotion.Previous.Release, promotion.Previous.ManifestDigest)
+			}
+			changed := "unknown"
+			if promotion.ChangedKnown {
+				changed = fmt.Sprintf("%t", promotion.Changed)
+			}
+			_, printErr := fmt.Fprintf(a.stdout, "Channel: %s\nPrevious target: %s\nNew target: %s (%s)\nManifest digest: %s\nChanged: %s\n", channel, previousTarget, promotion.Current.Release, promotion.Current.ManifestDigest, digest, changed)
+			return printErr
+		},
+	}
+	command.Flags().StringVar(&releaseVersion, "release", "", "Exact semantic release version")
+	command.Flags().StringVar(&channel, "channel", "", "Release channel: latest or stable")
+	command.Flags().StringVar(&sourceLocation, "release-source", "", "Release store path, file:// URL, or gs:// location")
 	return command
 }
 
@@ -95,7 +158,7 @@ func (a *app) newReleasePublishCoyoteCommand() *cobra.Command {
 					return &ExitError{Code: 1, Err: latestErr}
 				}
 			case "stable":
-				if channelErr := publisher.PromoteChannel(cmd.Context(), channel, manifest.Release, digest); channelErr != nil {
+				if _, channelErr := publisher.PromoteChannel(cmd.Context(), channel, manifest.Release, digest); channelErr != nil {
 					return &ExitError{Code: 1, Err: channelErr}
 				}
 			}
@@ -248,7 +311,7 @@ func (a *app) newReleasePublishCommand() *cobra.Command {
 				return &ExitError{Code: 1, Err: publishErr}
 			}
 			if channel != "" {
-				if channelErr := publisher.PromoteChannel(cmd.Context(), channel, manifest.Release, digest); channelErr != nil {
+				if _, channelErr := publisher.PromoteChannel(cmd.Context(), channel, manifest.Release, digest); channelErr != nil {
 					return &ExitError{Code: 1, Err: channelErr}
 				}
 			}

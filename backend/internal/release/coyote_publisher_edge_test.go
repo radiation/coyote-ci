@@ -26,7 +26,7 @@ func TestPromoteCoyoteLatestIfNewerEdgeCases(t *testing.T) {
 	if promoteErr != nil || !advanced {
 		t.Fatalf("idempotent promotion advanced=%t err=%v", advanced, promoteErr)
 	}
-	if stableErr := publisher.PromoteChannel(context.Background(), "stable", "0.0.1", digest); stableErr != nil {
+	if _, stableErr := publisher.PromoteChannel(context.Background(), "stable", "0.0.1", digest); stableErr != nil {
 		t.Fatalf("PromoteChannel(stable): %v", stableErr)
 	}
 }
