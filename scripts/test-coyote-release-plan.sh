@@ -119,9 +119,14 @@ assert_eq "$(jq -r '.components.mcp.action' "$temp_dir/cross-component-move.json
 
 TEST_CHANGED_FILES=$'frontend/src/App.tsx\nbackend/go.mod'
 run_plan mixed-backend-frontend >/dev/null
-for component in server worker frontend mcp migrate; do
+for component in server worker frontend mcp; do
   assert_eq "$(jq -r ".components.$component.action" "$temp_dir/mixed-backend-frontend.json")" build
 done
+assert_eq "$(jq -r '.components.migrate.action' "$temp_dir/mixed-backend-frontend.json")" reuse
+
+TEST_CHANGED_FILES='backend/Dockerfile'
+run_plan migration-dockerfile >/dev/null
+assert_eq "$(jq -r '.components.migrate.action' "$temp_dir/migration-dockerfile.json")" build
 
 TEST_CHANGED_FILES='frontend/src/App.tsx'
 if TEST_DIFF_FAILURE=true run_plan diff-failure >/dev/null 2>&1; then

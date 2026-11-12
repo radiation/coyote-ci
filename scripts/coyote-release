@@ -755,11 +755,9 @@ if [[ ${#changed_paths[@]} -gt 0 ]]; then
         set_component_value changed server true
         set_component_value changed worker true
         set_component_value changed mcp true
-        set_component_value changed migrate true
         add_reason server "shared_go_dependency_input:$path"
         add_reason worker "shared_go_dependency_input:$path"
         add_reason mcp "shared_go_dependency_input:$path"
-        add_reason migrate "shared_go_dependency_input:$path"
         ;;
       backend/db/migrations/*)
         set_component_value changed migrate true
