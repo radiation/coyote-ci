@@ -13,6 +13,7 @@ images:
 serviceAccounts:
   server: {name: coyote-server, gsaEmail: coyote-ci-server@bryanchoate.iam.gserviceaccount.com}
   migrate: {name: coyote-migrate, gsaEmail: coyote-ci-migrate@bryanchoate.iam.gserviceaccount.com}
+  mcp: {name: coyote-mcp, gsaEmail: coyote-gke-mcp@bryanchoate.iam.gserviceaccount.com}
 cloudSql: {connectionName: "bryanchoate:us-central1:bryanchoate-postgres"}
 secrets:
   project: bryanchoate
