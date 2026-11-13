@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 publisher="$repo_root/scripts/helm-publish-oci.sh"
+control_version="$(awk -F ': *' '$1 == "version" { print $2; exit }' "$repo_root/deploy/helm/coyote-ci/Chart.yaml")"
 temp_dir="$(mktemp -d)"
 fake_helm="$temp_dir/helm"
 fake_gcloud="$temp_dir/gcloud"
@@ -22,7 +23,7 @@ chmod 0644 "$fake_validator"
 
 cat >"$fake_awk" <<'EOF'
 #!/usr/bin/env bash
-if [[ "${FAKE_CHART_VERSION:-}" != "" && "$*" == *'"version"'* && "${!#}" == */Chart.yaml ]]; then
+if [[ "${FAKE_CHART_VERSION:-}" != "" && ( "$*" == *'"version"'* || "$*" == *key=version* ) && "${!#}" == */Chart.yaml ]]; then
   printf '%s\n' "$FAKE_CHART_VERSION"
   exit 0
 fi
@@ -165,7 +166,7 @@ run_google_publisher env FAKE_GCLOUD_IMAGES=untagged HELM_CHART_SELECTION=contro
 
 : >"$temp_dir/helm.log"
 : >"$temp_dir/gcloud.log"
-expect_failure "existing Artifact Registry chart version" env FAKE_GCLOUD_TAGS=0.1.0 HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
+expect_failure "existing Artifact Registry chart version" env FAKE_GCLOUD_TAGS="$control_version" HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
 if grep -q '^push ' "$temp_dir/helm.log"; then
   echo "duplicate Artifact Registry version reached Helm push" >&2
   exit 1
@@ -195,10 +196,19 @@ done
 expect_failure "normalized Artifact Registry chart version" env PATH="$temp_dir:$PATH" FAKE_CHART_VERSION=0.1.0+build.7 FAKE_GCLOUD_IMAGES=normalized-match HELM_BIN="$fake_helm" GCLOUD_BIN="$fake_gcloud" HELM_PACKAGE_VALIDATOR="$fake_validator" FAKE_HELM_LOG="$temp_dir/helm.log" FAKE_GCLOUD_LOG="$temp_dir/gcloud.log" OCI_REGISTRY="us-central1-docker.pkg.dev/example-project/coyote-ci" OCI_IMMUTABLE_TAGS_CONFIRMED=true HELM_CHART_SELECTION=control-plane bash "$publisher"
 grep -q 'refusing to overwrite existing chart version: oci://us-central1-docker.pkg.dev/example-project/coyote-ci/charts/coyote-ci:0.1.0+build.7' "$temp_dir/output"
 
+run_publisher env HELM_CHART_SELECTION= >"$temp_dir/unified-success"
+grep -q "published chart=coyote-ci version=$control_version" "$temp_dir/unified-success"
+[[ "$(grep -c '^push ' "$temp_dir/helm.log")" == 1 ]] || { echo "default publication must push exactly one chart" >&2; exit 1; }
+if grep -q 'coyote-ci-worker' "$temp_dir/helm.log"; then
+  echo "default publication reached the legacy worker chart" >&2
+  exit 1
+fi
+grep -q 'generic-values.yaml' "$temp_dir/helm.log"
+
 run_publisher env HELM_CHART_SELECTION=all >"$temp_dir/success"
-grep -q 'published chart=coyote-ci version=0.1.0 reference=oci://registry.example/coyote-ci/charts/coyote-ci digest=sha256:' "$temp_dir/success"
+grep -q "published chart=coyote-ci version=$control_version reference=oci://registry.example/coyote-ci/charts/coyote-ci digest=sha256:" "$temp_dir/success"
 grep -q 'published chart=coyote-ci-worker version=0.1.0 reference=oci://registry.example/coyote-ci/charts/coyote-ci-worker digest=sha256:' "$temp_dir/success"
-grep -q 'show chart oci://registry.example/coyote-ci/charts/coyote-ci --version 0.1.0' "$temp_dir/helm.log"
+grep -q "show chart oci://registry.example/coyote-ci/charts/coyote-ci --version $control_version" "$temp_dir/helm.log"
 grep -q 'push .*oci://registry.example/coyote-ci/charts' "$temp_dir/helm.log"
 grep -q 'pull oci://registry.example/coyote-ci/charts/coyote-ci-worker --version 0.1.0' "$temp_dir/helm.log"
 
@@ -209,7 +219,7 @@ grep -q 'succeeded=control-plane failed=worker' "$temp_dir/output"
 
 run_publisher env HELM_CHART_SELECTION=worker >"$temp_dir/retry"
 grep -q 'published chart=coyote-ci-worker' "$temp_dir/retry"
-if grep -q 'coyote-ci-0.1.0.tgz' "$temp_dir/helm.log"; then
+if grep -q "coyote-ci-$control_version.tgz" "$temp_dir/helm.log"; then
   echo "worker retry attempted control-plane publication" >&2
   exit 1
 fi

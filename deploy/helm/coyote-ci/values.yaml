@@ -17,6 +17,7 @@ images:
   frontend: ""
   migrate: ""
   mcp: ""
+  worker: ""
   cloudSqlProxy: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.4@sha256:88501f0a695a586988add1b8a206fdf3f29f9a1a3deeb9b45ef2b1481ea6be83
 release:
   version: ""
@@ -37,6 +38,38 @@ serviceAccounts:
     gsaEmail: ""
     annotations: {}
   workspaceHelperName: coyote-workspace-helper
+  worker:
+    name: coyote-kubernetes-worker
+    gsaEmail: ""
+    annotations: {}
+
+worker:
+  enabled: false
+  name: coyote-kubernetes-worker
+  configMapName: coyote-worker
+  databaseSecretProviderClass: coyote-worker-database-secrets
+  replicas: 1
+  replicasManagedExternally: false
+  maxInFlightJobs: 1
+  resources: {}
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  extraEnvSecrets: {}
+  internalAPIURL: ""
+  secrets:
+    existingSecrets:
+      databaseUrl: {name: "", key: ""}
+    project: ""
+    databaseUrl: ""
+
+cloudBuild:
+  enabled: false
+  project: ""
+  location: ""
+  runtimeServiceAccount: ""
+  artifactRegistryRepository: ""
+  source: {bucket: "", prefix: coyote-sources}
 
 cloudSql:
   enabled: false

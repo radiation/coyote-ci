@@ -1,0 +1,197 @@
+{{- if .Values.worker.enabled }}
+{{- $namespace := .Values.executionNamespace -}}
+{{- $controlNamespace := include "coyote-ci.namespace" . -}}
+{{- $worker := .Values.worker -}}
+{{- $account := .Values.serviceAccounts.worker -}}
+{{- $helper := .Values.serviceAccounts.workspaceHelperName -}}
+{{- $csi := and .Values.gke.enabled .Values.gke.secretManagerCSI.enabled -}}
+{{- if has $worker.name (list "coyote-workspace-helper" "coyote-server-workspace-verifier" "coyote-server" "coyote-frontend" "coyote-mcp") }}{{ fail "worker.name conflicts with a chart-managed resource" }}{{ end -}}
+{{- if and (eq $namespace $controlNamespace) (eq $worker.configMapName "coyote-control-plane") }}{{ fail "worker.configMapName conflicts with the control-plane ConfigMap" }}{{ end -}}
+{{- if and $csi (eq $namespace $controlNamespace) (has $worker.databaseSecretProviderClass (list "coyote-server-secrets" "coyote-migrate-secrets" "coyote-mcp-secrets")) }}{{ fail "worker.databaseSecretProviderClass conflicts with control-plane secrets" }}{{ end -}}
+{{- if not (regexMatch ".+@sha256:[a-f0-9]{64}$" .Values.images.worker) }}{{ fail "images.worker must be digest-pinned when worker.enabled is true" }}{{ end -}}
+{{- if or (eq $account.name $helper) (and (eq $namespace $controlNamespace) (has $account.name (list .Values.serviceAccounts.server.name .Values.serviceAccounts.migrate.name .Values.serviceAccounts.mcp.name))) }}{{ fail "worker service account must be separate from helper and control-plane accounts" }}{{ end -}}
+{{- if and (eq $namespace $controlNamespace) (has $helper (list .Values.serviceAccounts.server.name .Values.serviceAccounts.migrate.name .Values.serviceAccounts.mcp.name)) }}{{ fail "helper service account must be separate from control-plane accounts" }}{{ end -}}
+{{- if and .Values.gke.enabled .Values.gke.workloadIdentity.enabled -}}
+{{- $_ := required "serviceAccounts.worker.gsaEmail is required for workload identity" $account.gsaEmail -}}
+{{- else if $account.gsaEmail }}{{ fail "worker gsaEmail requires explicit GKE workload identity opt-ins" }}{{ end -}}
+{{- if $csi -}}
+{{- $_ := required "worker.secrets.project is required for CSI" $worker.secrets.project -}}
+{{- $_ := required "worker.secrets.databaseUrl is required for CSI" $worker.secrets.databaseUrl -}}
+{{- if or $worker.secrets.existingSecrets.databaseUrl.name $worker.secrets.existingSecrets.databaseUrl.key }}{{ fail "choose worker CSI or native Secrets, not both" }}{{ end -}}
+{{- else -}}
+{{- if or $worker.secrets.project $worker.secrets.databaseUrl }}{{ fail "worker Secret Manager references require explicit GKE CSI opt-ins" }}{{ end -}}
+{{- include "coyote-ci.requireSecret" (dict "name" "worker databaseUrl" "reference" $worker.secrets.existingSecrets.databaseUrl) -}}
+{{- end -}}
+{{- range $name, $reference := $worker.extraEnvSecrets -}}
+{{- if regexMatch "^(DATABASE_|DB_|ARTIFACT_|WORKSPACE_|WORKER_|COYOTE_|AUTH_|OIDC_|SESSION_|CLOUD_BUILD_|GOOGLE_CLOUD_PROJECT$)" $name }}{{ fail "worker.extraEnvSecrets must not override chart-managed configuration" }}{{ end -}}
+{{- include "coyote-ci.requireSecret" (dict "name" $name "reference" $reference) -}}
+{{- end -}}
+{{- if .Values.cloudBuild.enabled -}}
+{{- if ne .Values.storage.provider "gcs" }}{{ fail "Cloud Build requires GCS artifact storage" }}{{ end -}}
+{{- range $key := list "project" "location" "runtimeServiceAccount" "artifactRegistryRepository" -}}
+{{- $_ := required (printf "cloudBuild.%s is required" $key) (index $.Values.cloudBuild $key) -}}
+{{- end -}}
+{{- $_ := required "cloudBuild.source.bucket is required" .Values.cloudBuild.source.bucket -}}
+{{- else if or .Values.cloudBuild.project .Values.cloudBuild.location .Values.cloudBuild.runtimeServiceAccount .Values.cloudBuild.artifactRegistryRepository .Values.cloudBuild.source.bucket }}{{ fail "Cloud Build settings require explicit cloudBuild.enabled=true" }}{{ end -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $account.name }}
+  namespace: {{ $namespace }}
+  {{- include "coyote-ci.annotations" (dict "root" . "account" $account) | nindent 2 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $helper }}
+  namespace: {{ $namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: {{ $worker.name }}, namespace: {{ $namespace }}}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: coyote-workspace-helper, namespace: {{ $namespace }}}
+rules: [{apiGroups: [""], resources: ["pods"], verbs: ["get"]}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: {{ $worker.name }}, namespace: {{ $namespace }}}
+subjects: [{kind: ServiceAccount, name: {{ $account.name }}, namespace: {{ $namespace }}}]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $worker.name }}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: coyote-workspace-helper, namespace: {{ $namespace }}}
+subjects: [{kind: ServiceAccount, name: {{ $helper }}, namespace: {{ $namespace }}}]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: coyote-workspace-helper}
+---
+{{- if ne $namespace $controlNamespace }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: coyote-server-workspace-verifier, namespace: {{ $namespace }}}
+rules: [{apiGroups: [""], resources: ["pods"], verbs: ["get"]}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: coyote-server-workspace-verifier, namespace: {{ $namespace }}}
+subjects: [{kind: ServiceAccount, name: {{ .Values.serviceAccounts.server.name }}, namespace: {{ $controlNamespace }}}]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: coyote-server-workspace-verifier}
+---
+{{- end }}
+{{- if $csi }}
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata: {name: {{ $worker.databaseSecretProviderClass }}, namespace: {{ $namespace }}}
+spec:
+  provider: gke
+  parameters:
+    secrets: |
+      - resourceName: "projects/{{ $worker.secrets.project }}/secrets/{{ $worker.secrets.databaseUrl }}/versions/latest"
+        path: "database-url"
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: {{ $worker.configMapName }}, namespace: {{ $namespace }}}
+data:
+  WORKER_KUBERNETES_INTERNAL_API_URL: {{ default (printf "http://coyote-server.%s.svc.cluster.local:8080" $controlNamespace) $worker.internalAPIURL | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: {{ $worker.name }}, namespace: {{ $namespace }}}
+spec:
+  {{- if not $worker.replicasManagedExternally }}
+  replicas: {{ $worker.replicas }}
+  {{- end }}
+  selector: {matchLabels: {app.kubernetes.io/name: {{ $worker.name }}}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: {{ $worker.name }}}}
+    spec:
+      serviceAccountName: {{ $account.name }}
+      {{- with $worker.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $worker.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $worker.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ .Values.images.worker }}
+          imagePullPolicy: IfNotPresent
+          command: ["/app/worker"]
+          {{- with $worker.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - {name: DATABASE_URL_FILE, value: /var/run/secrets/coyote/database-url}
+            - {name: WORKER_EXECUTION_BACKEND, value: kubernetes}
+            - {name: WORKER_KUBERNETES_NAMESPACE, value: {{ $namespace }}}
+            {{- if .Values.cloudBuild.enabled }}
+            - {name: GOOGLE_CLOUD_PROJECT, value: {{ .Values.cloudBuild.project | quote }}}
+            - {name: CLOUD_BUILD_LOCATION, value: {{ .Values.cloudBuild.location | quote }}}
+            - {name: CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT, value: {{ .Values.cloudBuild.runtimeServiceAccount | quote }}}
+            - {name: CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY, value: {{ .Values.cloudBuild.artifactRegistryRepository | quote }}}
+            - {name: CLOUD_BUILD_SOURCE_BUCKET, value: {{ .Values.cloudBuild.source.bucket | quote }}}
+            - {name: CLOUD_BUILD_SOURCE_PREFIX, value: {{ .Values.cloudBuild.source.prefix | quote }}}
+            {{- end }}
+            - {name: WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS, value: {{ $worker.maxInFlightJobs | quote }}}
+            - {name: WORKER_KUBERNETES_HELPER_IMAGE, value: {{ .Values.images.worker | quote }}}
+            - name: WORKER_KUBERNETES_INTERNAL_API_URL
+              valueFrom: {configMapKeyRef: {name: {{ $worker.configMapName }}, key: WORKER_KUBERNETES_INTERNAL_API_URL}}
+            - {name: COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT, value: {{ $helper }}}
+            - {name: COYOTE_KUBERNETES_CACHE_HELPER_ENABLED, value: "true"}
+            - {name: COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED, value: "true"}
+            - {name: WORKER_STEP_LEASE_SECONDS, value: "45"}
+            - {name: ARTIFACT_STORAGE_PROVIDER, value: {{ .Values.storage.provider }}}
+            {{- if eq .Values.storage.provider "gcs" }}
+            - {name: ARTIFACT_STORAGE_STRICT, value: "true"}
+            - {name: ARTIFACT_GCS_BUCKET, value: {{ .Values.storage.artifacts.bucket | quote }}}
+            - {name: ARTIFACT_GCS_PREFIX, value: {{ .Values.storage.artifacts.prefix | quote }}}
+            - {name: ARTIFACT_GCS_PROJECT, value: {{ .Values.storage.project | quote }}}
+            {{- end }}
+            - {name: EMAIL_NOTIFICATIONS_ENABLED, value: "false"}
+            {{- range $name, $reference := $worker.extraEnvSecrets }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef: {{- toYaml $reference | nindent 18 }}
+            {{- end }}
+          volumeMounts: [{name: database-url, mountPath: /var/run/secrets/coyote, readOnly: true}]
+        {{- if .Values.cloudSql.enabled }}
+        - name: cloud-sql-proxy
+          image: {{ .Values.images.cloudSqlProxy }}
+          args: [{{ printf "--address=%s" .Values.cloudSql.proxy.address | quote }}, {{ printf "--port=%v" .Values.cloudSql.proxy.port | quote }}, {{ .Values.cloudSql.connectionName | quote }}]
+          ports: [{name: postgres, containerPort: 5432}]
+          securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}, seccompProfile: {type: RuntimeDefault}}
+          resources: {{- toYaml .Values.cloudSql.proxy.resources | nindent 12 }}
+        {{- end }}
+      volumes:
+        - name: database-url
+          {{- if $csi }}
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes: {secretProviderClass: {{ $worker.databaseSecretProviderClass }}}
+          {{- else }}
+          secret:
+            secretName: {{ $worker.secrets.existingSecrets.databaseUrl.name | quote }}
+            defaultMode: 0444
+            items:
+              - key: {{ $worker.secrets.existingSecrets.databaseUrl.key | quote }}
+                path: database-url
+          {{- end }}
+{{- end }}

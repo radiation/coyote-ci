@@ -86,26 +86,35 @@ if [[ "${HELM_PACKAGE_SKIP_EXISTING_TESTS:-false}" != "true" ]]; then
 fi
 
 validate_chart coyote-ci "$control_chart"
-validate_chart coyote-ci-worker "$worker_chart"
 
 "$helm_bin" package "$control_chart" --destination "$package_dir" >/dev/null
-"$helm_bin" package "$worker_chart" --destination "$package_dir" >/dev/null
 
 control_version="$(chart_value "$control_chart" version)"
-worker_version="$(chart_value "$worker_chart" version)"
 control_archive="$package_dir/coyote-ci-$control_version.tgz"
-worker_archive="$package_dir/coyote-ci-worker-$worker_version.tgz"
 
 [[ -f "$control_archive" ]] || { echo "control-plane chart archive was not created" >&2; exit 1; }
-[[ -f "$worker_archive" ]] || { echo "worker chart archive was not created" >&2; exit 1; }
 
 validate_archive_contents "$control_archive" coyote-ci
-validate_archive_contents "$worker_archive" coyote-ci-worker
 render_and_compare coyote-ci "$control_chart" "$control_values" "$control_archive" coyote-ci
-render_and_compare coyote-ci-worker "$worker_chart" "$worker_values" "$worker_archive" coyote-ci-staging
 render_and_compare coyote-ci "$control_chart" "$control_values" "$control_archive" coyote-ci --set migration.render=true --set migration.runID=package-check
 render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-control-plane-values.yaml" "$control_archive" portable-control
 render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-control-plane-values.yaml" "$control_archive" portable-control --set migration.render=true --set migration.runID=package-check
-render_and_compare coyote-ci-worker "$worker_chart" "$repo_root/deploy/helm/examples/generic-worker-values.yaml" "$worker_archive" portable-execution
+render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-values.yaml" "$control_archive" portable-control
+render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-values.yaml" "$control_archive" portable-control --set server.replicas=0 --set frontend.replicas=0 --set worker.replicas=0 --set migration.render=true --set migration.runID=package-check
+for profile in staging production; do
+  render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/gke-$profile-control-plane-values.yaml" "$control_archive" coyote-ci --values "$repo_root/deploy/helm/examples/gke-$profile-unified-worker-values.yaml"
+done
 
-echo "Helm package validation passed: coyote-ci $control_version, coyote-ci-worker $worker_version"
+echo "Unified Helm package validation passed: coyote-ci $control_version"
+
+if [[ "${HELM_PACKAGE_INCLUDE_LEGACY_WORKER:-false}" == true ]]; then
+  validate_chart coyote-ci-worker "$worker_chart"
+  "$helm_bin" package "$worker_chart" --destination "$package_dir" >/dev/null
+  worker_version="$(chart_value "$worker_chart" version)"
+  worker_archive="$package_dir/coyote-ci-worker-$worker_version.tgz"
+  [[ -f "$worker_archive" ]] || { echo "legacy worker chart archive was not created" >&2; exit 1; }
+  validate_archive_contents "$worker_archive" coyote-ci-worker
+  render_and_compare coyote-ci-worker "$worker_chart" "$worker_values" "$worker_archive" coyote-ci-staging
+  render_and_compare coyote-ci-worker "$worker_chart" "$repo_root/deploy/helm/examples/generic-worker-values.yaml" "$worker_archive" portable-execution
+  echo "Legacy worker package compatibility passed: coyote-ci-worker $worker_version"
+fi

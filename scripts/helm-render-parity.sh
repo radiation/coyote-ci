@@ -108,3 +108,24 @@ end
 abort failures.join("\n") unless failures.empty?
 puts "Helm render parity passed: #{expected_control.length} control-plane and #{expected_worker.length} worker resources"
 RUBY
+
+ruby -ryaml -ropen3 - "$repo_root" <<'RUBY'
+root = ARGV.fetch(0)
+def render(root, chart, namespace, values)
+  arguments = ["helm", "template", chart, "#{root}/deploy/helm/#{chart}", "--namespace", namespace]
+  values.each { |value| arguments.concat(["--values", "#{root}/deploy/helm/examples/#{value}"]) }
+  output, error, result = Open3.capture3(*arguments)
+  abort error unless result.success?
+  YAML.load_stream(output).compact
+end
+%w[staging production].each do |profile|
+  control_values = "gke-#{profile}-control-plane-values.yaml"
+  worker_namespace = profile == "staging" ? "coyote-ci-staging" : "coyote-ci"
+  expected = render(root, "coyote-ci", "coyote-ci", [control_values]) + render(root, "coyote-ci-worker", worker_namespace, ["gke-#{profile}-worker-values.yaml"])
+  actual = render(root, "coyote-ci", "coyote-ci", [control_values, "gke-#{profile}-unified-worker-values.yaml"])
+  identity = ->(doc) { [doc["apiVersion"], doc["kind"], doc.dig("metadata", "namespace").to_s, doc.dig("metadata", "name")] }
+  abort "duplicate unified #{profile} identity" unless actual.map(&identity).uniq.length == actual.length
+  abort "unified #{profile} differs from two-chart resources" unless actual.sort_by(&identity) == expected.sort_by(&identity)
+  puts "Unified GKE #{profile} parity passed: #{actual.length} resources"
+end
+RUBY

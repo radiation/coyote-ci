@@ -19,7 +19,8 @@ expect_failure() {
   fi
 }
 
-HELM_PACKAGE_SKIP_EXISTING_TESTS=true bash "$validator"
+HELM_PACKAGE_SKIP_EXISTING_TESTS=true WORKER_CHART_DIR="$temp_dir/missing-legacy-chart" bash "$validator"
+HELM_PACKAGE_SKIP_EXISTING_TESTS=true HELM_PACKAGE_INCLUDE_LEGACY_WORKER=true bash "$validator"
 helm package "$repo_root/deploy/helm/coyote-ci-worker" --destination "$temp_dir" >/dev/null
 [[ -f "$temp_dir/coyote-ci-worker-0.1.0.tgz" ]] || { echo "worker chart did not package independently" >&2; exit 1; }
 

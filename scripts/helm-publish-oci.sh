@@ -6,7 +6,7 @@ helm_bin="${HELM_BIN:-helm}"
 gcloud_bin="${GCLOUD_BIN:-gcloud}"
 validator="${HELM_PACKAGE_VALIDATOR:-$repo_root/scripts/helm-package-validate.sh}"
 oci_registry="${OCI_REGISTRY:-}"
-selection="${HELM_CHART_SELECTION:-all}"
+selection="${HELM_CHART_SELECTION:-unified}"
 package_dir="$(mktemp -d)"
 
 cleanup() {
@@ -177,9 +177,13 @@ if is_google_artifact_registry_host && ! is_google_artifact_registry; then
   exit 2
 fi
 [[ "${OCI_IMMUTABLE_TAGS_CONFIRMED:-}" == "true" ]] || { echo "OCI_IMMUTABLE_TAGS_CONFIRMED=true is required after verifying registry immutable-tag policy" >&2; exit 2; }
-case "$selection" in all|control-plane|worker) ;; *) echo "HELM_CHART_SELECTION must be all, control-plane, or worker" >&2; exit 2 ;; esac
+case "$selection" in unified|all|control-plane|worker) ;; *) echo "HELM_CHART_SELECTION must be unified, all, control-plane, or worker" >&2; exit 2 ;; esac
 
-bash "$validator"
+if [[ "$selection" == all || "$selection" == worker ]]; then
+  HELM_PACKAGE_INCLUDE_LEGACY_WORKER=true bash "$validator"
+else
+  bash "$validator"
+fi
 
 declare -a succeeded=()
 declare -a failed=()
@@ -194,7 +198,9 @@ publish_selected() {
   fi
 }
 
-if [[ "$selection" == "all" || "$selection" == "control-plane" ]]; then
+if [[ "$selection" == "unified" ]]; then
+  publish_selected unified coyote-ci "$repo_root/deploy/helm/coyote-ci" "$repo_root/deploy/helm/examples/generic-values.yaml" portable-control || true
+elif [[ "$selection" == "all" || "$selection" == "control-plane" ]]; then
   publish_selected control-plane coyote-ci "$repo_root/deploy/helm/coyote-ci" "$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml" coyote-ci || true
 fi
 if [[ "$selection" == "all" || "$selection" == "worker" ]] && [[ ${#failed[@]} -eq 0 ]]; then

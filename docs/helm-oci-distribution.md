@@ -1,13 +1,15 @@
 # Helm OCI Chart Distribution
 
-Coyote CI keeps chart source in this monorepo. The charts are packaged and
-published independently of Coyote product-release creation:
+Coyote CI's public chart is `deploy/helm/coyote-ci`: control plane, optional MCP,
+optional Kubernetes worker, scoped RBAC, and manual migration resources in one
+release. Workers are direct templates, not a subchart.
 
-- `deploy/helm/coyote-ci`
-- `deploy/helm/coyote-ci-worker`
-
-Product releases continue to contain four immutable image references: server,
-frontend, worker, and migrate. The MCP image remains independently versioned.
+`deploy/helm/coyote-ci-worker` remains a temporary bridge for the existing GKE
+two-release installation and recovery. Do not use it for fresh installations.
+The V3 manifest already requires one `coyote-ci` chart and all five component
+images. Completing V3 assembly is separate from chart consolidation; legacy
+product-release workflows remain unchanged. Supply `images.mcp` separately when
+using a legacy image overlay that does not include MCP.
 
 ## Local Validation
 
@@ -18,14 +20,17 @@ make helm-render-parity helm-schema-test helm-migration-parity helm-first-instal
 make helm-package-validate
 ```
 
-The package validator checks chart names and SemVer versions, packages both
-charts in a temporary directory, enforces an archive allowlist, and compares
-source-chart and packaged-chart renders using checked-in non-secret example
-values. It never publishes artifacts.
+The package validator checks the chart name and SemVer version, packages only
+`coyote-ci` by default, enforces an archive allowlist, and compares source/package
+renders for portable and GKE unified configurations. It never publishes artifacts.
+`bash scripts/test-helm-publish-oci.sh` tests publication with fake Helm/GCP commands,
+including the existing explicit legacy retry paths.
 
 Chart `version` is the immutable package identity. Increment it whenever a
-chart's packaged content changes. `appVersion` is informational and does not
-need to match either the chart version or the Coyote product-release version.
+chart's packaged content changes. The unified chart starts at `0.2.0`.
+`appVersion` is informational. V3 release assembly must stamp chart `version`
+to match the immutable application release; legacy chart packaging remains
+independent until that separate assembly milestone is complete.
 
 ## Publishing
 
@@ -38,14 +43,15 @@ make helm-publish-oci \
   OCI_IMMUTABLE_TAGS_CONFIRMED=true
 ```
 
-This publishes to these references:
+The default `unified` selection publishes only:
 
 ```text
 oci://us-central1-docker.pkg.dev/PROJECT/coyote-ci/charts/coyote-ci
-oci://us-central1-docker.pkg.dev/PROJECT/coyote-ci/charts/coyote-ci-worker
 ```
 
-To publish only one chart, for example after a worker publication failure:
+For the existing two-release GKE installation only, explicit `all`, `control-plane`,
+and `worker` selections retain their previous behavior. For example, an approved
+legacy worker-only publication retry remains:
 
 ```sh
 make helm-publish-oci \
@@ -59,9 +65,12 @@ force/overwrite behavior, captures the OCI digest, then pulls the version,
 compares the pull digest to the push digest, and renders the published chart.
 It treats only Helm's explicit OCI `manifest unknown` response as evidence that
 a chart version is absent; authorization, repository, connectivity, and
-ambiguous lookup errors fail closed. Pushes are independent. If one succeeds
-and another fails, the successful chart remains published; repair and retry
-only the unpublished chart.
+ambiguous lookup errors fail closed. In explicit legacy `all` mode, pushes remain
+independent: repair and retry only the unpublished chart after partial failure.
+Keep historical packages available for recovery. Use
+`HELM_PACKAGE_INCLUDE_LEGACY_WORKER=true bash scripts/helm-package-validate.sh`
+when validating both packages for that temporary bridge. Retire legacy selections
+and chart source once the existing GKE ownership migration resolves their users.
 
 For Artifact Registry, `OCI_REGISTRY` must be exactly
 `<location>-docker.pkg.dev/<project>/<repository>`. The publisher verifies
@@ -76,11 +85,10 @@ is an explicit policy decision and is not changed by these scripts.
 
 ## OCI Installation
 
-Charts can be pulled and rendered without cloning the Coyote repository:
+The unified chart can be pulled and rendered without cloning the repository:
 
 ```sh
 helm pull oci://REGISTRY/charts/coyote-ci --version CHART_VERSION
-helm pull oci://REGISTRY/charts/coyote-ci-worker --version WORKER_CHART_VERSION
 ```
 
 Generate a digest-pinned product release overlay with the existing resolver:
@@ -92,8 +100,15 @@ coyote release resolve \
   --output release-overlay.yaml
 ```
 
-For a first installation, follow the same migration-safe sequence as the
-source chart. Provide the GKE-specific operator values and the release overlay
+For a first installation, start with `deploy/helm/examples/generic-values.yaml`:
+external PostgreSQL, OIDC, native Secrets, and filesystem storage work without
+GCP dependencies. Replace placeholder images and configuration with real values.
+Provision the execution namespace and namespace-local Secrets first; the chart
+does not create or delete namespaces. Worker database references live under
+`worker.secrets.existingSecrets.databaseUrl`.
+
+Follow the same manual migration sequence as the source chart. Supply complete
+desired operator values with Helm-managed replicas and the release overlay
 as the final values file. Use a unique DNS-label-compatible migration ID and
 do not use `--atomic`, so a failed Job remains available for diagnosis.
 
@@ -112,6 +127,8 @@ helm upgrade --install coyote-ci \
   --set server.replicas=0 \
   --set frontend.replicasManagedExternally=false \
   --set frontend.replicas=0 \
+  --set worker.replicasManagedExternally=false \
+  --set worker.replicas=0 \
   --set migration.render=true \
   --set "migration.runID=$INSTALL_MIGRATION_ID" \
   --wait --wait-for-jobs --timeout 15m
@@ -120,7 +137,7 @@ helm upgrade --install coyote-ci \
 When MCP is enabled, also set its replicas to zero in Phase 1. Do not proceed
 until the migration Job succeeds.
 
-### Phase 2: restore the control plane
+### Phase 2: restore the application
 
 ```sh
 helm upgrade coyote-ci \
@@ -133,21 +150,24 @@ helm upgrade coyote-ci \
   --wait --timeout 15m
 ```
 
-The operator values restore the desired nonzero server, frontend, and optional
-MCP replicas only after the database is migrated.
+The operator values restore the desired server, frontend, optional worker, and
+MCP replicas only after the database is migrated. Filesystem storage supports
+one server replica. There is no separate worker installation phase.
 
-### Phase 3: optionally install the worker
+### Compatible upgrades and retention
 
-```sh
-helm upgrade --install coyote-ci-worker \
-  oci://REGISTRY/charts/coyote-ci-worker \
-  --version WORKER_CHART_VERSION \
-  --namespace "$COYOTE_EXECUTION_NAMESPACE" --create-namespace \
-  --values worker-values.yaml \
-  --values release-overlay.yaml \
-  --wait --timeout 15m
-```
+For releases requiring no database migration, one `helm upgrade --install` with
+complete desired values and the immutable release overlay upgrades the application.
+Schema-changing upgrades keep the controlled quiesce/migrate/restore workflow.
+Automatic migration hooks are deferred.
 
-The current charts are GKE-specific and require environment-specific Google
-Cloud, Workload Identity, Cloud SQL, storage, and secret configuration. OCI
-distribution does not make them generic Kubernetes charts.
+Drain execution before disabling workers or uninstalling. Native Secrets,
+namespaces, and chart-created PVCs survive uninstall; select retained PVCs with
+`storage.filesystem.existingClaim` on reinstall. Retention is not a backup.
+
+Existing two-release GKE installations must retain their original values and
+`worker.enabled: false` in the control-plane release until a separately approved
+ownership migration. Unified worker overlays are rendering/compatibility examples,
+not an ownership transfer. Changing annotations does not remove resources from
+the old release's stored manifest. This change introduces no migration framework
+and does not perform or rehearse ownership transfer.

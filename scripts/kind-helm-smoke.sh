@@ -14,6 +14,8 @@ cleanup() {
   if [[ "$created" == true ]]; then
     if [[ "$result" != 0 ]]; then
       kubectl -n "$namespace" get pods,pvc,jobs >&2 || true
+      kubectl -n portable-execution get pods >&2 || true
+      kubectl -n portable-execution logs deployment/coyote-kubernetes-worker --tail=40 >&2 || true
       kubectl -n "$namespace" logs deployment/coyote-server --tail=40 >&2 || true
     fi
     if [[ "${KIND_HELM_KEEP_CLUSTER:-false}" != true ]]; then
@@ -48,6 +50,8 @@ frontend_image="$(load_image frontend "$repo_root/frontend" '')"
 
 kubectl create namespace "$namespace"
 kubectl create namespace portable-execution
+control_namespace_uid="$(kubectl get namespace "$namespace" -o jsonpath='{.metadata.uid}')"
+execution_namespace_uid="$(kubectl get namespace portable-execution -o jsonpath='{.metadata.uid}')"
 openssl rand -hex 32 >"$work_dir/password"
 printf 'postgres://coyote:%s@postgres.portable-control.svc.cluster.local:5432/coyote?sslmode=disable' "$(cat "$work_dir/password")" >"$work_dir/url"
 openssl rand -hex 32 >"$work_dir/helper"
@@ -60,6 +64,8 @@ kubectl -n "$namespace" create secret generic postgres --from-file=password="$wo
 for target_namespace in "$namespace" portable-execution; do
   kubectl -n "$target_namespace" create secret generic coyote-database --from-file=url="$work_dir/url"
 done
+control_secret_uid="$(kubectl -n "$namespace" get secret coyote-database -o jsonpath='{.metadata.uid}')"
+worker_secret_uid="$(kubectl -n portable-execution get secret coyote-database -o jsonpath='{.metadata.uid}')"
 kubectl -n "$namespace" create secret generic coyote-runtime --from-file=helper="$work_dir/helper" --from-file=session="$work_dir/session" --from-file=trust-path="$work_dir/trust-path" --from-file=header="$work_dir/header"
 kubectl -n "$namespace" create secret generic coyote-oidc --from-file=client-secret="$work_dir/client-secret"
 
@@ -126,17 +132,25 @@ spec: {selector: {app: oidc}, ports: [{port: 443}]}
 EOF
 kubectl -n "$namespace" wait --for=condition=Ready pod/postgres pod/oidc --timeout=180s
 jq -n --arg server "$server_image" --arg frontend "$frontend_image" --arg migrate "$migrate_image" --arg issuer "$issuer" \
-  '{images: {server: $server, frontend: $frontend, migrate: $migrate}, auth: {oidc: {issuerURL: $issuer}}, server: {extraEnvSecrets: {SSL_CERT_FILE: {name: "coyote-runtime", key: "trust-path"}}}}' >"$work_dir/images.json"
-control_args=(portable "$repo_root/deploy/helm/coyote-ci" --namespace "$namespace" --values "$repo_root/deploy/helm/examples/generic-control-plane-values.yaml" --values "$work_dir/images.json")
-helm upgrade --install "${control_args[@]}" --set server.replicas=0 --set frontend.replicas=0 \
+  '{images: {server: $server, worker: $server, frontend: $frontend, migrate: $migrate}, auth: {oidc: {issuerURL: $issuer}}, server: {extraEnvSecrets: {SSL_CERT_FILE: {name: "coyote-runtime", key: "trust-path"}}}}' >"$work_dir/images.json"
+control_args=(portable "$repo_root/deploy/helm/coyote-ci" --namespace "$namespace" --values "$repo_root/deploy/helm/examples/generic-values.yaml" --values "$work_dir/images.json")
+helm upgrade --install "${control_args[@]}" --set server.replicas=0 --set frontend.replicas=0 --set worker.replicas=0 \
   --set migration.render=true --set migration.runID=portable --wait --wait-for-jobs --timeout 5m
 helm upgrade "${control_args[@]}" --set migration.render=false
 kubectl -n "$namespace" patch deployment coyote-server --type=strategic --patch \
   '{"spec":{"template":{"spec":{"volumes":[{"name":"test-ca","secret":{"secretName":"test-oidc-tls","items":[{"key":"tls.crt","path":"tls.crt"}]}}],"containers":[{"name":"server","volumeMounts":[{"name":"test-ca","mountPath":"/test-ca","readOnly":true}]}]}}}}'
 kubectl -n "$namespace" rollout status deployment/coyote-server --timeout=180s
 kubectl -n "$namespace" rollout status deployment/coyote-frontend --timeout=180s
-helm upgrade --install portable-worker "$repo_root/deploy/helm/coyote-ci-worker" --namespace portable-execution \
-  --values "$repo_root/deploy/helm/examples/generic-worker-values.yaml" --set-string "images.worker=$server_image" --wait --timeout 3m
+kubectl -n portable-execution rollout status deployment/coyote-kubernetes-worker --timeout=180s
+[[ "$(helm list --all-namespaces --output json | jq length)" == 1 ]]
+[[ "$(kubectl -n portable-execution get deployment coyote-kubernetes-worker -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-namespace}')" == "$namespace" ]]
+worker_uid="$(kubectl -n portable-execution get deployment coyote-kubernetes-worker -o jsonpath='{.metadata.uid}')"
+[[ "$(kubectl auth can-i create jobs.batch -n portable-execution --as=system:serviceaccount:portable-execution:coyote-kubernetes-worker)" == yes ]]
+[[ "$(kubectl auth can-i create jobs.batch -n "$namespace" --as=system:serviceaccount:portable-execution:coyote-kubernetes-worker)" == no ]]
+[[ "$(kubectl auth can-i get secrets -n portable-execution --as=system:serviceaccount:portable-execution:coyote-kubernetes-worker)" == no ]]
+[[ "$(kubectl auth can-i get pods -n portable-execution --as=system:serviceaccount:portable-execution:coyote-workspace-helper)" == yes ]]
+[[ "$(kubectl auth can-i get pods -n "$namespace" --as=system:serviceaccount:portable-execution:coyote-workspace-helper)" == no ]]
+[[ "$(kubectl auth can-i get pods -n portable-execution --as="system:serviceaccount:$namespace:coyote-server")" == yes ]]
 
 printf 'portable Helm artifact persistence\n' >"$work_dir/expected"
 checksum="$(shasum -a 256 "$work_dir/expected" | cut -d ' ' -f 1)"
@@ -155,6 +169,9 @@ claim_uid="$(kubectl -n "$namespace" get pvc coyote-data -o jsonpath='{.metadata
 pod_uid="$(kubectl -n "$namespace" get pod -l app.kubernetes.io/name=coyote-server -o jsonpath='{.items[0].metadata.uid}')"
 for phase in before after; do
   if [[ "$phase" == after ]]; then
+    helm upgrade --install "${control_args[@]}" --set migration.render=false --set worker.replicas=2 --wait --timeout 3m
+    [[ "$(kubectl -n portable-execution get deployment coyote-kubernetes-worker -o jsonpath='{.metadata.uid}')" == "$worker_uid" ]]
+    [[ "$(kubectl -n portable-execution get deployment coyote-kubernetes-worker -o jsonpath='{.spec.replicas}')" == 2 ]]
     kubectl -n "$namespace" rollout restart deployment/coyote-server
     kubectl -n "$namespace" rollout status deployment/coyote-server --timeout=180s
     [[ "$(kubectl -n "$namespace" get pod -l app.kubernetes.io/name=coyote-server -o jsonpath='{.items[0].metadata.uid}')" != "$pod_uid" ]]
@@ -166,6 +183,19 @@ for phase in before after; do
   kubectl -n "$namespace" logs "download-$phase" >"$work_dir/download-$phase"
   [[ "$(shasum -a 256 "$work_dir/download-$phase" | cut -d ' ' -f 1)" == "$checksum" ]]
 done
+helm upgrade "${control_args[@]}" --set worker.enabled=false --wait --timeout 3m
+[[ "$(kubectl -n portable-execution get deployment coyote-kubernetes-worker --ignore-not-found -o name)" == "" ]]
+[[ "$(kubectl -n portable-execution get serviceaccount coyote-workspace-helper --ignore-not-found -o name)" == "" ]]
+helm upgrade "${control_args[@]}" --wait --timeout 3m
+kubectl -n portable-execution rollout status deployment/coyote-kubernetes-worker --timeout=180s
 helm uninstall portable --namespace "$namespace"
 [[ "$(kubectl -n "$namespace" get pvc coyote-data -o jsonpath='{.metadata.uid}')" == "$claim_uid" ]]
-echo "Portable Helm smoke passed: PostgreSQL, native Secrets, OIDC readiness, non-root filesystem persistence, authenticated download, PVC retention"
+[[ "$(kubectl get namespace "$namespace" -o jsonpath='{.metadata.uid}')" == "$control_namespace_uid" ]]
+[[ "$(kubectl get namespace portable-execution -o jsonpath='{.metadata.uid}')" == "$execution_namespace_uid" ]]
+[[ "$(kubectl -n "$namespace" get secret coyote-database -o jsonpath='{.metadata.uid}')" == "$control_secret_uid" ]]
+[[ "$(kubectl -n portable-execution get secret coyote-database -o jsonpath='{.metadata.uid}')" == "$worker_secret_uid" ]]
+kubectl -n "$namespace" get secret coyote-runtime coyote-oidc >/dev/null
+[[ "$(kubectl -n portable-execution get deployments,roles,rolebindings -o json | jq '.items | length')" == 0 ]]
+[[ "$(kubectl -n portable-execution get serviceaccount coyote-kubernetes-worker coyote-workspace-helper --ignore-not-found -o name)" == "" ]]
+[[ "$(helm list --all-namespaces --output json | jq length)" == 0 ]]
+echo "Unified Helm smoke passed: install, compatible upgrade, worker toggle, scoped RBAC, authenticated persistence, uninstall, Secret/PVC/namespace retention"
