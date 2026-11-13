@@ -17,7 +17,11 @@ services:
       retries: 10
 
   migrate:
-    image: golang:${GO_VERSION}
+    build:
+      context: ./backend
+      target: migrate-runtime
+      args:
+        GO_VERSION: ${GO_VERSION}
     container_name: coyote-ci-migrate
     depends_on:
       db:
@@ -30,12 +34,8 @@ services:
       DB_NAME: coyote_ci
       DB_SSLMODE: disable
       DATABASE_URL: postgres://coyote:coyote@db:5432/coyote_ci?sslmode=disable
-      GOOSE_MIGRATION_DIR: /migrations
     volumes:
       - ./backend/db/migrations:/migrations:ro
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - 'go run github.com/pressly/goose/v3/cmd/goose@v3.24.1 -dir "$${GOOSE_MIGRATION_DIR}" postgres "$${DATABASE_URL}" up'
     restart: "no"
 
   server:

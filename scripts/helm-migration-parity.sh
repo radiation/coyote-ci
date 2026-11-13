@@ -10,25 +10,29 @@ command -v helm >/dev/null 2>&1 || { echo "helm is required" >&2; exit 1; }
 command -v ruby >/dev/null 2>&1 || { echo "ruby is required" >&2; exit 1; }
 
 helm template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci --values "$values" >"$render_dir/ordinary.yaml"
-if grep -q '^kind: Job$' "$render_dir/ordinary.yaml"; then
-  echo "ordinary control-plane render must not contain a migration Job" >&2
-  exit 1
-fi
 helm template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci --values "$values" \
-  --show-only templates/migration-job.yaml --set migration.render=true --set migration.runID=parity-run >"$render_dir/migration.yaml"
+  --show-only templates/migration-job.yaml --is-upgrade >"$render_dir/migration.yaml"
 
-ruby - "$repo_root/deploy/kubernetes/gke/control-plane-migration.yaml" "$render_dir/migration.yaml" <<'RUBY'
+ruby - "$render_dir/ordinary.yaml" "$render_dir/migration.yaml" <<'RUBY'
 require "yaml"
 
-raw_path, rendered_path = ARGV
-replacements = {
-  "__COYOTE_MIGRATE_IMAGE__" => "example.invalid/coyote-migrate@sha256:" + "c" * 64,
-  "__CLOUD_SQL_INSTANCE__" => "example-project:us-central1:coyote-postgres"
-}
-raw = replacements.reduce(File.read(raw_path)) { |content, (key, value)| content.gsub(key, value) }
-expected = YAML.load(raw)
-expected["metadata"]["name"] = "coyote-migrate-parity-run"
-actual = YAML.load_stream(File.read(rendered_path)).compact.fetch(0)
-abort "migration render differs from the current manifest" unless expected == actual
-puts "Helm migration render parity passed"
+documents = YAML.load_stream(File.read(ARGV[0])).compact
+job = documents.find { |doc| doc["kind"] == "Job" } or abort "automatic Job missing"
+upgrade = YAML.load_stream(File.read(ARGV[1])).compact.fetch(0)
+abort "install and upgrade migration specifications differ" unless job["spec"] == upgrade["spec"]
+weights = [["ServiceAccount", "coyote-migrate", "-30"], ["SecretProviderClass", "coyote-migrate-secrets", "-20"], ["Job", job.dig("metadata", "name"), "-10"]]
+weights.each do |kind, name, weight|
+  doc = documents.find { |item| item["kind"] == kind && item.dig("metadata", "name") == name } or abort "missing #{kind}/#{name}"
+  annotations = doc.dig("metadata", "annotations")
+  abort "incorrect hook lifecycle" unless annotations["helm.sh/hook"] == "pre-install,pre-upgrade" && annotations["helm.sh/hook-weight"] == weight
+  abort "hook must retain failure evidence and prerequisites" unless annotations["helm.sh/hook-delete-policy"] == "before-hook-creation"
+end
+abort "deadline missing" unless job.dig("spec", "activeDeadlineSeconds") == 600
+abort "automatic retry must be disabled" unless job.dig("spec", "backoffLimit") == 0
+proxy = job.dig("spec", "template", "spec", "initContainers").first
+abort "native proxy sidecar/startup gate missing" unless proxy["restartPolicy"] == "Always" && proxy.dig("startupProbe", "exec", "command").include?("wait") && proxy["args"].include?("--health-check")
+documents.select { |doc| doc["kind"] == "Deployment" }.each do |deployment|
+  abort "application must remain ordinary" if deployment.dig("metadata", "annotations", "helm.sh/hook")
+end
+puts "Helm automatic migration lifecycle parity passed"
 RUBY

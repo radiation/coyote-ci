@@ -216,9 +216,13 @@ def resource(documents, kind, name)
 end
 
 control = render(root)
-migration_phase = render(root, overrides: {"server" => {"replicas" => 0}, "frontend" => {"replicas" => 0}, "migration" => {"render" => true, "runID" => "portable"}})
-abort "zero-replica migration must not wait on an unconsumed PVC" if migration_phase.any? { |doc| doc["kind"] == "PersistentVolumeClaim" }
-resource(migration_phase, "Job", "coyote-migrate-portable")
+migration = resource(control, "Job", "coyote-migrate-portable-1")
+abort "migration must precede ordinary resources" unless migration.dig("metadata", "annotations", "helm.sh/hook") == "pre-install,pre-upgrade"
+render(root, overrides: {"compatibility" => {"schema_target" => ""}}, failure: "schema_target")
+render(root, overrides: {"migration" => {"render" => false}}, failure: "render")
+render(root, overrides: {"migration" => {"activeDeadlineSeconds" => 30}}, failure: "activeDeadlineSeconds")
+render(root, overrides: {"release" => {"version" => "1.0.0"}, "migration" => {"sourceVersion" => "2.0.0"}}, failure: "downgrades")
+render(root, overrides: {"release" => {"version" => "2.0.0"}, "compatibility" => {"upgrade_from" => ">=1.5.0 <2.0.0"}, "migration" => {"sourceVersion" => "1.0.0"}}, failure: "outside compatibility")
 deployment = resource(control, "Deployment", "coyote-server")
 pod = deployment.dig("spec", "template", "spec")
 abort "filesystem server requires Recreate" unless deployment.dig("spec", "strategy", "type") == "Recreate"
@@ -251,8 +255,8 @@ abort "existing claim not mounted" unless existing_volumes.any? { |entry| entry.
 explicit_class = render(root, overrides: {"storage" => {"filesystem" => {"storageClassName" => "", "accessModes" => ["ReadWriteOncePod"]}}})
 abort "explicit empty storage class lost" unless resource(explicit_class, "PersistentVolumeClaim", "coyote-data").dig("spec", "storageClassName") == ""
 
-with_consumers = render(root, overrides: {"migration" => {"render" => true, "runID" => "portable"}, "mcp" => {"enabled" => true}, "images" => {"mcp" => "example.invalid/mcp@sha256:" + "e" * 64}})
-[["Job", "coyote-migrate-portable"], ["Deployment", "coyote-mcp"]].each do |kind, name|
+with_consumers = render(root, overrides: {"mcp" => {"enabled" => true}, "images" => {"mcp" => "example.invalid/mcp@sha256:" + "e" * 64}})
+[["Job", "coyote-migrate-portable-1"], ["Deployment", "coyote-mcp"]].each do |kind, name|
   consumer = resource(with_consumers, kind, name).dig("spec", "template", "spec")
   abort "#{name} must not mount a service-account token" unless consumer["automountServiceAccountToken"] == false
   abort "#{name} must not run a proxy" if consumer["initContainers"] || consumer.fetch("containers").length != 1

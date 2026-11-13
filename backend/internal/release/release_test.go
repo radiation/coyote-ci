@@ -536,6 +536,11 @@ func TestV3ManifestResolutionWithoutPredecessorOrGitHistory(t *testing.T) {
 	if !strings.Contains(output.String(), "mcp: "+manifest.Components["mcp"].Image) || !strings.Contains(output.String(), "manifestDigest: "+digest) {
 		t.Fatalf("unexpected v3 overlay:\n%s", output.String())
 	}
+	for _, field := range []string{"schema_target: \"" + manifest.Compatibility.SchemaTarget + "\"", "upgrade_from: \"" + manifest.Compatibility.UpgradeFrom + "\""} {
+		if !strings.Contains(output.String(), field) {
+			t.Fatalf("missing compatibility field %s in overlay:\n%s", field, output.String())
+		}
+	}
 }
 
 func TestManifestSerializationAndDigestCompatibility(t *testing.T) {

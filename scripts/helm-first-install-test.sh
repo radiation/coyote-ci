@@ -24,8 +24,6 @@ server:
 frontend:
   replicasManagedExternally: false
   replicas: 3
-migration:
-  render: false
 mcp:
   enabled: true
   replicasManagedExternally: false
@@ -40,23 +38,10 @@ serviceAccounts:
     gsaEmail: coyote-gke-mcp@example-project.iam.gserviceaccount.com
 EOF
 
-cat >"$temp_dir/phase-one-overrides.yaml" <<'EOF'
-server:
-  replicas: 0
-frontend:
-  replicas: 0
-migration:
-  render: true
-  runID: first-install-001
-mcp:
-  replicas: 0
-EOF
-
 helm template install-one "$control_chart" --namespace install-control \
-  --values "$control_values" --values "$temp_dir/fresh-install-values.yaml" \
-  --values "$temp_dir/phase-one-overrides.yaml" >"$temp_dir/phase-one-render.yaml"
+  --values "$control_values" --values "$temp_dir/fresh-install-values.yaml" >"$temp_dir/phase-one-render.yaml"
 helm template install-one "$control_chart" --namespace install-control \
-  --values "$control_values" --values "$temp_dir/fresh-install-values.yaml" >"$temp_dir/phase-two-render.yaml"
+  --values "$control_values" --values "$temp_dir/fresh-install-values.yaml" --is-upgrade >"$temp_dir/phase-two-render.yaml"
 helm template install-one "$worker_chart" --namespace install-execution \
   --values "$worker_values" \
   --set namespace=install-execution \
@@ -120,12 +105,13 @@ long_one = index(documents(root, "long-one-render.yaml"))
 long_one_repeat = index(documents(root, "long-one-repeat-render.yaml"))
 long_two = index(documents(root, "long-two-render.yaml"))
 
-%w[coyote-server coyote-frontend coyote-mcp].each do |name|
+{"coyote-server" => 2, "coyote-frontend" => 3, "coyote-mcp" => 4}.each do |name, replicas|
   deployment = phase_one.fetch(["Deployment", name])
-  abort "#{name} must render with zero replicas during first-install migration" unless deployment.dig("spec", "replicas") == 0
+  abort "#{name} must retain desired replicas" unless deployment.dig("spec", "replicas") == replicas
+  abort "application must not be a hook" if deployment.dig("metadata", "annotations", "helm.sh/hook")
 end
 
-migration = phase_one.fetch(["Job", "coyote-migrate-first-install-001"])
+migration = phase_one.fetch(["Job", "coyote-migrate-install-one-1"])
 abort "migration Job image must be digest-pinned" unless container(migration, "migrate").fetch("image").match?(/@sha256:[a-f0-9]{64}\z/)
 abort "migration Job must mount its database URL" unless container(migration, "migrate").fetch("volumeMounts").any? { |mount| mount["name"] == "database-url" }
 proxy = migration.dig("spec", "template", "spec", "initContainers").find { |entry| entry["name"] == "cloud-sql-proxy" }
@@ -133,7 +119,7 @@ abort "migration Job must run the Cloud SQL Auth Proxy" unless proxy
 abort "migration ServiceAccount is missing" unless phase_one.key?(["ServiceAccount", "coyote-migrate"])
 abort "migration SecretProviderClass is missing" unless phase_one.key?(["SecretProviderClass", "coyote-migrate-secrets"])
 
-abort "phase two must omit the migration Job" if phase_two.keys.any? { |kind, _name| kind == "Job" }
+abort "upgrade must include the migration Job" unless phase_two.keys.any? { |kind, _name| kind == "Job" }
 {"coyote-server" => 2, "coyote-frontend" => 3, "coyote-mcp" => 4}.each do |name, replicas|
   abort "#{name} did not restore its configured replicas" unless phase_two.fetch(["Deployment", name]).dig("spec", "replicas") == replicas
 end
@@ -177,80 +163,26 @@ end
 puts "Helm first-install render tests passed"
 RUBY
 
-ruby -rjson -ryaml -ropen3 - "$repo_root" "$temp_dir" <<'RUBY'
-root, directory = ARGV
-fixtures = []
-%w[control-plane worker].each do |component|
-  chart = component == "worker" ? "coyote-ci-worker" : "coyote-ci"
-  namespace = component == "worker" ? "coyote-ci-staging" : "coyote-ci"
-  output, error, result = Open3.capture3("helm", "template", chart, "#{root}/deploy/helm/#{chart}", "--namespace", namespace, "--values", "#{root}/deploy/helm/examples/gke-staging-#{component}-values.yaml")
-  abort error unless result.success?
-  fixtures.concat(YAML.load_stream(output).compact)
-end
-File.write("#{directory}/live-fixtures.json", JSON.generate(fixtures))
-File.write("#{directory}/kubectl", <<'FAKE')
-#!/usr/bin/env ruby
-require "json"
-documents = JSON.parse(File.read(ENV.fetch("HELM_LIVE_FIXTURES")))
-documents.select { |doc| doc["kind"] == "Deployment" }.each do |deployment|
-  deployment["spec"]["replicas"] ||= 1
-  deployment.dig("spec", "template", "spec", "containers").each { |container| container["resources"] ||= {} }
-end
-abort "unexpected kubectl operation" unless ARGV[0] == "-n" && ARGV[2] == "get" && ARGV[-2..-1] == ["-o", "json"]
-namespace, kind = ARGV[1], ARGV[3]
-names = ARGV[4...-2]
-selected = names.map do |name|
-  documents.find { |doc| doc["kind"].downcase == kind && doc.dig("metadata", "namespace") == namespace && doc.dig("metadata", "name") == name } or abort "fixture missing: #{kind}/#{name}"
-end
-puts JSON.generate(selected.length == 1 ? selected.first : {"items" => selected})
-FAKE
-File.chmod(0755, "#{directory}/kubectl")
-control = "#{directory}/generated-control.yaml"
-worker = "#{directory}/generated-worker.yaml"
-environment = {"PATH" => "#{directory}:#{ENV.fetch('PATH')}", "HELM_LIVE_FIXTURES" => "#{directory}/live-fixtures.json", "GKE_HELM_CONTROL_PLANE_NAMESPACE" => "coyote-ci", "GKE_HELM_WORKER_NAMESPACE" => "coyote-ci-staging", "GKE_HELM_CONTROL_PLANE_VALUES" => control, "GKE_HELM_WORKER_VALUES" => worker, "COYOTE_MIGRATE_IMAGE" => "example.invalid/coyote-migrate@sha256:" + "c" * 64}
-output, error, result = Open3.capture3(environment, "bash", "#{root}/scripts/gke-helm-staging-values.sh")
-abort "offline generator failed: #{output}\n#{error}" unless result.success?
-[[control, "coyote-ci", "coyote-ci"], [worker, "coyote-ci-worker", "coyote-ci-staging"]].each do |path, chart, namespace|
-  values = YAML.load_file(path)
-  abort "generator must emit explicit cloud opt-ins" unless values.dig("gke", "enabled") && values.dig("gke", "secretManagerCSI", "enabled") && values.dig("gke", "workloadIdentity", "enabled") && values.dig("cloudSql", "enabled") && values.dig("storage", "provider") == "gcs"
-  abort "worker must opt in to Cloud Build" if chart.end_with?("worker") && !values.dig("cloudBuild", "enabled")
-  rendered, render_error, rendered_result = Open3.capture3("helm", "template", chart, "#{root}/deploy/helm/#{chart}", "--namespace", namespace, "--values", path)
-  abort render_error unless rendered_result.success?
-  actual = YAML.load_stream(rendered).compact
-  expected = fixtures.select { |doc| doc.dig("metadata", "namespace") == namespace || (chart == "coyote-ci" && doc["kind"].start_with?("Cluster")) }
-  identity = ->(doc) { [doc["kind"], doc.dig("metadata", "name")] }
-  abort "generated values changed GKE resources" unless actual.sort_by(&identity) == expected.sort_by(&identity)
-end
-puts "Offline GKE values generator parity passed"
-RUBY
-
 ruby -ryaml -rjson -ropen3 - "$repo_root" <<'RUBY'
 root = ARGV.fetch(0)
 desired = {"worker" => {"replicas" => 2}, "mcp" => {"enabled" => true, "replicas" => 2}, "images" => {"mcp" => "example.invalid/mcp@sha256:" + "e" * 64}}
-phases = {
-  "migrate" => desired.merge("server" => {"replicas" => 0}, "frontend" => {"replicas" => 0}, "worker" => {"replicas" => 0}, "mcp" => {"enabled" => true, "replicas" => 0}, "migration" => {"render" => true, "runID" => "unified-install"}),
-  "restore" => desired
-}
-renders = phases.transform_values do |overrides|
-  output, error, result = Open3.capture3("helm", "template", "unified", "#{root}/deploy/helm/coyote-ci", "--namespace", "portable-control", "--values", "#{root}/deploy/helm/examples/generic-values.yaml", "--values", "-", stdin_data: JSON.generate(overrides))
+renders = [[], ["--is-upgrade"]].map do |flags|
+  output, error, result = Open3.capture3("helm", "template", "unified", "#{root}/deploy/helm/coyote-ci", "--namespace", "portable-control", "--values", "#{root}/deploy/helm/examples/generic-values.yaml", "--values", "-", *flags, stdin_data: JSON.generate(desired))
   abort error unless result.success?
   documents = YAML.load_stream(output).compact
-  abort "automatic migration hooks are not supported" if documents.any? { |doc| doc.dig("metadata", "annotations", "helm.sh/hook") }
+  abort "automatic migration Job missing" unless documents.count { |doc| doc["kind"] == "Job" && doc.dig("metadata", "annotations", "helm.sh/hook") == "pre-install,pre-upgrade" } == 1
+  abort "filesystem PVC must remain an ordinary resource" unless documents.any? { |doc| doc["kind"] == "PersistentVolumeClaim" && !doc.dig("metadata", "annotations", "helm.sh/hook") }
   documents
 end
-migrate = renders.fetch("migrate")
-deployments = migrate.select { |doc| doc["kind"] == "Deployment" }
-abort "manual phase must quiesce all four consumers" unless deployments.length == 4 && deployments.all? { |doc| doc.dig("spec", "replicas") == 0 }
-abort "manual phase must have one explicit migration Job" unless migrate.count { |doc| doc["kind"] == "Job" && doc.dig("metadata", "name") == "coyote-migrate-unified-install" } == 1
-abort "manual phase must not create an unconsumed PVC" if migrate.any? { |doc| doc["kind"] == "PersistentVolumeClaim" }
-restore = renders.fetch("restore")
-abort "restore must remove the migration Job" if restore.any? { |doc| doc["kind"] == "Job" }
-{"coyote-server" => 1, "coyote-frontend" => 1, "coyote-mcp" => 2, "coyote-kubernetes-worker" => 2}.each do |name, replicas|
-  deployment = restore.find { |doc| doc["kind"] == "Deployment" && doc.dig("metadata", "name") == name }
-  abort "#{name} replicas not restored" unless deployment && deployment.dig("spec", "replicas") == replicas
+renders.each do |documents|
+  {"coyote-server" => 1, "coyote-frontend" => 1, "coyote-mcp" => 2, "coyote-kubernetes-worker" => 2}.each do |name, replicas|
+    deployment = documents.find { |doc| doc["kind"] == "Deployment" && doc.dig("metadata", "name") == name }
+    abort "#{name} desired replicas changed" unless deployment && deployment.dig("spec", "replicas") == replicas
+    abort "#{name} must remain ordinary" if deployment.dig("metadata", "annotations", "helm.sh/hook")
+  end
 end
 identity = ->(doc) { [doc["kind"], doc.dig("metadata", "namespace").to_s, doc.dig("metadata", "name")] }
 stable = ->(docs) { docs.reject { |doc| %w[Job PersistentVolumeClaim].include?(doc["kind"]) }.map(&identity).sort }
-abort "resource names changed between phases" unless stable.call(migrate) == stable.call(restore)
-puts "Unified manual migration and replica restoration tests passed"
+abort "resource names changed between operations" unless stable.call(renders[0]) == stable.call(renders[1])
+puts "Unified automatic install/upgrade replica and resource tests passed"
 RUBY

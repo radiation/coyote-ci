@@ -88,11 +88,16 @@
     },
     "server": {"type": "object", "properties": {"extraEnvSecrets": {"$ref": "#/definitions/envSecrets"}, "replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}}},
     "frontend": {"type": "object", "properties": {"replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}}},
+    "compatibility": {"type": "object", "required": ["schema_target", "upgrade_from"], "properties": {"schema_target": {"type": "string", "pattern": "^[1-9][0-9]*$"}, "upgrade_from": {"type": "string"}}},
     "migration": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "render": {"type": "boolean"},
-        "runID": {"type": "string", "maxLength": 48, "pattern": "^(|[a-z0-9]([a-z0-9-]*[a-z0-9])?)$"}
+        "activeDeadlineSeconds": {"type": "integer", "minimum": 60},
+        "sourceVersion": {"type": "string", "pattern": "^(|[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?)$"},
+        "onlineUpgradeApproved": {"type": "boolean"},
+        "maintenanceAcknowledged": {"type": "boolean"},
+        "resources": {"type": "object"}
       }
     },
     "mcp": {

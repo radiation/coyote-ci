@@ -1001,6 +1001,10 @@ func WriteValuesOverlay(w io.Writer, resolved Resolved) error {
 		format = "release:\n  version: %s\n  channel: %q\n  manifestDigest: %s\nimages:\n  server: %s\n  frontend: %s\n  worker: %s\n  migrate: %s\n  mcp: %s\n"
 		arguments = append(arguments, images["mcp"])
 	}
+	if resolved.Manifest.SchemaVersion == ManifestSchemaVersionV3 {
+		format += "compatibility:\n  schema_target: %q\n  upgrade_from: %q\n"
+		arguments = append(arguments, resolved.Manifest.Compatibility.SchemaTarget, resolved.Manifest.Compatibility.UpgradeFrom)
+	}
 	_, err := fmt.Fprintf(w, format, arguments...)
 	return err
 }

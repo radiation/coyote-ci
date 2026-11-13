@@ -4,13 +4,13 @@ The public `coyote-ci` chart supports external PostgreSQL and native Kubernetes 
 cloud-provider dependencies. GKE integrations are explicit opt-ins. They do not
 provision a database, identity provider, cloud infrastructure, or credentials.
 
-- `coyote-ci` owns the control plane, optional MCP, manual migration resources,
+- `coyote-ci` owns the control plane, optional MCP, automatic migration hooks,
   and optional Kubernetes worker in one release. Worker resources live in
   `executionNamespace`; release metadata stays in the control-plane namespace.
 - `coyote-ci-worker` remains only for the existing two-release GKE deployment
   and recovery. Do not install it for new installations or enable unified worker
-  ownership over an existing worker release. Ownership migration and automatic
-  migration hooks remain separate milestones.
+  ownership over an existing worker release. Ownership migration remains a
+  separate milestone.
 
 ## Portable installation
 
@@ -102,7 +102,7 @@ be owner-readable only; changing UID on an existing volume requires deliberate
 ownership migration. No privileged ownership-repair container is introduced.
 
 Filesystem operation supports one Helm-managed server replica (zero during
-migrations). It uses `Recreate` to avoid overlapping writers and attachment
+maintenance). It uses `Recreate` to avoid overlapping writers and attachment
 conflicts, with brief upgrade downtime. External replica management and more
 than one server replica are rejected. This is not an HA topology. GCS retains
 the existing rolling strategy and replica-management behavior.
@@ -123,15 +123,11 @@ GCS artifact storage; the chart rejects Cloud Build with server-local artifacts.
 
 ### Install and validate
 
-Use the Phase 1 and Phase 2 commands below with the generic customer values:
-first install with zero application replicas and the explicit migration Job,
-then enable the control plane and worker in the same release after Goose succeeds.
-New PVC creation is deferred until the server is enabled,
-so `WaitForFirstConsumer` storage classes do not block the zero-replica migration
-phase; previously created claims remain retained.
-In generic mode the migration Job uses a native database
-Secret with no Cloud SQL proxy or service-account token. Single-chart installation
-is supported now; automatic one-operation first-install migrations are deferred.
+Use the single Helm operation below with the desired application replicas.
+The blocking migration hook completes before ordinary application resources
+are created or updated. The Job does not mount the artifact PVC, so
+`WaitForFirstConsumer` storage does not block migrations. In generic mode it
+uses a native database Secret without a Cloud SQL proxy or service-account token.
 
 Services are private ClusterIP endpoints. Supply your own ingress/TLS setup;
 the existing `gateway` integration is GKE-specific and remains disabled by
@@ -142,13 +138,23 @@ generic mode. Arbitrary service-account annotations can be configured through
 Run `make helm-schema-test helm-package-validate` for provider-neutral renders
 and source/package equivalence. `bash scripts/kind-helm-smoke.sh` creates a
 disposable Kind cluster, builds local OCI test images without pushing them,
-installs PostgreSQL/native Secrets and an HTTPS OIDC discovery fixture, runs
-manual migrations, and checks unified installation, compatible upgrade, worker
+installs PostgreSQL/native Secrets and an HTTPS OIDC discovery fixture, and checks
+automatic installation, no-op upgrade, failed migration/retry, rollout ordering, worker
 enable/disable, scoped RBAC, authenticated artifact downloads across a server
 restart, and Secret/PVC/namespace retention after uninstall. It seeds one artifact and metadata
 instead of duplicating the execution suite. The fixture is not an OIDC login
-test; only the test server pod receives its local CA trust mount. PostgreSQL
+test; only the test server image includes its local CA. PostgreSQL
 uses plaintext transport only inside this isolated test cluster.
+
+The same harness runs ordinary-to-hook lifecycle fixtures from previous chart
+revision `9b116a23` and the working chart, including native Secrets and a local
+SecretProviderClass CRD stub. That commit must be available locally; an explicit
+`KIND_HELM_PREVIOUS_REVISION` can select another compatible pre-hook revision.
+Use `KIND_HELM_HOOK_TRANSITION_ONLY=true bash scripts/kind-helm-smoke.sh` for the
+focused lifecycle cases. Use `KIND_HELM_LEGACY_BRIDGE=true bash
+scripts/kind-helm-smoke.sh` to run the full native/PostgreSQL suite starting from
+the actual previous chart through a quiesced maintenance bridge. CSI fixtures
+test render/ownership/order only; they do not contact GKE or exercise its driver.
 
 The smoke script deletes its cluster by default and keeps logs and short-lived
 test credentials in its reported `/tmp/coyote-helm-smoke.*` directory. Delete
@@ -244,76 +250,53 @@ TokenReview name helper prevents collisions for its cluster-scoped RBAC
 objects, but the chart does not make every namespaced resource safe for
 multiple Helm releases in one namespace.
 
-### Phase 1: install at zero replicas and migrate
+### Install in one operation
 
-Use a unique DNS-label-compatible migration ID. Do not use `--atomic`: if the
-Job fails, it must remain available for inspection. This command requires a
-Helm version that supports `--wait-for-jobs`.
+Provision the external PostgreSQL database, namespace-local Secrets, image-pull
+access, and network access before installing. With GKE CSI, provision the CSI
+driver, secret versions, Workload Identity bindings and IAM first. Cloud SQL uses
+a restartable init sidecar and requires Kubernetes 1.29+ with native sidecars
+enabled. The chart does not provision these external prerequisites.
+
+The image overlay must supply `compatibility.schema_target`, matching the exact
+migration image. V3 release resolution supplies it and `compatibility.upgrade_from`.
+For other overlays, supply these explicitly; the example target `57` is illustrative,
+not a default for future images. Keep application replicas at their desired counts.
 
 ```sh
-INSTALL_MIGRATION_ID="install-20261021-001"
-
 helm upgrade --install coyote-ci deploy/helm/coyote-ci \
   --namespace "$COYOTE_NAMESPACE" \
   --create-namespace \
   --values customer-values.yaml \
   --values coyote-release-images.yaml \
-  --set server.replicasManagedExternally=false \
-  --set server.replicas=0 \
-  --set frontend.replicasManagedExternally=false \
-  --set frontend.replicas=0 \
-  --set worker.replicasManagedExternally=false \
-  --set worker.replicas=0 \
-  --set migration.render=true \
-  --set "migration.runID=$INSTALL_MIGRATION_ID" \
-  --wait \
-  --wait-for-jobs \
-  --timeout 15m
-```
-
-When enabling MCP, supply its digest-pinned image (and GSA with Workload Identity)
-in `customer-values.yaml`, and add:
-
-```sh
---set mcp.replicasManagedExternally=false \
---set mcp.replicas=0
-```
-
-The first revision temporarily overrides the desired customer replica counts
-to zero. It creates the migration ServiceAccount, SecretProviderClass, and
-Job while the server, frontend, optional worker, and optional MCP consumers remain
-unavailable. Kubernetes object creation does not guarantee operational
-readiness; `--wait --wait-for-jobs` waits for the Job's result and reports its
-failure. The Job image runs Goose against an empty database, applies only
-remaining migrations against a partially migrated database, and succeeds
-without changes against an already-current database.
-
-If the migration fails or times out, inspect the retained Job and its logs,
-correct the cause, and repeat Phase 1 with a new migration ID. Do not retry
-while a prior Job might still be running or has ambiguous status. Do not run
-Goose down migrations automatically.
-
-### Phase 2: enable the application
-
-After Phase 1 succeeds, enable the desired replicas from
-`customer-values.yaml`:
-
-```sh
-helm upgrade coyote-ci deploy/helm/coyote-ci \
-  --namespace "$COYOTE_NAMESPACE" \
-  --values customer-values.yaml \
-  --values coyote-release-images.yaml \
-  --set migration.render=false \
   --wait \
   --timeout 15m
 ```
 
-This removes the completed migration Job from the Helm release and restores
-the configured nonzero server, frontend, optional worker, and optional MCP replicas from
-`customer-values.yaml`. Capture successful Job status or logs before Phase 2
-if they are needed for installation evidence. If Phase 2 fails, correct the
-workload or configuration issue and repeat only Phase 2; a completed migration
-does not need to be rerun.
+Helm waits for the `pre-install,pre-upgrade` Job even without `--wait-for-jobs`.
+Its ServiceAccount (weight -30) and optional SecretProviderClass (-20) are earlier
+hooks; the Job is weight -10. Deployments remain ordinary resources. The runner
+validates the image target and Goose history, and serializes database writers
+with a PostgreSQL session advisory lock. Fresh databases migrate; current ones
+succeed without rerunning SQL. Existing databases with pending changes require
+the upgrade approvals below. The supported Make/Compose/image entry points use
+the same runner; a raw Goose CLI or other SQL writer does not participate.
+
+`migration.activeDeadlineSeconds` defaults to 600 (minimum 60). The runner stops
+30 seconds earlier; lock acquisition is bounded to approximately 120 seconds
+and by the runner deadline. Use a Helm timeout longer than the Job deadline and
+application startup; 15 minutes is the default recommendation. Avoid `--atomic`,
+`--cleanup-on-fail`, and `--no-hooks` in this workflow. None can undo database changes.
+
+Hooks retain success and failure evidence without a TTL. Job names include the
+release revision; retries with the same revision can replace that Job only after
+it is terminal. Earlier hook identities are replaced on the next operation, not
+deleted immediately after success. Helm uninstall does not manage hook cleanup;
+archive and remove old Jobs and unused hook identities deliberately. See the
+[recovery runbook](../docs/database-migrations.md#failure-and-retry) before retrying.
+The installer needs ConfigMap get and Job list permissions for preflight checks.
+Serialize Helm operations: the active-Job check is a guard, not a distributed
+deployment lock. Offline `helm template` cannot establish live source history.
 
 ### Worker lifecycle
 
@@ -326,29 +309,53 @@ a deliberate drain/reconfiguration, not an ordinary upgrade.
 
 ### Upgrades
 
-The two-phase workflow is for first installation only. A version change does
-not by itself establish whether a database migration is required. Until
-migrations are backwards-compatible across supported application versions,
-release notes must explicitly state either:
+**Previous ordinary migration prerequisites require a one-time maintenance
+bridge.** A direct old-chart-to-hook-chart upgrade can report success and then
+delete the newly created migrator ServiceAccount and SecretProviderClass during
+ordinary-resource cleanup. Follow the [transition procedure](../docs/database-migrations.md#one-time-ordinary-resource-to-hook-transition)
+before the first hook-enabled upgrade. Fresh installs and subsequent hook-only
+upgrades do not need the bridge. This does not migrate ownership between releases.
 
-- **No database migration required:** use one `helm upgrade --install` for the
-  unified release with complete desired values and the immutable image overlay.
-- **Database migration required:** use the controlled quiesce/migrate/restore
-  procedure for the established environment.
+Every install/upgrade runs the hook, including same-schema upgrades. Goose state
+is authoritative; application history comes from the control-plane ConfigMap's
+release annotations, or the operator's verified `migration.sourceVersion` when
+those annotations are missing. Conflicting source assertions, application
+downgrades, and changed manifest digests for a recorded release version fail.
+Fresh databases and current-schema retries do not require application history.
 
-The existing GKE rollout-recovery path remains the schema-changing upgrade
-procedure. Do not use the first-install commands to replace its safeguards.
+For pending changes on an existing database, choose one of these explicitly:
+
+- **Online:** release notes/tests must certify backward compatibility with all
+  running consumers. Set `migration.onlineUpgradeApproved: true`. A known source
+  version within `compatibility.upgrade_from` and a target `release.version` are
+  required. A version range alone is not evidence that DDL is online-safe.
+- **Maintenance:** stop new work, drain active builds, back up, and quiesce all
+  database consumers out of band before setting
+  `migration.maintenanceAcknowledged: true`. A pre-upgrade hook runs before
+  desired zero replicas are applied; setting replicas to zero in that same Helm
+  command does not quiesce existing workloads. Restore only compatible consumers
+  after migration succeeds. Maintenance can acknowledge unknown/unsupported
+  application history, but cannot bypass schema-ahead or image-target checks.
+
+Historical migrations include breaking changes and are not universally online-safe.
+V3 `compatibility.maintenance` is a support-lifecycle label, not a downtime flag.
+Helm rollback changes application resources only: it never runs Goose `down`.
+Only roll back binaries certified compatible with the resulting schema; otherwise
+use a forward fix or a separately planned database-and-artifact restore.
 
 ### Existing GKE installations
 
-Keep the existing two-release workflow and original values files with
+Keep the historical chart revision, existing two-release workflow and original values files with
 `worker.enabled: false` on the control-plane release (the default). Standalone
 worker source, values generation, rollout, adoption, and normalization tooling
 remain unchanged. They are a temporary bridge, not a second public install model.
 Do not use unified worker overlays until a separately approved ownership migration
 is complete. Changing live Helm annotations alone is unsafe: the old release's
 stored manifest can still delete resources. This change neither implements nor
-rehearses that migration.
+rehearses that migration. The legacy rollout/adoption scripts still expect manual
+`migration.render/runID` controls and must not be used with this hook-enabled
+chart. Those controls are now rejected. Transitioning an established deployment
+requires a separately approved maintenance and ownership plan.
 
 Before upgrading from cloud-enabled chart defaults, explicitly add the following
 to **both** operator values files (and preserve all existing cloud references):
@@ -377,9 +384,9 @@ values and immutable image overlay before upgrading. Intentionally disabling
 an integration requires removing its old settings and supplying the replacement
 native Secret/storage configuration. Disabling GCS does not copy existing blobs.
 
-With the opt-ins supplied, names, identities, mounts, RBAC, migration behavior
-and GCS deployment strategies remain unchanged. No Helm ownership migration is
-performed by this change.
+These integration opt-ins preserve cloud resource references but do not make
+the legacy rollout scripts compatible with automatic hooks. No Helm ownership
+migration is performed by this change.
 
 New releases generate the cluster-scoped TokenReview RBAC name from the Helm
 release and namespace. Existing installations that already use
@@ -423,26 +430,18 @@ introduced through a separate MCP database-url secret.
 MCP remains ClusterIP-only; add an authenticated TLS gateway integration only
 after selecting a suitable private ingress policy and explicit allowed origins.
 
-The migration Job is excluded from ordinary chart renders. For established
-GKE installations, it is rendered explicitly for a unique rollout run and applied by
-[`scripts/gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh):
+The automatic migration hook is included in ordinary chart renders:
 
 ```sh
 helm template coyote-ci deploy/helm/coyote-ci \
   --namespace coyote-ci \
   --values deploy/helm/examples/gke-staging-control-plane-values.yaml \
-  --show-only templates/migration-job.yaml \
-  --set migration.render=true \
-  --set migration.runID=example-20260928
+  --show-only templates/migration-job.yaml
 ```
 
-The wrapper first scales Helm-managed control-plane and worker Deployments to
-zero, applies and waits for that exact migration Job, then restores the
-control plane before the worker and checks Gateway conditions. It never uses
-Helm hooks or attempts a database downgrade. Failed Jobs remain for diagnosis;
-a retry uses a different `HELM_ROLLOUT_ID`. Use
-`GKE_HELM_DRY_RUN=true scripts/gke-helm-rollout.sh` to inspect the mutation
-sequence after local chart rendering succeeds.
+The legacy wrapper's quiesce/manual-Job/restore procedure and the adoption
+instructions below apply only to historical chart revisions, not this chart.
+They remain reference material for a separately authorized GKE transition.
 
 ## Staging ownership adoption
 

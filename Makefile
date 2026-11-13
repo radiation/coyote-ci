@@ -212,10 +212,10 @@ db-migrate-create:
 	$(GOOSE) -dir $(MIGRATIONS_DIR) create $(name) sql
 
 db-migrate-up:
-	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(MIGRATE_DSN)" up
+	cd backend && DATABASE_URL="$(MIGRATE_DSN)" go run ./cmd/migrate -dir "$(abspath $(MIGRATIONS_DIR))" up
 
 db-migrate-down-one:
-	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(MIGRATE_DSN)" down
+	cd backend && DATABASE_URL="$(MIGRATE_DSN)" go run ./cmd/migrate -dir "$(abspath $(MIGRATIONS_DIR))" down
 
 db-migrate-status:
-	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(MIGRATE_DSN)" status
+	cd backend && DATABASE_URL="$(MIGRATE_DSN)" go run ./cmd/migrate -dir "$(abspath $(MIGRATIONS_DIR))" status

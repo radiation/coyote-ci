@@ -13,7 +13,25 @@
 {{- if ne .Release.Namespace $namespace }}{{ fail "release namespace must match namespace" }}{{ end -}}
 {{- if and (eq $namespace .Values.executionNamespace) (not .Values.allowSharedExecutionNamespace) }}{{ fail "control-plane and execution namespaces must differ unless allowSharedExecutionNamespace is true" }}{{ end -}}
 {{- if ne .Values.auth.oidc.redirectURL (printf "%s/auth/callback" (trimSuffix "/" .Values.auth.publicURL)) }}{{ fail "auth.oidc.redirectURL must equal auth.publicURL/auth/callback" }}{{ end -}}
-{{- if and .Values.migration.render (eq .Values.migration.runID "") }}{{ fail "migration.runID is required when migration.render is true" }}{{ end -}}
+{{- $_ := required "compatibility.schema_target is required; obtain it from the pinned migration image or V3 manifest" .Values.compatibility.schema_target -}}
+{{- if or (hasKey .Values.migration "render") (hasKey .Values.migration "runID") }}{{ fail "manual migration.render/runID controls are no longer supported" }}{{ end -}}
+{{- $source := include "coyote-ci.migrationSource" . -}}
+{{- if and $source .Values.release.version -}}
+{{- if (semver .Values.release.version).LessThan (semver $source) }}{{ fail "application downgrades are unsupported; Helm rollback does not reverse database migrations" }}{{ end -}}
+{{- if and (ne $source .Values.release.version) (not .Values.migration.maintenanceAcknowledged) -}}
+{{- if or (not .Values.compatibility.upgrade_from) (not (semverCompare .Values.compatibility.upgrade_from $source)) }}{{ fail "source release is outside compatibility.upgrade_from; a separately approved maintenance window is required" }}{{ end -}}
+{{- end -}}
+{{- end -}}
+{{- $jobs := lookup "batch/v1" "Job" $namespace "" -}}
+{{- range $jobs.items -}}
+{{- if and (eq (dig "app.kubernetes.io/name" "" (.metadata.labels | default dict)) "coyote-migrate") (eq (dig "app.kubernetes.io/instance" "" (.metadata.labels | default dict)) $.Release.Name) -}}
+{{- $terminal := false -}}
+{{- range (.status.conditions | default list) -}}
+{{- if and (eq .status "True") (or (eq .type "Complete") (eq .type "Failed")) }}{{ $terminal = true }}{{ end -}}
+{{- end -}}
+{{- if not $terminal }}{{ fail "an earlier migration Job is not terminal; inspect it before retrying" }}{{ end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.mcp.enabled -}}
 {{- if eq .Values.auth.mode "disabled" }}{{ fail "auth.mode must not be disabled when mcp.enabled is true" }}{{ end -}}
 {{- if eq .Values.images.mcp "" }}{{ fail "images.mcp is required when mcp.enabled is true" }}{{ end -}}
@@ -24,6 +42,7 @@
 {{- if and (not .Values.gke.enabled) (or .Values.gke.secretManagerCSI.enabled .Values.gke.workloadIdentity.enabled .Values.gateway.enabled) }}{{ fail "GKE integrations require explicit gke.enabled=true" }}{{ end -}}
 {{- if and .Values.cloudSql.enabled (not $identity) }}{{ fail "cloudSql.enabled requires GKE workload identity" }}{{ end -}}
 {{- if .Values.cloudSql.enabled -}}
+{{- if semverCompare "<1.29.0-0" .Capabilities.KubeVersion.Version }}{{ fail "Cloud SQL migration sidecars require Kubernetes 1.29+ with native sidecars enabled" }}{{ end -}}
 {{- $_ := required "cloudSql.connectionName is required" .Values.cloudSql.connectionName -}}
 {{- else if .Values.cloudSql.connectionName }}{{ fail "cloudSql.connectionName requires explicit cloudSql.enabled=true; update existing GKE values" }}{{ end -}}
 {{- range $name := list "server" "migrate" "mcp" -}}
@@ -63,6 +82,22 @@
 
 {{- define "coyote-ci.namespace" -}}
 {{- default .Release.Namespace .Values.namespace -}}
+{{- end -}}
+
+{{- define "coyote-ci.migrationSource" -}}
+{{- $previous := lookup "v1" "ConfigMap" (include "coyote-ci.namespace" .) "coyote-control-plane" -}}
+{{- $recorded := dig "metadata" "annotations" "coyote-ci/release-version" "" ($previous | default dict) -}}
+{{- $digest := dig "metadata" "annotations" "coyote-ci/manifest-digest" "" ($previous | default dict) -}}
+{{- if and $recorded (eq $recorded .Values.release.version) $digest .Values.release.manifestDigest (ne $digest .Values.release.manifestDigest) }}{{ fail "an application release version cannot change manifest digest" }}{{ end -}}
+{{- if and $recorded .Values.migration.sourceVersion (ne $recorded .Values.migration.sourceVersion) }}{{ fail "migration.sourceVersion conflicts with recorded application version" }}{{ end -}}
+{{- default .Values.migration.sourceVersion $recorded -}}
+{{- end -}}
+
+{{- define "coyote-ci.onlineMigrationApproved" -}}
+{{- $source := include "coyote-ci.migrationSource" . -}}
+{{- if and .Values.migration.onlineUpgradeApproved $source .Values.release.version .Values.compatibility.upgrade_from -}}
+{{- semverCompare .Values.compatibility.upgrade_from $source -}}
+{{- else -}}false{{- end -}}
 {{- end -}}
 
 {{- define "coyote-ci.requireSecret" -}}

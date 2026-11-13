@@ -92,9 +92,10 @@ control_raw = parse(substitute(File.join(repo_root, "deploy/kubernetes/gke/contr
 control_raw.concat(parse(substitute(File.join(repo_root, "deploy/kubernetes/gke/temporary-gateway.yaml"), values)))
 worker_raw = parse(substitute(File.join(repo_root, "deploy/kubernetes/gke/staging-worker.yaml"), values))
 
-expected_control = index(control_raw)
+application_resources = ->(docs) { docs.reject { |doc| doc["kind"] == "Job" || ["coyote-migrate", "coyote-migrate-secrets"].include?(doc.dig("metadata", "name")) } }
+expected_control = index(application_resources.call(control_raw))
 expected_worker = index(worker_raw.reject { |document| document["kind"] == "Namespace" })
-actual_control = index(documents(File.join(render_dir, "control-plane.yaml")))
+actual_control = index(application_resources.call(documents(File.join(render_dir, "control-plane.yaml"))))
 actual_worker = index(documents(File.join(render_dir, "worker.yaml")))
 
 failures = []

@@ -3,6 +3,11 @@ kind: ConfigMap
 metadata:
   name: coyote-control-plane
   namespace: {{ (include "coyote-ci.namespace" .) }}
+  {{- if .Values.release.version }}
+  annotations:
+    coyote-ci/release-version: {{ .Values.release.version | quote }}
+    coyote-ci/manifest-digest: {{ .Values.release.manifestDigest | quote }}
+  {{- end }}
 data:
   APP_PORT: "8080"
   AUTH_MODE: {{ .Values.auth.mode | quote }}
