@@ -17,7 +17,7 @@
 {{- if or (hasKey .Values.migration "render") (hasKey .Values.migration "runID") }}{{ fail "manual migration.render/runID controls are no longer supported" }}{{ end -}}
 {{- $source := include "coyote-ci.migrationSource" . -}}
 {{- if and $source .Values.release.version -}}
-{{- if semverCompare (printf "<%s" $source) .Values.release.version }}{{ fail "application downgrades are unsupported; Helm rollback does not reverse database migrations" }}{{ end -}}
+{{- if (semver .Values.release.version).LessThan (semver $source) }}{{ fail "application downgrades are unsupported; Helm rollback does not reverse database migrations" }}{{ end -}}
 {{- if and (ne $source .Values.release.version) (not .Values.migration.maintenanceAcknowledged) -}}
 {{- if or (not .Values.compatibility.upgrade_from) (not (semverCompare .Values.compatibility.upgrade_from $source)) }}{{ fail "source release is outside compatibility.upgrade_from; a separately approved maintenance window is required" }}{{ end -}}
 {{- end -}}

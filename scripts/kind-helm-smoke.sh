@@ -16,7 +16,7 @@ cleanup() {
       kubectl -n "$namespace" get pods,pvc,jobs >&2 || true
       kubectl -n "$namespace" get jobs -l app.kubernetes.io/name=coyote-migrate -o name | while read -r job; do
         kubectl -n "$namespace" logs "$job" -c migrate --tail=80 >&2 || true
-      done
+      done || true
       kubectl -n portable-execution get pods >&2 || true
       kubectl -n portable-execution logs deployment/coyote-kubernetes-worker --tail=40 >&2 || true
       kubectl -n "$namespace" logs deployment/coyote-server --tail=40 >&2 || true
@@ -55,7 +55,7 @@ if [[ "${KIND_HELM_HOOK_TRANSITION_ONLY:-false}" == true ]]; then
   exit 0
 fi
 frontend_image="$(load_image frontend "$repo_root/frontend" '')"
-schema_target="$(cd "$repo_root" && go run ./backend/cmd/migrate -dir backend/db/migrations target)"
+schema_target="$(cd "$repo_root/backend" && go run ./cmd/migrate -dir db/migrations target)"
 
 kubectl create namespace "$namespace"
 kubectl create namespace portable-execution
