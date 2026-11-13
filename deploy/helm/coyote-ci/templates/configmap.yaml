@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: coyote-control-plane
-  namespace: {{ .Values.namespace }}
+  namespace: {{ (include "coyote-ci.namespace" .) }}
 data:
   APP_PORT: "8080"
   AUTH_MODE: {{ .Values.auth.mode | quote }}
@@ -19,8 +19,9 @@ data:
   COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT: {{ .Values.serviceAccounts.workspaceHelperName | quote }}
   COYOTE_KUBERNETES_CACHE_HELPER_ENABLED: "true"
   COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED: "true"
-  ARTIFACT_STORAGE_PROVIDER: gcs
+  ARTIFACT_STORAGE_PROVIDER: {{ .Values.storage.provider }}
   ARTIFACT_STORAGE_STRICT: "true"
+  {{- if eq .Values.storage.provider "gcs" }}
   ARTIFACT_GCS_BUCKET: {{ .Values.storage.artifacts.bucket | quote }}
   ARTIFACT_GCS_PREFIX: {{ .Values.storage.artifacts.prefix | quote }}
   ARTIFACT_GCS_PROJECT: {{ .Values.storage.project | quote }}
@@ -33,4 +34,13 @@ data:
   WORKSPACE_REVISION_STORAGE_STRICT: "true"
   WORKSPACE_REVISION_GCS_BUCKET: {{ .Values.storage.workspaceRevisions.bucket | quote }}
   WORKSPACE_REVISION_GCS_PREFIX: {{ .Values.storage.workspaceRevisions.prefix | quote }}
+  {{- else }}
+  ARTIFACT_STORAGE_ROOT: {{ printf "%s/artifacts" .Values.storage.filesystem.mountPath | quote }}
+  WORKER_CACHE_STORAGE_PROVIDER: filesystem
+  WORKER_CACHE_STORAGE_STRICT: "true"
+  WORKER_CACHE_STORAGE_ROOT: {{ printf "%s/cache" .Values.storage.filesystem.mountPath | quote }}
+  WORKSPACE_REVISION_STORAGE_PROVIDER: filesystem
+  WORKSPACE_REVISION_STORAGE_STRICT: "true"
+  COYOTE_WORKSPACE_REVISION_STORAGE_ROOT: {{ printf "%s/workspace-revisions" .Values.storage.filesystem.mountPath | quote }}
+  {{- end }}
   EMAIL_NOTIFICATIONS_ENABLED: "false"

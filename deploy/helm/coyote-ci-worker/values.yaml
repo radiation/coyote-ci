@@ -2,9 +2,9 @@ namespace: ""
 controlPlaneNamespace: ""
 allowSharedControlPlaneNamespace: false
 gke:
-  enabled: true
-  secretManagerCSI: {enabled: true}
-  workloadIdentity: {enabled: true}
+  enabled: false
+  secretManagerCSI: {enabled: false}
+  workloadIdentity: {enabled: false}
 images:
   worker: ""
   cloudSqlProxy: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.4@sha256:88501f0a695a586988add1b8a206fdf3f29f9a1a3deeb9b45ef2b1481ea6be83
@@ -13,10 +13,11 @@ release:
   channel: ""
   manifestDigest: ""
 serviceAccounts:
-  worker: {name: coyote-kubernetes-worker-staging, gsaEmail: ""}
-  helper: {name: coyote-workspace-helper}
+  worker: {name: coyote-kubernetes-worker-staging, gsaEmail: "", annotations: {}}
+  helper: {name: coyote-workspace-helper, annotations: {}}
   server: {name: coyote-server}
 cloudSql:
+  enabled: false
   connectionName: ""
   proxy:
     address: 127.0.0.1
@@ -24,17 +25,24 @@ cloudSql:
     resources:
       requests: {cpu: 250m, memory: 256Mi}
       limits: {cpu: 500m, memory: 512Mi}
-secrets: {project: "", databaseUrl: ""}
+secrets:
+  existingSecrets:
+    databaseUrl: {name: "", key: ""}
+  project: ""
+  databaseUrl: ""
 storage:
+  provider: filesystem
   project: ""
   artifacts: {bucket: "", prefix: builds, strict: true}
 cloudBuild:
+  enabled: false
   project: ""
   location: ""
   runtimeServiceAccount: ""
   artifactRegistryRepository: ""
   source: {bucket: "", prefix: coyote-sources, includePrefix: true}
 worker:
+  extraEnvSecrets: {}
   name: coyote-kubernetes-worker-staging
   configMapName: coyote-gke-staging-worker
   databaseSecretProviderClass: coyote-staging-worker-database-secrets

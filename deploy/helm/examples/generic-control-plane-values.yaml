@@ -1,0 +1,18 @@
+executionNamespace: portable-execution
+images:
+  server: example.invalid/coyote-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  frontend: example.invalid/coyote-frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  migrate: example.invalid/coyote-migrate@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+secrets:
+  existingSecrets:
+    databaseUrl: {name: coyote-database, key: url}
+    workspaceHelperCapability: {name: coyote-runtime, key: helper}
+    oidcClient: {name: coyote-oidc, key: client-secret}
+    session: {name: coyote-runtime, key: session}
+auth:
+  bootstrapAdminEmails: admin@example.invalid
+  publicURL: https://ci.example.invalid
+  oidc:
+    issuerURL: https://issuer.example.invalid
+    clientID: coyote
+    redirectURL: https://ci.example.invalid/auth/callback

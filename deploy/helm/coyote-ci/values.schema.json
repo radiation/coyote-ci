@@ -3,7 +3,8 @@
   "type": "object",
   "required": ["namespace", "executionNamespace", "images", "serviceAccounts", "cloudSql", "secrets", "storage", "auth"],
   "properties": {
-    "namespace": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+    "namespace": {"type": "string", "maxLength": 63, "pattern": "^(|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$"},
+    "gke": {"$ref": "#/definitions/gke"},
     "executionNamespace": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
     "allowSharedExecutionNamespace": {"type": "boolean"},
     "rbac": {"type": "object", "properties": {"tokenReviewNameOverride": {"type": "string", "maxLength": 63, "pattern": "^(|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$"}}},
@@ -19,12 +20,37 @@
       }
     },
     "release": {"type": "object", "properties": {"version": {"type": "string"}, "channel": {"type": "string", "enum": ["", "latest", "stable"]}, "manifestDigest": {"type": "string", "pattern": "^(|sha256:[a-f0-9]{64})$"}}},
-    "serviceAccounts": {"type": "object", "required": ["server", "migrate"], "properties": {"server": {"type": "object", "required": ["gsaEmail"], "properties": {"gsaEmail": {"type": "string", "minLength": 1}}}, "migrate": {"type": "object", "required": ["gsaEmail"], "properties": {"gsaEmail": {"type": "string", "minLength": 1}}}, "mcp": {"type": "object", "properties": {"name": {"type": "string", "minLength": 1}, "gsaEmail": {"type": "string"}}}}},
-    "cloudSql": {"type": "object", "required": ["connectionName"], "properties": {"connectionName": {"type": "string", "minLength": 1}}},
-    "secrets": {"type": "object", "required": ["project", "databaseUrl", "workspaceHelperCapability", "oidcClient", "session"], "properties": {"project": {"type": "string", "minLength": 1}, "databaseUrl": {"type": "string", "minLength": 1}, "workspaceHelperCapability": {"type": "string", "minLength": 1}, "oidcClient": {"type": "string", "minLength": 1}, "session": {"type": "string", "minLength": 1}}},
-    "storage": {"type": "object", "required": ["project", "artifacts", "cache", "workspaceRevisions"], "properties": {"project": {"type": "string", "minLength": 1}, "artifacts": {"type": "object", "required": ["bucket"], "properties": {"bucket": {"type": "string", "minLength": 1}}}, "cache": {"type": "object", "required": ["bucket"], "properties": {"bucket": {"type": "string", "minLength": 1}}}, "workspaceRevisions": {"type": "object", "required": ["bucket"], "properties": {"bucket": {"type": "string", "minLength": 1}}}}},
+    "serviceAccounts": {"type": "object", "required": ["server", "migrate", "mcp"], "properties": {"server": {"$ref": "#/definitions/account"}, "migrate": {"$ref": "#/definitions/account"}, "mcp": {"$ref": "#/definitions/account"}}},
+    "cloudSql": {"type": "object", "required": ["enabled", "connectionName"], "properties": {"enabled": {"type": "boolean"}, "connectionName": {"type": "string"}}},
+    "secrets": {
+      "type": "object",
+      "required": ["existingSecrets"],
+      "properties": {
+        "project": {"type": "string"}, "databaseUrl": {"type": "string"}, "workspaceHelperCapability": {"type": "string"}, "oidcClient": {"type": "string"}, "session": {"type": "string"},
+        "existingSecrets": {"type": "object", "additionalProperties": false, "required": ["databaseUrl", "workspaceHelperCapability", "oidcClient", "session"], "properties": {"databaseUrl": {"$ref": "#/definitions/secretRef"}, "workspaceHelperCapability": {"$ref": "#/definitions/secretRef"}, "oidcClient": {"$ref": "#/definitions/secretRef"}, "session": {"$ref": "#/definitions/secretRef"}}}
+      }
+    },
+    "storage": {
+      "type": "object", "required": ["provider", "filesystem"],
+      "properties": {
+        "provider": {"enum": ["filesystem", "gcs"]},
+        "project": {"type": "string"},
+        "artifacts": {"$ref": "#/definitions/bucket"}, "cache": {"$ref": "#/definitions/bucket"}, "workspaceRevisions": {"$ref": "#/definitions/bucket"},
+        "filesystem": {
+          "type": "object", "required": ["existingClaim", "size", "accessModes", "mountPath", "securityContext"],
+          "properties": {
+            "existingClaim": {"type": "string", "maxLength": 253, "pattern": "^(|[a-z0-9]([a-z0-9.-]*[a-z0-9])?)$"},
+            "size": {"type": "string", "pattern": "^[1-9][0-9]*(Mi|Gi|Ti)$"},
+            "storageClassName": {"type": ["string", "null"]},
+            "accessModes": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"enum": ["ReadWriteOnce", "ReadWriteOncePod"]}},
+            "mountPath": {"type": "string", "pattern": "^/[^/]+(/[^/]+)*$"},
+            "securityContext": {"type": "object", "required": ["runAsNonRoot", "runAsUser", "runAsGroup", "fsGroup"], "properties": {"runAsNonRoot": {"const": true}, "runAsUser": {"type": "integer", "minimum": 1}, "runAsGroup": {"type": "integer", "minimum": 1}, "fsGroup": {"type": "integer", "minimum": 1}, "fsGroupChangePolicy": {"enum": ["OnRootMismatch", "Always"]}}}
+          }
+        }
+      }
+    },
     "auth": {"type": "object", "required": ["mode", "bootstrapAdminEmails", "oidc", "publicURL"], "properties": {"mode": {"type": "string", "enum": ["oidc"]}, "bootstrapAdminEmails": {"type": "string", "minLength": 1}, "publicURL": {"type": "string", "pattern": "^https://"}, "oidc": {"type": "object", "required": ["issuerURL", "clientID", "redirectURL"], "properties": {"issuerURL": {"type": "string", "pattern": "^https://"}, "clientID": {"type": "string", "minLength": 1}, "redirectURL": {"type": "string", "pattern": "^https://"}}}}},
-    "server": {"type": "object", "properties": {"replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}}},
+    "server": {"type": "object", "properties": {"extraEnvSecrets": {"$ref": "#/definitions/envSecrets"}, "replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}}},
     "frontend": {"type": "object", "properties": {"replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}}},
     "migration": {
       "type": "object",
@@ -46,7 +72,7 @@
         "auth": {"type": "object", "required": ["allowedOrigins", "allowDisabledAuth"], "properties": {"allowedOrigins": {"type": "array", "items": {"type": "string", "minLength": 1}}, "omitEmptyAllowedOrigins": {"type": "boolean"}, "allowDisabledAuth": {"const": false}}}
       }
     },
-    "gateway": {"type": "object", "properties": {"enabled": {"type": "boolean"}, "hostname": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"}}}
+    "gateway": {"type": "object", "properties": {"enabled": {"type": "boolean"}, "hostname": {"type": "string", "pattern": "^(|[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)$"}}}
   },
   "allOf": [
     {
@@ -78,10 +104,9 @@
             "required": ["mcp"],
             "properties": {
               "mcp": {
-                "required": ["name", "gsaEmail"],
+                "required": ["name"],
                 "properties": {
-                  "name": {"minLength": 1},
-                  "gsaEmail": {"minLength": 1}
+                  "name": {"minLength": 1}
                 }
               }
             }
@@ -89,5 +114,13 @@
         }
       }
     }
-  ]
+  ],
+  "definitions": {
+    "gke": {"type": "object", "required": ["enabled", "secretManagerCSI", "workloadIdentity"], "properties": {"enabled": {"type": "boolean"}, "secretManagerCSI": {"$ref": "#/definitions/switch"}, "workloadIdentity": {"$ref": "#/definitions/switch"}}},
+    "switch": {"type": "object", "required": ["enabled"], "properties": {"enabled": {"type": "boolean"}}},
+    "account": {"type": "object", "required": ["name", "annotations"], "properties": {"name": {"type": "string", "minLength": 1}, "gsaEmail": {"type": "string"}, "annotations": {"type": "object", "additionalProperties": {"type": "string"}}}},
+    "bucket": {"type": "object", "properties": {"bucket": {"type": "string"}, "prefix": {"type": "string"}}},
+    "secretRef": {"type": "object", "additionalProperties": false, "required": ["name", "key"], "properties": {"name": {"type": "string", "maxLength": 253, "pattern": "^(|[a-z0-9]([a-z0-9.-]*[a-z0-9])?)$"}, "key": {"type": "string", "pattern": "^[A-Za-z0-9._-]*$"}}},
+    "envSecrets": {"type": "object", "propertyNames": {"pattern": "^[A-Z_][A-Z0-9_]*$"}, "additionalProperties": {"$ref": "#/definitions/secretRef"}}
+  }
 }

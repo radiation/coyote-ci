@@ -1,4 +1,8 @@
 namespace: coyote-ci
+gke:
+  enabled: true
+  secretManagerCSI: {enabled: true}
+  workloadIdentity: {enabled: true}
 executionNamespace: coyote-ci-staging
 rbac:
   # Preserve the raw-manifest name while the existing environment transitions to Helm.
@@ -10,7 +14,7 @@ images:
 serviceAccounts:
   server: {name: coyote-server, gsaEmail: coyote-gke-server@example-project.iam.gserviceaccount.com}
   migrate: {name: coyote-migrate, gsaEmail: coyote-gke-migrate@example-project.iam.gserviceaccount.com}
-cloudSql: {connectionName: "example-project:us-central1:coyote-postgres"}
+cloudSql: {enabled: true, connectionName: "example-project:us-central1:coyote-postgres"}
 secrets:
   project: example-project
   databaseUrl: coyote-staging-database-url
@@ -18,6 +22,7 @@ secrets:
   oidcClient: coyote-staging-oidc-client-secret
   session: coyote-staging-session-secret
 storage:
+  provider: gcs
   project: example-project
   artifacts: {bucket: coyote-artifacts, prefix: builds}
   cache: {bucket: coyote-cache, prefix: coyote-ci/cache}

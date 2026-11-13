@@ -176,3 +176,50 @@ end
 
 puts "Helm first-install render tests passed"
 RUBY
+
+ruby -rjson -ryaml -ropen3 - "$repo_root" "$temp_dir" <<'RUBY'
+root, directory = ARGV
+fixtures = []
+%w[control-plane worker].each do |component|
+  chart = component == "worker" ? "coyote-ci-worker" : "coyote-ci"
+  namespace = component == "worker" ? "coyote-ci-staging" : "coyote-ci"
+  output, error, result = Open3.capture3("helm", "template", chart, "#{root}/deploy/helm/#{chart}", "--namespace", namespace, "--values", "#{root}/deploy/helm/examples/gke-staging-#{component}-values.yaml")
+  abort error unless result.success?
+  fixtures.concat(YAML.load_stream(output).compact)
+end
+File.write("#{directory}/live-fixtures.json", JSON.generate(fixtures))
+File.write("#{directory}/kubectl", <<'FAKE')
+#!/usr/bin/env ruby
+require "json"
+documents = JSON.parse(File.read(ENV.fetch("HELM_LIVE_FIXTURES")))
+documents.select { |doc| doc["kind"] == "Deployment" }.each do |deployment|
+  deployment["spec"]["replicas"] ||= 1
+  deployment.dig("spec", "template", "spec", "containers").each { |container| container["resources"] ||= {} }
+end
+abort "unexpected kubectl operation" unless ARGV[0] == "-n" && ARGV[2] == "get" && ARGV[-2..-1] == ["-o", "json"]
+namespace, kind = ARGV[1], ARGV[3]
+names = ARGV[4...-2]
+selected = names.map do |name|
+  documents.find { |doc| doc["kind"].downcase == kind && doc.dig("metadata", "namespace") == namespace && doc.dig("metadata", "name") == name } or abort "fixture missing: #{kind}/#{name}"
+end
+puts JSON.generate(selected.length == 1 ? selected.first : {"items" => selected})
+FAKE
+File.chmod(0755, "#{directory}/kubectl")
+control = "#{directory}/generated-control.yaml"
+worker = "#{directory}/generated-worker.yaml"
+environment = {"PATH" => "#{directory}:#{ENV.fetch('PATH')}", "HELM_LIVE_FIXTURES" => "#{directory}/live-fixtures.json", "GKE_HELM_CONTROL_PLANE_NAMESPACE" => "coyote-ci", "GKE_HELM_WORKER_NAMESPACE" => "coyote-ci-staging", "GKE_HELM_CONTROL_PLANE_VALUES" => control, "GKE_HELM_WORKER_VALUES" => worker, "COYOTE_MIGRATE_IMAGE" => "example.invalid/coyote-migrate@sha256:" + "c" * 64}
+output, error, result = Open3.capture3(environment, "bash", "#{root}/scripts/gke-helm-staging-values.sh")
+abort "offline generator failed: #{output}\n#{error}" unless result.success?
+[[control, "coyote-ci", "coyote-ci"], [worker, "coyote-ci-worker", "coyote-ci-staging"]].each do |path, chart, namespace|
+  values = YAML.load_file(path)
+  abort "generator must emit explicit cloud opt-ins" unless values.dig("gke", "enabled") && values.dig("gke", "secretManagerCSI", "enabled") && values.dig("gke", "workloadIdentity", "enabled") && values.dig("cloudSql", "enabled") && values.dig("storage", "provider") == "gcs"
+  abort "worker must opt in to Cloud Build" if chart.end_with?("worker") && !values.dig("cloudBuild", "enabled")
+  rendered, render_error, rendered_result = Open3.capture3("helm", "template", chart, "#{root}/deploy/helm/#{chart}", "--namespace", namespace, "--values", path)
+  abort render_error unless rendered_result.success?
+  actual = YAML.load_stream(rendered).compact
+  expected = fixtures.select { |doc| doc.dig("metadata", "namespace") == namespace || (chart == "coyote-ci" && doc["kind"].start_with?("Cluster")) }
+  identity = ->(doc) { [doc["kind"], doc.dig("metadata", "name")] }
+  abort "generated values changed GKE resources" unless actual.sort_by(&identity) == expected.sort_by(&identity)
+end
+puts "Offline GKE values generator parity passed"
+RUBY

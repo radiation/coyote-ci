@@ -1,0 +1,9 @@
+controlPlaneNamespace: portable-control
+images:
+  worker: example.invalid/coyote-worker@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+secrets:
+  existingSecrets:
+    databaseUrl: {name: coyote-database, key: url}
+worker:
+  name: coyote-kubernetes-worker
+  configMapName: coyote-worker

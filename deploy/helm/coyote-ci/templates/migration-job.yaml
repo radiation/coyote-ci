@@ -3,7 +3,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: coyote-migrate-{{ .Values.migration.runID }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ (include "coyote-ci.namespace" .) }}
 spec:
   backoffLimit: 0
   template:
@@ -13,6 +13,9 @@ spec:
     spec:
       restartPolicy: Never
       serviceAccountName: {{ .Values.serviceAccounts.migrate.name }}
+      {{- if not (and .Values.gke.enabled .Values.gke.workloadIdentity.enabled) }}
+      automountServiceAccountToken: false
+      {{- end }}
       containers:
         - name: migrate
           image: {{ .Values.images.migrate }}
@@ -22,11 +25,10 @@ spec:
               value: /var/run/secrets/coyote/database-url
           resources: {{- toYaml .Values.migration.resources | nindent 12 }}
           volumeMounts:
-            {{- if and .Values.gke.enabled .Values.gke.secretManagerCSI.enabled }}
             - name: database-url
               mountPath: /var/run/secrets/coyote
               readOnly: true
-            {{- end }}
+      {{- if .Values.cloudSql.enabled }}
       initContainers:
         - name: cloud-sql-proxy
           image: {{ .Values.images.cloudSqlProxy }}
@@ -38,12 +40,7 @@ spec:
             capabilities: {drop: ["ALL"]}
             seccompProfile: {type: RuntimeDefault}
           resources: {{- toYaml .Values.cloudSql.proxy.resources | nindent 12 }}
+          {{- end }}
       volumes:
-        {{- if and .Values.gke.enabled .Values.gke.secretManagerCSI.enabled }}
-        - name: database-url
-          csi:
-            driver: secrets-store-gke.csi.k8s.io
-            readOnly: true
-            volumeAttributes: {secretProviderClass: coyote-migrate-secrets}
-        {{- end }}
+        {{- include "coyote-ci.secretVolume" (dict "root" . "name" "database-url" "providerClass" "coyote-migrate-secrets" "databaseOnly" true) | nindent 8 }}
 {{- end }}

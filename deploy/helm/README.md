@@ -1,13 +1,127 @@
 # Coyote CI Helm charts
 
-These charts package the proven GKE architecture. They do not provision GCP
-infrastructure, but a new installation can use the documented two-phase Helm
-workflow below to create the application resources and run its initial
-database migration.
+These charts support external PostgreSQL and native Kubernetes Secrets without
+cloud-provider dependencies. GKE integrations are explicit opt-ins. They do not
+provision a database, identity provider, cloud infrastructure, or credentials.
 
-- `coyote-ci` owns steady-state control-plane resources in `coyote-ci`.
-- `coyote-ci-worker` owns steady-state staging execution-worker resources in
-  `coyote-ci-staging`.
+- `coyote-ci` owns the control plane in its Helm release namespace.
+- `coyote-ci-worker` owns execution-worker resources in its separate Helm release
+  namespace. Chart consolidation and automatic migration hooks are deferred.
+
+## Portable installation
+
+Start with `examples/generic-control-plane-values.yaml` and
+`examples/generic-worker-values.yaml`. These contain placeholder image digests
+and Secret references, never credentials. Supply real digest-pinned images,
+an HTTPS OIDC issuer, client ID, callback/public URLs and bootstrap admin emails.
+OIDC remains required; the chart does not disable authentication for local use.
+
+Select the namespaces using `helm --namespace`. Leave `namespace: ""` in the
+values to use the release namespace; a nonempty override must match it. Set
+`executionNamespace` on the control plane and `controlPlaneNamespace` on the
+worker explicitly. Namespace sharing remains an explicit legacy exception.
+
+### PostgreSQL and Secrets
+
+Create Secrets out of band in each workload's namespace. For example, create
+the database Secret from a local credential file, not Helm values:
+
+```sh
+kubectl -n "$COYOTE_NAMESPACE" create secret generic coyote-database \
+  --from-file=url=/secure/path/database-url
+```
+
+The file contains a full PostgreSQL URL, including host, port, database, user,
+password and TLS parameters. Use TLS according to the database's trust policy;
+the chart does not disable database TLS or provision certificates. The server,
+worker, MCP and migration image all support `DATABASE_URL_FILE`.
+
+Set `secrets.existingSecrets.<credential>.name` and `.key` for `databaseUrl`,
+`workspaceHelperCapability`, `oidcClient` (the client secret), and `session` in
+the control-plane values. The worker requires only `databaseUrl` in its own
+namespace. Projected volumes expose only the selected keys. MCP and migrations
+receive only the database key, not session, OIDC or helper signing credentials.
+Missing references fail rendering; missing Secret objects/keys prevent startup.
+Secret value changes generally require a workload restart to reload configuration.
+
+For other supported runtime credentials, `server.extraEnvSecrets` and
+`worker.extraEnvSecrets` map environment variable names to `{name, key}` Secret
+references. For example, use `GITHUB_STATUS_TOKEN` or `SMTP_PASSWORD`. These
+cannot override chart-managed database, auth, storage or execution settings.
+Do not put credential values in Helm values, ConfigMaps or image overlays.
+
+### Filesystem persistence
+
+The default `storage.provider: filesystem` creates the `coyote-data` PVC and
+mounts it at `/var/lib/coyote`. Artifacts, cache and workspace revisions use
+separate directories on this volume. Set `storage.filesystem.size` (default
+`10Gi`), `storageClassName` (null uses the cluster default; `""` selects no
+class), and `accessModes` (`ReadWriteOnce`, or `ReadWriteOncePod` with a
+supporting CSI driver). A suitable provisioner or prebound volume is required.
+
+Set `storage.filesystem.existingClaim` to use an operator-owned claim in the
+control-plane namespace instead. No PVC is then created or owned by this chart.
+The default filesystem pod UID/GID and fsGroup are `10001`; an existing volume
+must be writable by that identity. The storage driver must honor fsGroup, or
+the operator must provision compatible ownership. Existing artifact files may
+be owner-readable only; changing UID on an existing volume requires deliberate
+ownership migration. No privileged ownership-repair container is introduced.
+
+Filesystem operation supports one Helm-managed server replica (zero during
+migrations). It uses `Recreate` to avoid overlapping writers and attachment
+conflicts, with brief upgrade downtime. External replica management and more
+than one server replica are rejected. This is not an HA topology. GCS retains
+the existing rolling strategy and replica-management behavior.
+
+Chart-created PVCs carry `helm.sh/resource-policy: keep`: Helm uninstall or
+switching away from filesystem does not intentionally delete the claim. For a
+subsequent install, explicitly select the retained claim with `existingClaim`.
+The chart never deletes an operator-owned claim. Namespace deletion or manual
+PVC deletion can still destroy data according to the PV reclaim policy. Back
+up the database and volume together before deleting either; Helm retention is
+not a backup. Changing a claim name or provider does not migrate stored bytes.
+
+Kubernetes execution helpers transfer artifacts, cache and workspace revisions
+through the server API. Workers and build containers do not mount the server
+PVC. Generic Kubernetes execution does not require Cloud Build. The optional
+managed-image Cloud Build integration requires `cloudBuild.enabled: true` and
+GCS artifact storage; the chart rejects Cloud Build with server-local artifacts.
+
+### Install and validate
+
+Use the Phase 1 and Phase 2 commands below with the generic customer values:
+first install with zero application replicas and the explicit migration Job,
+then enable the control plane after Goose succeeds. Install the worker chart
+separately afterward. New PVC creation is deferred until the server is enabled,
+so `WaitForFirstConsumer` storage classes do not block the zero-replica migration
+phase; previously created claims remain retained.
+In generic mode the migration Job uses a native database
+Secret with no Cloud SQL proxy or service-account token. Automatic one-operation
+migrations and single-chart installation belong to later milestones.
+
+Services are private ClusterIP endpoints. Supply your own ingress/TLS setup;
+the existing `gateway` integration is GKE-specific and remains disabled by
+default. Optional MCP needs a digest-pinned image, not a Google identity in
+generic mode. Arbitrary service-account annotations can be configured through
+`serviceAccounts.<name>.annotations` without assigning Kubernetes permissions.
+
+Run `make helm-schema-test helm-package-validate` for provider-neutral renders
+and source/package equivalence. `bash scripts/kind-helm-smoke.sh` creates a
+disposable Kind cluster, builds local OCI test images without pushing them,
+installs PostgreSQL/native Secrets and an HTTPS OIDC discovery fixture, runs
+manual migrations, and checks authenticated artifact downloads across a server
+restart plus PVC retention after uninstall. It seeds one artifact and metadata
+instead of duplicating the execution suite. The fixture is not an OIDC login
+test; only the test server pod receives its local CA trust mount. PostgreSQL
+uses plaintext transport only inside this isolated test cluster.
+
+The smoke script deletes its cluster by default and keeps logs and short-lived
+test credentials in its reported `/tmp/coyote-helm-smoke.*` directory. Delete
+that directory after inspecting results. Set `KIND_HELM_KEEP_CLUSTER=true` only
+for diagnosis; delete the reported cluster afterward. Existing RBAC and build
+token-isolation suites remain the execution-security coverage.
+
+## GKE rendering examples
 
 Use the checked-in non-secret example values only for rendering and validation:
 
@@ -22,7 +136,7 @@ scripts/helm-render-parity.sh
 scripts/helm-schema-test.sh
 ```
 
-## First installation
+## GKE first installation
 
 Before installation, provision the external GKE/GCP dependencies described in
 [`../docs/gke-gcp-deployment.md`](../docs/gke-gcp-deployment.md): Cloud SQL,
@@ -185,6 +299,37 @@ The existing GKE rollout-recovery path remains the schema-changing upgrade
 procedure. Do not use the first-install commands to replace its safeguards.
 
 ### Existing GKE installations
+
+Before upgrading from cloud-enabled chart defaults, explicitly add the following
+to **both** operator values files (and preserve all existing cloud references):
+
+```yaml
+gke:
+  enabled: true
+  secretManagerCSI: {enabled: true}
+  workloadIdentity: {enabled: true}
+cloudSql:
+  enabled: true
+storage:
+  provider: gcs
+```
+
+Also set `cloudBuild.enabled: true` on workers that use the existing managed-image
+integration. The checked-in GKE examples and staging-values generator emit these
+opt-ins. The generator must still only be run by an authorized operator; no live
+resource changes are part of this chart update.
+
+Cloud SQL connection names, Secret Manager references, Google service-account
+identities, GCS settings and Cloud Build configuration left behind without the
+matching opt-ins fail rendering. Do not use `--reuse-values` as a substitute for
+reviewing the complete desired values. Run `helm template` with the operator
+values and immutable image overlay before upgrading. Intentionally disabling
+an integration requires removing its old settings and supplying the replacement
+native Secret/storage configuration. Disabling GCS does not copy existing blobs.
+
+With the opt-ins supplied, names, identities, mounts, RBAC, migration behavior
+and GCS deployment strategies remain unchanged. No Helm ownership migration is
+performed by this change.
 
 New releases generate the cluster-scoped TokenReview RBAC name from the Helm
 release and namespace. Existing installations that already use
