@@ -16,11 +16,13 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"golang.org/x/mod/semver"
 )
 
 const (
 	SchemaVersion           = 1
 	ManifestSchemaVersionV2 = 2
+	ManifestSchemaVersionV3 = 3
 )
 
 var (
@@ -32,6 +34,10 @@ var (
 	semVerPattern           = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 	commitPattern           = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
 	digestPattern           = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	sha256Pattern           = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	gooseVersionPattern     = regexp.MustCompile(`^[1-9][0-9]*$`)
+	platformPattern         = regexp.MustCompile(`^[a-z0-9]+(?:[-_][a-z0-9]+)+$`)
+	upgradeRangePattern     = regexp.MustCompile(`^>=(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)? <(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 )
 
 var (
@@ -40,22 +46,58 @@ var (
 )
 
 type Manifest struct {
-	SchemaVersion int                  `json:"schema_version"`
-	Release       string               `json:"release"`
-	Source        SourceIdentity       `json:"source"`
-	Images        map[string]string    `json:"images,omitempty"`
-	Components    map[string]Component `json:"components,omitempty"`
-	Deployment    *Deployment          `json:"deployment,omitempty"`
+	SchemaVersion int                    `json:"schema_version"`
+	Release       string                 `json:"release"`
+	Source        SourceIdentity         `json:"source,omitempty"`
+	Images        map[string]string      `json:"images,omitempty"`
+	Components    map[string]Component   `json:"components,omitempty"`
+	Deployment    *Deployment            `json:"deployment,omitempty"`
+	Assembly      *Assembly              `json:"assembly,omitempty"`
+	Helm          *HelmPackage           `json:"helm,omitempty"`
+	CLIArtifacts  map[string]CLIArtifact `json:"cli_artifacts,omitempty"`
+	Compatibility *Compatibility         `json:"compatibility,omitempty"`
 }
 
 type Component struct {
-	Version string `json:"version"`
-	Image   string `json:"image"`
+	Version string         `json:"version"`
+	Image   string         `json:"image"`
+	Build   *BuildIdentity `json:"build,omitempty"`
 }
 
 type SourceIdentity struct {
 	Commit    string `json:"commit"`
 	CreatedAt string `json:"created_at"`
+}
+
+type BuildIdentity struct {
+	ID     string         `json:"id"`
+	Source SourceIdentity `json:"source"`
+}
+
+type Assembly struct {
+	BuildID string         `json:"build_id"`
+	Source  SourceIdentity `json:"source"`
+}
+
+type HelmPackage struct {
+	Name       string `json:"name"`
+	Repository string `json:"repository"`
+	Version    string `json:"version"`
+	Digest     string `json:"digest"`
+}
+
+type CLIArtifact struct {
+	URL      string `json:"url"`
+	Filename string `json:"filename"`
+	Size     int64  `json:"size"`
+	SHA256   string `json:"sha256"`
+	BuildID  string `json:"build_id"`
+}
+
+type Compatibility struct {
+	SchemaTarget string `json:"schema_target"`
+	UpgradeFrom  string `json:"upgrade_from"`
+	Maintenance  string `json:"maintenance"`
 }
 
 type Deployment struct {
@@ -117,14 +159,227 @@ type Resolved struct {
 }
 
 func ParseManifest(data []byte) (Manifest, error) {
-	var manifest Manifest
-	if decodeErr := json.Unmarshal(data, &manifest); decodeErr != nil {
+	var header struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if decodeErr := json.Unmarshal(data, &header); decodeErr != nil {
 		return Manifest{}, fmt.Errorf("decode release manifest: %w", decodeErr)
+	}
+	var manifest Manifest
+	var decodeErr error
+	if header.SchemaVersion == SchemaVersion || header.SchemaVersion == ManifestSchemaVersionV2 {
+		manifest, decodeErr = decodeLegacyManifest(data)
+	} else {
+		decodeErr = json.Unmarshal(data, &manifest)
+	}
+	if decodeErr != nil {
+		return Manifest{}, fmt.Errorf("decode release manifest: %w", decodeErr)
+	}
+	if manifest.SchemaVersion == ManifestSchemaVersionV3 {
+		var fields map[string]json.RawMessage
+		if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil {
+			return Manifest{}, fmt.Errorf("decode schema v3 release manifest fields: %w", decodeErr)
+		}
+		if fieldErr := validateV3ManifestFields(fields); fieldErr != nil {
+			return Manifest{}, fieldErr
+		}
 	}
 	if validateErr := manifest.Validate(); validateErr != nil {
 		return Manifest{}, validateErr
 	}
 	return manifest, nil
+}
+
+func decodeLegacyManifest(data []byte) (Manifest, error) {
+	// V3 field names were ignored extensions in V1/V2, regardless of JSON type.
+	type legacyComponent struct {
+		Version string `json:"version"`
+		Image   string `json:"image"`
+	}
+	var wire struct {
+		SchemaVersion int                        `json:"schema_version"`
+		Release       string                     `json:"release"`
+		Source        SourceIdentity             `json:"source"`
+		Images        map[string]string          `json:"images"`
+		Components    map[string]legacyComponent `json:"components"`
+		Deployment    *Deployment                `json:"deployment"`
+	}
+	if decodeErr := json.Unmarshal(data, &wire); decodeErr != nil {
+		return Manifest{}, decodeErr
+	}
+	manifest := Manifest{
+		SchemaVersion: wire.SchemaVersion,
+		Release:       wire.Release,
+		Source:        wire.Source,
+		Images:        wire.Images,
+		Deployment:    wire.Deployment,
+	}
+	if wire.Components != nil {
+		manifest.Components = make(map[string]Component, len(wire.Components))
+		for name, component := range wire.Components {
+			manifest.Components[name] = Component{Version: component.Version, Image: component.Image}
+		}
+	}
+	return manifest, nil
+}
+
+func (m Manifest) MarshalJSON() ([]byte, error) {
+	type manifestJSON struct {
+		SchemaVersion int                    `json:"schema_version"`
+		Release       string                 `json:"release"`
+		Source        *SourceIdentity        `json:"source,omitempty"`
+		Images        map[string]string      `json:"images,omitempty"`
+		Components    map[string]Component   `json:"components,omitempty"`
+		Deployment    *Deployment            `json:"deployment,omitempty"`
+		Assembly      *Assembly              `json:"assembly,omitempty"`
+		Helm          *HelmPackage           `json:"helm,omitempty"`
+		CLIArtifacts  map[string]CLIArtifact `json:"cli_artifacts,omitempty"`
+		Compatibility *Compatibility         `json:"compatibility,omitempty"`
+	}
+	document := manifestJSON{
+		SchemaVersion: m.SchemaVersion,
+		Release:       m.Release,
+		Images:        m.Images,
+		Components:    m.Components,
+		Deployment:    m.Deployment,
+		Assembly:      m.Assembly,
+		Helm:          m.Helm,
+		CLIArtifacts:  m.CLIArtifacts,
+		Compatibility: m.Compatibility,
+	}
+	if m.SchemaVersion != ManifestSchemaVersionV3 {
+		document.Source = &m.Source
+	}
+	return json.Marshal(document)
+}
+
+func validateV3ManifestFields(fields map[string]json.RawMessage) error {
+	if fieldErr := validateJSONFields(fields, "schema v3 manifest", "schema_version", "release", "assembly", "components", "helm", "cli_artifacts", "compatibility"); fieldErr != nil {
+		return fieldErr
+	}
+	if fieldErr := validateV3AssemblyFields(fields["assembly"]); fieldErr != nil {
+		return fieldErr
+	}
+	if fieldErr := validateV3ComponentFields(fields["components"]); fieldErr != nil {
+		return fieldErr
+	}
+	if fieldErr := validateV3HelmFields(fields["helm"]); fieldErr != nil {
+		return fieldErr
+	}
+	if fieldErr := validateV3CLIArtifactFields(fields["cli_artifacts"]); fieldErr != nil {
+		return fieldErr
+	}
+	return validateV3CompatibilityFields(fields["compatibility"])
+}
+
+func validateV3AssemblyFields(raw json.RawMessage) error {
+	fields, fieldsErr := decodeJSONObject(raw, "assembly")
+	if fieldsErr != nil {
+		return fieldsErr
+	}
+	if fieldErr := validateJSONFields(fields, "assembly", "build_id", "source"); fieldErr != nil {
+		return fieldErr
+	}
+	return validateV3SourceFields(fields["source"], "assembly source")
+}
+
+func validateV3ComponentFields(raw json.RawMessage) error {
+	components, componentsErr := decodeJSONObject(raw, "components")
+	if componentsErr != nil {
+		return componentsErr
+	}
+	for name, component := range components {
+		if !isComponent(name, requiredV2Components) {
+			return fmt.Errorf("components contains unsupported field %q", name)
+		}
+		fields, fieldsErr := decodeJSONObject(component, name+" component")
+		if fieldsErr != nil {
+			return fieldsErr
+		}
+		if fieldErr := validateJSONFields(fields, name+" component", "version", "image", "build"); fieldErr != nil {
+			return fieldErr
+		}
+		if buildErr := validateV3BuildFields(fields["build"], name+" component build"); buildErr != nil {
+			return buildErr
+		}
+	}
+	return nil
+}
+
+func validateV3BuildFields(raw json.RawMessage, field string) error {
+	fields, fieldsErr := decodeJSONObject(raw, field)
+	if fieldsErr != nil {
+		return fieldsErr
+	}
+	if fieldErr := validateJSONFields(fields, field, "id", "source"); fieldErr != nil {
+		return fieldErr
+	}
+	return validateV3SourceFields(fields["source"], field+" source")
+}
+
+func validateV3HelmFields(raw json.RawMessage) error {
+	fields, fieldsErr := decodeJSONObject(raw, "helm")
+	if fieldsErr != nil {
+		return fieldsErr
+	}
+	return validateJSONFields(fields, "helm", "name", "repository", "version", "digest")
+}
+
+func validateV3CLIArtifactFields(raw json.RawMessage) error {
+	artifacts, artifactsErr := decodeJSONObject(raw, "cli_artifacts")
+	if artifactsErr != nil {
+		return artifactsErr
+	}
+	for platform, artifact := range artifacts {
+		fields, fieldsErr := decodeJSONObject(artifact, "CLI artifact "+platform)
+		if fieldsErr != nil {
+			return fieldsErr
+		}
+		if fieldErr := validateJSONFields(fields, "CLI artifact "+platform, "url", "filename", "size", "sha256", "build_id"); fieldErr != nil {
+			return fieldErr
+		}
+	}
+	return nil
+}
+
+func validateV3CompatibilityFields(raw json.RawMessage) error {
+	fields, fieldsErr := decodeJSONObject(raw, "compatibility")
+	if fieldsErr != nil {
+		return fieldsErr
+	}
+	return validateJSONFields(fields, "compatibility", "schema_target", "upgrade_from", "maintenance")
+}
+
+func validateV3SourceFields(raw json.RawMessage, field string) error {
+	fields, fieldsErr := decodeJSONObject(raw, field)
+	if fieldsErr != nil {
+		return fieldsErr
+	}
+	return validateJSONFields(fields, field, "commit", "created_at")
+}
+
+func decodeJSONObject(raw json.RawMessage, field string) (map[string]json.RawMessage, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	var fields map[string]json.RawMessage
+	if decodeErr := json.Unmarshal(raw, &fields); decodeErr != nil {
+		return nil, fmt.Errorf("%s must be an object: %w", field, decodeErr)
+	}
+	return fields, nil
+}
+
+func validateJSONFields(fields map[string]json.RawMessage, object string, allowed ...string) error {
+	allowedFields := make(map[string]struct{}, len(allowed))
+	for _, field := range allowed {
+		allowedFields[field] = struct{}{}
+	}
+	for field := range fields {
+		if _, ok := allowedFields[field]; !ok {
+			return fmt.Errorf("%s contains unsupported field %q", object, field)
+		}
+	}
+	return nil
 }
 
 func ValidateExactSemanticVersion(version string) error {
@@ -135,20 +390,20 @@ func ValidateExactSemanticVersion(version string) error {
 }
 
 func (m Manifest) Validate() error {
-	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != ManifestSchemaVersionV2 {
+	if m.SchemaVersion != SchemaVersion && m.SchemaVersion != ManifestSchemaVersionV2 && m.SchemaVersion != ManifestSchemaVersionV3 {
 		return fmt.Errorf("unsupported manifest schema version %d", m.SchemaVersion)
 	}
 	if versionErr := ValidateExactSemanticVersion(m.Release); versionErr != nil {
 		return fmt.Errorf("release %w", versionErr)
 	}
-	if !commitPattern.MatchString(m.Source.Commit) {
-		return fmt.Errorf("source commit must be a full Git commit SHA: %q", m.Source.Commit)
-	}
-	if _, timestampErr := time.Parse(time.RFC3339, m.Source.CreatedAt); timestampErr != nil {
-		return fmt.Errorf("source created_at must be RFC3339: %w", timestampErr)
-	}
 	switch m.SchemaVersion {
 	case SchemaVersion:
+		if extensionErr := validateLegacyManifestExtensions(m); extensionErr != nil {
+			return extensionErr
+		}
+		if sourceErr := validateSource(m.Source, "source"); sourceErr != nil {
+			return sourceErr
+		}
 		if m.Components != nil {
 			return errors.New("schema v1 manifest must not contain components")
 		}
@@ -156,14 +411,41 @@ func (m Manifest) Validate() error {
 			return imageErr
 		}
 	case ManifestSchemaVersionV2:
+		if extensionErr := validateLegacyManifestExtensions(m); extensionErr != nil {
+			return extensionErr
+		}
+		if sourceErr := validateSource(m.Source, "source"); sourceErr != nil {
+			return sourceErr
+		}
 		if m.Images != nil {
 			return errors.New("schema v2 manifest must not contain legacy images")
 		}
-		if componentErr := validateComponents(m.Components); componentErr != nil {
+		if componentErr := validateComponents(m.Components, false); componentErr != nil {
 			return componentErr
+		}
+	case ManifestSchemaVersionV3:
+		if v3Err := validateV3Manifest(m); v3Err != nil {
+			return v3Err
 		}
 	}
 	return validateDeployment(m.Deployment)
+}
+
+func validateLegacyManifestExtensions(m Manifest) error {
+	if m.Assembly != nil || m.Helm != nil || m.CLIArtifacts != nil || m.Compatibility != nil {
+		return errors.New("schema v1 and v2 manifests must not contain schema v3 fields")
+	}
+	return nil
+}
+
+func validateSource(source SourceIdentity, field string) error {
+	if !commitPattern.MatchString(source.Commit) {
+		return fmt.Errorf("%s commit must be a full Git commit SHA: %q", field, source.Commit)
+	}
+	if _, timestampErr := time.Parse(time.RFC3339, source.CreatedAt); timestampErr != nil {
+		return fmt.Errorf("%s created_at must be RFC3339: %w", field, timestampErr)
+	}
+	return nil
 }
 
 func validateImages(images map[string]string, components []string) error {
@@ -187,7 +469,7 @@ func validateImages(images map[string]string, components []string) error {
 	return nil
 }
 
-func validateComponents(components map[string]Component) error {
+func validateComponents(components map[string]Component, requireBuildProvenance bool) error {
 	if len(components) != len(requiredV2Components) {
 		return fmt.Errorf("manifest components must contain exactly %s", strings.Join(requiredV2Components, ", "))
 	}
@@ -202,6 +484,16 @@ func validateComponents(components map[string]Component) error {
 		if imageErr := ValidateImageReference(component.Image); imageErr != nil {
 			return fmt.Errorf("%s component image: %w", name, imageErr)
 		}
+		if requireBuildProvenance {
+			if component.Build == nil {
+				return fmt.Errorf("%s component build provenance is required", name)
+			}
+			if buildErr := validateBuildIdentity(*component.Build, name+" component build"); buildErr != nil {
+				return buildErr
+			}
+		} else if component.Build != nil {
+			return fmt.Errorf("%s component build provenance is only supported by schema v3", name)
+		}
 	}
 	for name := range components {
 		if !isComponent(name, requiredV2Components) {
@@ -209,6 +501,111 @@ func validateComponents(components map[string]Component) error {
 		}
 	}
 	return nil
+}
+
+func validateV3Manifest(m Manifest) error {
+	if m.Source != (SourceIdentity{}) || m.Images != nil || m.Deployment != nil {
+		return errors.New("schema v3 manifest must use assembly, components, helm, cli_artifacts, and compatibility fields only")
+	}
+	if m.Assembly == nil {
+		return errors.New("schema v3 manifest assembly provenance is required")
+	}
+	if strings.TrimSpace(m.Assembly.BuildID) == "" {
+		return errors.New("assembly build_id is required")
+	}
+	if sourceErr := validateSource(m.Assembly.Source, "assembly source"); sourceErr != nil {
+		return sourceErr
+	}
+	if componentErr := validateComponents(m.Components, true); componentErr != nil {
+		return componentErr
+	}
+	if helmErr := validateHelmPackage(m.Helm, m.Release); helmErr != nil {
+		return helmErr
+	}
+	if artifactsErr := validateCLIArtifacts(m.CLIArtifacts); artifactsErr != nil {
+		return artifactsErr
+	}
+	return validateCompatibility(m.Compatibility)
+}
+
+func validateBuildIdentity(build BuildIdentity, field string) error {
+	if strings.TrimSpace(build.ID) == "" {
+		return fmt.Errorf("%s id is required", field)
+	}
+	return validateSource(build.Source, field+" source")
+}
+
+func validateHelmPackage(helm *HelmPackage, releaseVersion string) error {
+	if helm == nil {
+		return errors.New("schema v3 manifest helm package is required")
+	}
+	if helm.Name != "coyote-ci" {
+		return errors.New(`helm package name must be "coyote-ci"`)
+	}
+	if strings.TrimSpace(helm.Repository) != helm.Repository || !strings.HasPrefix(helm.Repository, "oci://") {
+		return fmt.Errorf("helm repository must be an OCI repository: %q", helm.Repository)
+	}
+	parsed, parseErr := url.Parse(helm.Repository)
+	if parseErr != nil || parsed.Host == "" || parsed.Path == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("helm repository must be an OCI repository: %q", helm.Repository)
+	}
+	if helm.Version != releaseVersion {
+		return fmt.Errorf("helm package version %q must equal release %q", helm.Version, releaseVersion)
+	}
+	if digestPattern.MatchString(helm.Digest) {
+		return nil
+	}
+	return errors.New("helm package digest must be a sha256 digest")
+}
+
+func validateCLIArtifacts(artifacts map[string]CLIArtifact) error {
+	if len(artifacts) == 0 {
+		return errors.New("schema v3 manifest must contain at least one CLI artifact")
+	}
+	for platform, artifact := range artifacts {
+		if !platformPattern.MatchString(platform) {
+			return fmt.Errorf("CLI artifact platform %q must identify an OS and architecture", platform)
+		}
+		parsed, parseErr := url.Parse(artifact.URL)
+		if parseErr != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("CLI artifact %q url must be an absolute HTTP(S) download URL", platform)
+		}
+		if strings.TrimSpace(artifact.Filename) == "" || strings.ContainsAny(artifact.Filename, `/\`) {
+			return fmt.Errorf("CLI artifact %q filename must be a file name", platform)
+		}
+		if artifact.Size <= 0 {
+			return fmt.Errorf("CLI artifact %q size must be greater than zero", platform)
+		}
+		if !sha256Pattern.MatchString(artifact.SHA256) {
+			return fmt.Errorf("CLI artifact %q sha256 must be a lowercase SHA-256 checksum", platform)
+		}
+		if strings.TrimSpace(artifact.BuildID) == "" {
+			return fmt.Errorf("CLI artifact %q build_id is required", platform)
+		}
+	}
+	return nil
+}
+
+func validateCompatibility(compatibility *Compatibility) error {
+	if compatibility == nil {
+		return errors.New("schema v3 manifest compatibility is required")
+	}
+	if !gooseVersionPattern.MatchString(compatibility.SchemaTarget) {
+		return errors.New("compatibility schema_target must be a nonzero decimal Goose migration version")
+	}
+	if !upgradeRangePattern.MatchString(compatibility.UpgradeFrom) {
+		return errors.New("compatibility upgrade_from must use the form \">=MIN_VERSION <MAX_VERSION\"")
+	}
+	rangeParts := strings.Split(strings.TrimPrefix(compatibility.UpgradeFrom, ">="), " <")
+	if semver.Compare("v"+rangeParts[0], "v"+rangeParts[1]) >= 0 {
+		return errors.New("compatibility upgrade_from must be a nonempty ascending version interval")
+	}
+	switch compatibility.Maintenance {
+	case "active", "maintenance", "end-of-life":
+		return nil
+	default:
+		return fmt.Errorf("unsupported compatibility maintenance state %q", compatibility.Maintenance)
+	}
 }
 
 func validateDeployment(deployment *Deployment) error {
@@ -592,7 +989,7 @@ func WriteValuesOverlay(w io.Writer, resolved Resolved) error {
 		return validateErr
 	}
 	images := resolved.Manifest.Images
-	if resolved.Manifest.SchemaVersion == ManifestSchemaVersionV2 {
+	if resolved.Manifest.SchemaVersion == ManifestSchemaVersionV2 || resolved.Manifest.SchemaVersion == ManifestSchemaVersionV3 {
 		images = make(map[string]string, len(resolved.Manifest.Components))
 		for name, component := range resolved.Manifest.Components {
 			images[name] = component.Image
@@ -600,7 +997,7 @@ func WriteValuesOverlay(w io.Writer, resolved Resolved) error {
 	}
 	format := "release:\n  version: %s\n  channel: %q\n  manifestDigest: %s\nimages:\n  server: %s\n  frontend: %s\n  worker: %s\n  migrate: %s\n"
 	arguments := []any{resolved.Manifest.Release, resolved.Channel, resolved.ManifestDigest, images["server"], images["frontend"], images["worker"], images["migrate"]}
-	if resolved.Manifest.SchemaVersion == ManifestSchemaVersionV2 {
+	if resolved.Manifest.SchemaVersion == ManifestSchemaVersionV2 || resolved.Manifest.SchemaVersion == ManifestSchemaVersionV3 {
 		format = "release:\n  version: %s\n  channel: %q\n  manifestDigest: %s\nimages:\n  server: %s\n  frontend: %s\n  worker: %s\n  migrate: %s\n  mcp: %s\n"
 		arguments = append(arguments, images["mcp"])
 	}

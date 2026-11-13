@@ -8,6 +8,62 @@ commits the manifest, then promotes semantic registry tags to the committed dige
 `latest` and `stable` are mutable
 channel pointers; moving one never alters an existing manifest.
 
+## V3 application release manifest
+
+Schema version 3 is an immutable application-release contract. `release` is the
+public application version and is the release-store identity; the manifest does
+not add a second release identifier. `assembly` identifies the build that
+assembled that application release and the source revision it used. It is
+separate from each component's original `build` provenance, so independently
+built or reused components retain their own immutable identity and source.
+
+Every V3 manifest contains exactly the `server`, `frontend`, `worker`, `mcp`,
+and `migrate` components. Each supplies an exact component version, a
+digest-pinned image reference, and its original build id and source metadata.
+V3 also contains one `helm` package named `coyote-ci`; its OCI repository and
+digest are immutable and its version must equal `release`.
+
+`cli_artifacts` is keyed by `os-arch` (for example `linux-amd64`). Every entry
+contains the absolute HTTP(S) download `url`, archive `filename`, positive byte
+`size`, lowercase hexadecimal `sha256` checksum of the distributed archive
+bytes, and `build_id`. The manifest's `compatibility.schema_target` is the
+nonzero decimal Goose migration version included in the digest-pinned `migrate`
+component image (for example `"57"` for migration file `00057_*`); it declares
+the target only, while Goose remains responsible for tracking and applying
+migrations. `compatibility.upgrade_from` is a nonempty, ascending, half-open
+semantic-version interval written exactly as `>=MIN_VERSION <MAX_VERSION`, with
+one ASCII space between comparators; compatibility is declarative in V3.
+`maintenance` is one of `active`, `maintenance`, or `end-of-life`.
+
+```json
+{
+  "schema_version": 3,
+  "release": "3.0.0",
+  "assembly": {
+    "build_id": "assembly-build-300",
+    "source": {"commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "created_at": "2026-11-13T12:00:00Z"}
+  },
+  "components": {
+    "server": {"version": "3.0.0", "image": "registry.example/coyote-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "build": {"id": "server-build-300", "source": {"commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "created_at": "2026-11-13T12:00:00Z"}}},
+    "frontend": {"version": "3.0.0", "image": "registry.example/coyote-frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "build": {"id": "frontend-build-300", "source": {"commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "created_at": "2026-11-13T12:00:00Z"}}},
+    "worker": {"version": "3.0.0", "image": "registry.example/coyote-worker@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "build": {"id": "worker-build-300", "source": {"commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "created_at": "2026-11-13T12:00:00Z"}}},
+    "mcp": {"version": "2.4.0", "image": "registry.example/coyote-mcp@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "build": {"id": "mcp-build-240", "source": {"commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2026-10-30T12:00:00Z"}}},
+    "migrate": {"version": "3.0.0", "image": "registry.example/coyote-migrate@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "build": {"id": "migrate-build-300", "source": {"commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "created_at": "2026-11-13T12:00:00Z"}}}
+  },
+  "helm": {"name": "coyote-ci", "repository": "oci://registry.example/charts", "version": "3.0.0", "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
+  "cli_artifacts": {"linux-amd64": {"url": "https://downloads.example/coyote_3.0.0_linux_amd64.tar.gz", "filename": "coyote_3.0.0_linux_amd64.tar.gz", "size": 12345, "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "build_id": "cli-build-300"}},
+  "compatibility": {"schema_target": "57", "upgrade_from": ">=2.5.0 <4.0.0", "maintenance": "active"}
+}
+```
+
+V1 and V2 manifests remain accepted as stored. Fetch and import preserve their
+original bytes and digest; resolution does not synthesize V3 assembly,
+component-build, Helm, CLI, or compatibility metadata. Channels remain in the
+separate mutable `channels.json` index for all manifest versions.
+Legacy readers continue to ignore V3-named extensions, including non-object
+values and V2 component `build` fields; these extensions are not interpreted as
+V3 metadata. V3 readers retain strict field validation.
+
 The currently supported provider-neutral release source is a filesystem directory,
 `file://` URL, or `gs://bucket[/prefix]` location. Each source stores
 `releases/<version>.json` and `channels.json`; Google Cloud Storage uses

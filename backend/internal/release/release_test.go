@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -31,6 +32,50 @@ func validV2Manifest() Manifest {
 		"mcp":      {Version: "0.4.0", Image: "registry.example/coyote-mcp@sha256:" + strings.Repeat("d", 64)},
 		"migrate":  {Version: "3.0.0", Image: "registry.example/coyote-migrate@sha256:" + strings.Repeat("e", 64)},
 	}}
+}
+
+func validV3Manifest() Manifest {
+	source := SourceIdentity{Commit: strings.Repeat("a", 40), CreatedAt: "2026-11-13T12:00:00Z"}
+	component := func(version, imageDigest, buildID string, buildSource SourceIdentity) Component {
+		return Component{
+			Version: version,
+			Image:   "registry.example/coyote-" + buildID + "@sha256:" + imageDigest,
+			Build:   &BuildIdentity{ID: buildID, Source: buildSource},
+		}
+	}
+	reusedSource := SourceIdentity{Commit: strings.Repeat("b", 40), CreatedAt: "2026-10-30T12:00:00Z"}
+	return Manifest{
+		SchemaVersion: ManifestSchemaVersionV3,
+		Release:       "3.0.0",
+		Assembly:      &Assembly{BuildID: "assembly-build-300", Source: source},
+		Components: map[string]Component{
+			"server":   component("3.0.0", strings.Repeat("a", 64), "server-build-300", source),
+			"frontend": component("3.0.0", strings.Repeat("b", 64), "frontend-build-300", source),
+			"worker":   component("3.0.0", strings.Repeat("c", 64), "worker-build-300", source),
+			"mcp":      component("2.4.0", strings.Repeat("d", 64), "mcp-build-240", reusedSource),
+			"migrate":  component("3.0.0", strings.Repeat("e", 64), "migrate-build-300", source),
+		},
+		Helm: &HelmPackage{
+			Name:       "coyote-ci",
+			Repository: "oci://registry.example/charts",
+			Version:    "3.0.0",
+			Digest:     "sha256:" + strings.Repeat("f", 64),
+		},
+		CLIArtifacts: map[string]CLIArtifact{
+			"linux-amd64": {
+				URL:      "https://downloads.example/coyote_3.0.0_linux_amd64.tar.gz",
+				Filename: "coyote_3.0.0_linux_amd64.tar.gz",
+				Size:     12345,
+				SHA256:   strings.Repeat("1", 64),
+				BuildID:  "cli-build-300",
+			},
+		},
+		Compatibility: &Compatibility{
+			SchemaTarget: "57",
+			UpgradeFrom:  ">=2.5.0 <4.0.0",
+			Maintenance:  "active",
+		},
+	}
 }
 
 func TestManifestValidation(t *testing.T) {
@@ -99,6 +144,264 @@ func TestV2ManifestValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestV3ManifestValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Manifest)
+	}{
+		{"valid mixed-origin components", func(*Manifest) {}},
+		{"missing component build", func(m *Manifest) {
+			component := m.Components["mcp"]
+			component.Build = nil
+			m.Components["mcp"] = component
+		}},
+		{"mutable component image", func(m *Manifest) {
+			component := m.Components["server"]
+			component.Image = "registry.example/coyote-server:latest"
+			m.Components["server"] = component
+		}},
+		{"malformed component digest", func(m *Manifest) {
+			component := m.Components["worker"]
+			component.Image = "registry.example/coyote-worker@sha256:bad"
+			m.Components["worker"] = component
+		}},
+		{"missing helm package", func(m *Manifest) { m.Helm = nil }},
+		{"invalid helm name", func(m *Manifest) { m.Helm.Name = "coyote-worker" }},
+		{"helm version conflicts with release", func(m *Manifest) { m.Helm.Version = "3.0.1" }},
+		{"missing cli artifacts", func(m *Manifest) { m.CLIArtifacts = nil }},
+		{"corrupt cli checksum", func(m *Manifest) {
+			artifact := m.CLIArtifacts["linux-amd64"]
+			artifact.SHA256 = "bad"
+			m.CLIArtifacts["linux-amd64"] = artifact
+		}},
+		{"invalid cli filename", func(m *Manifest) {
+			artifact := m.CLIArtifacts["linux-amd64"]
+			artifact.Filename = "../coyote.tar.gz"
+			m.CLIArtifacts["linux-amd64"] = artifact
+		}},
+		{"invalid upgrade range", func(m *Manifest) { m.Compatibility.UpgradeFrom = ">=2.5.0" }},
+		{"empty upgrade range", func(m *Manifest) { m.Compatibility.UpgradeFrom = ">=3.0.0 <3.0.0" }},
+		{"descending upgrade range", func(m *Manifest) { m.Compatibility.UpgradeFrom = ">=4.0.0 <3.0.0" }},
+		{"invalid goose target", func(m *Manifest) { m.Compatibility.SchemaTarget = "00057" }},
+		{"invalid maintenance state", func(m *Manifest) { m.Compatibility.Maintenance = "unsupported" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := validV3Manifest()
+			tc.mutate(&manifest)
+			validateErr := manifest.Validate()
+			if tc.name == "valid mixed-origin components" && validateErr != nil {
+				t.Fatalf("validate: %v", validateErr)
+			}
+			if tc.name != "valid mixed-origin components" && validateErr == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestV3ManifestAllowsReusedComponentIdentity(t *testing.T) {
+	manifest := validV3Manifest()
+	reused := manifest.Components["mcp"]
+	manifest.Release = "3.1.0"
+	manifest.Assembly.BuildID = "assembly-build-310"
+	manifest.Assembly.Source = SourceIdentity{Commit: strings.Repeat("c", 40), CreatedAt: "2026-11-20T12:00:00Z"}
+	manifest.Helm.Version = manifest.Release
+	if validateErr := manifest.Validate(); validateErr != nil {
+		t.Fatalf("validate reused component manifest: %v", validateErr)
+	}
+	if got := manifest.Components["mcp"]; got != reused {
+		t.Fatalf("reused component identity changed: got %+v want %+v", got, reused)
+	}
+}
+
+func TestV3ManifestRejectsConflictingOrLegacyFields(t *testing.T) {
+	manifest := validV3Manifest()
+	data, marshalErr := json.Marshal(manifest)
+	if marshalErr != nil {
+		t.Fatalf("marshal manifest: %v", marshalErr)
+	}
+	var fields map[string]json.RawMessage
+	if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil {
+		t.Fatalf("decode manifest fields: %v", decodeErr)
+	}
+	for name, value := range map[string]json.RawMessage{
+		"release_id": json.RawMessage(`"conflicting-identity"`),
+		"source":     json.RawMessage(`{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","created_at":"2026-11-13T12:00:00Z"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			withField := make(map[string]json.RawMessage, len(fields)+1)
+			for key, fieldValue := range fields {
+				withField[key] = fieldValue
+			}
+			withField[name] = value
+			candidate, candidateMarshalErr := json.Marshal(withField)
+			if candidateMarshalErr != nil {
+				t.Fatalf("marshal candidate: %v", candidateMarshalErr)
+			}
+			if _, parseErr := ParseManifest(candidate); parseErr == nil {
+				t.Fatalf("expected %s to be rejected", name)
+			}
+		})
+	}
+}
+
+func TestV3ManifestRejectsUnknownNestedFields(t *testing.T) {
+	data, marshalErr := json.Marshal(validV3Manifest())
+	if marshalErr != nil {
+		t.Fatalf("marshal manifest: %v", marshalErr)
+	}
+	for _, path := range [][]string{
+		{"assembly", "unexpected"},
+		{"assembly", "source", "unexpected"},
+		{"components", "server", "unexpected"},
+		{"components", "server", "build", "unexpected"},
+		{"components", "server", "build", "source", "unexpected"},
+		{"helm", "unexpected"},
+		{"cli_artifacts", "linux-amd64", "unexpected"},
+		{"compatibility", "unexpected"},
+	} {
+		t.Run(strings.Join(path, "."), func(t *testing.T) {
+			candidate := addUnknownV3Field(t, data, path)
+			if _, parseErr := ParseManifest(candidate); parseErr == nil {
+				t.Fatalf("expected unknown nested field %q to be rejected", strings.Join(path, "."))
+			}
+		})
+	}
+}
+
+func TestLegacyManifestAllowsUnknownFields(t *testing.T) {
+	data, marshalErr := json.Marshal(validManifest())
+	if marshalErr != nil {
+		t.Fatalf("marshal legacy manifest: %v", marshalErr)
+	}
+	var fields map[string]json.RawMessage
+	if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil {
+		t.Fatalf("decode legacy manifest: %v", decodeErr)
+	}
+	fields["future_extension"] = json.RawMessage(`true`)
+	data, marshalErr = json.Marshal(fields)
+	if marshalErr != nil {
+		t.Fatalf("marshal extended legacy manifest: %v", marshalErr)
+	}
+	if _, parseErr := ParseManifest(data); parseErr != nil {
+		t.Fatalf("parse extended legacy manifest: %v", parseErr)
+	}
+}
+
+func TestLegacyManifestIgnoresV3Extensions(t *testing.T) {
+	for _, legacy := range []Manifest{validManifest(), validV2Manifest()} {
+		for _, extension := range []string{`{}`, `"historical"`, `42`, `true`, `[]`, `null`} {
+			t.Run(legacy.Release+"/"+extension, func(t *testing.T) {
+				data, marshalErr := json.Marshal(legacy)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				var fields map[string]json.RawMessage
+				if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil {
+					t.Fatal(decodeErr)
+				}
+				for _, name := range []string{"assembly", "helm", "cli_artifacts", "compatibility"} {
+					fields[name] = json.RawMessage(extension)
+				}
+				if legacy.SchemaVersion == ManifestSchemaVersionV2 {
+					var components map[string]map[string]json.RawMessage
+					if decodeErr := json.Unmarshal(fields["components"], &components); decodeErr != nil {
+						t.Fatal(decodeErr)
+					}
+					for _, component := range components {
+						component["build"] = json.RawMessage(extension)
+					}
+					componentData, componentErr := json.Marshal(components)
+					if componentErr != nil {
+						t.Fatal(componentErr)
+					}
+					fields["components"] = componentData
+				}
+				data, marshalErr = json.MarshalIndent(fields, "", "  ")
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				data = append(data, '\n')
+				parsed, parseErr := ParseManifest(data)
+				if parseErr != nil {
+					t.Fatalf("parse legacy extensions: %v", parseErr)
+				}
+				if !reflect.DeepEqual(parsed, legacy) {
+					t.Fatalf("extensions changed legacy metadata: %+v", parsed)
+				}
+				store, storeErr := NewFileStore(t.TempDir())
+				if storeErr != nil {
+					t.Fatal(storeErr)
+				}
+				_, digest, importErr := store.ImportManifest(context.Background(), data)
+				if importErr != nil {
+					t.Fatalf("import legacy extensions: %v", importErr)
+				}
+				stored, fetchErr := store.FetchManifest(context.Background(), legacy.Release)
+				if fetchErr != nil {
+					t.Fatal(fetchErr)
+				}
+				if !bytes.Equal(stored.Data, data) || digest != Digest(data) || stored.Digest != digest {
+					t.Fatal("legacy import changed stored bytes or digest")
+				}
+				resolved, resolveErr := Resolve(context.Background(), store, legacy.Release, "")
+				if resolveErr != nil {
+					t.Fatalf("resolve legacy extensions: %v", resolveErr)
+				}
+				if !reflect.DeepEqual(resolved.Manifest, legacy) || resolved.ManifestDigest != digest {
+					t.Fatal("resolution changed legacy metadata or digest")
+				}
+			})
+		}
+	}
+}
+
+func TestLegacyManifestStillRejectsMalformedKnownFields(t *testing.T) {
+	for _, legacy := range []Manifest{validManifest(), validV2Manifest()} {
+		t.Run(legacy.Release, func(t *testing.T) {
+			data, marshalErr := json.Marshal(legacy)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			var fields map[string]json.RawMessage
+			if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			fields["source"] = json.RawMessage(`"not an object"`)
+			data, marshalErr = json.Marshal(fields)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if _, parseErr := ParseManifest(data); parseErr == nil {
+				t.Fatal("expected malformed legacy source to be rejected")
+			}
+		})
+	}
+}
+
+func addUnknownV3Field(t *testing.T, data []byte, path []string) []byte {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil {
+		t.Fatalf("decode JSON object: %v", decodeErr)
+	}
+	if len(path) == 1 {
+		fields[path[0]] = json.RawMessage(`true`)
+	} else {
+		nested, found := fields[path[0]]
+		if !found {
+			t.Fatalf("missing JSON path %q", path[0])
+		}
+		fields[path[0]] = addUnknownV3Field(t, nested, path[1:])
+	}
+	updated, marshalErr := json.Marshal(fields)
+	if marshalErr != nil {
+		t.Fatalf("marshal JSON object: %v", marshalErr)
+	}
+	return updated
 }
 
 func TestManifestFormatExclusivityAfterJSONDecoding(t *testing.T) {
@@ -201,6 +504,37 @@ func TestV2ManifestParsingResolutionAndOverlay(t *testing.T) {
 	}
 }
 
+func TestV3ManifestParsingResolutionAndOverlay(t *testing.T) {
+	root := t.TempDir()
+	publisher, publisherErr := NewFilePublisher(root)
+	if publisherErr != nil {
+		t.Fatalf("publisher: %v", publisherErr)
+	}
+	manifest := validV3Manifest()
+	digest, publishErr := publisher.PublishManifest(context.Background(), manifest)
+	if publishErr != nil {
+		t.Fatalf("publish manifest: %v", publishErr)
+	}
+	source, sourceErr := NewFileSource(root)
+	if sourceErr != nil {
+		t.Fatalf("source: %v", sourceErr)
+	}
+	resolved, resolveErr := Resolve(context.Background(), source, manifest.Release, "")
+	if resolveErr != nil {
+		t.Fatalf("resolve: %v", resolveErr)
+	}
+	if got := resolved.Manifest.Components["mcp"].Build.ID; got != "mcp-build-240" {
+		t.Fatalf("unexpected reused component build identity: %q", got)
+	}
+	var output bytes.Buffer
+	if overlayErr := WriteValuesOverlay(&output, resolved); overlayErr != nil {
+		t.Fatalf("overlay: %v", overlayErr)
+	}
+	if !strings.Contains(output.String(), "mcp: "+manifest.Components["mcp"].Image) || !strings.Contains(output.String(), "manifestDigest: "+digest) {
+		t.Fatalf("unexpected v3 overlay:\n%s", output.String())
+	}
+}
+
 func TestManifestSerializationAndDigestCompatibility(t *testing.T) {
 	v1 := validManifest()
 	v1Data, marshalV1Err := json.MarshalIndent(v1, "", "  ")
@@ -224,6 +558,58 @@ func TestManifestSerializationAndDigestCompatibility(t *testing.T) {
 	second = append(second, '\n')
 	if string(first) != string(second) || Digest(first) != Digest(second) {
 		t.Fatal("v2 manifest serialization or digest is not deterministic")
+	}
+	v3 := validV3Manifest()
+	first, marshalFirstErr = json.MarshalIndent(v3, "", "  ")
+	if marshalFirstErr != nil {
+		t.Fatalf("marshal v3 first: %v", marshalFirstErr)
+	}
+	second, marshalSecondErr = json.MarshalIndent(v3, "", "  ")
+	if marshalSecondErr != nil {
+		t.Fatalf("marshal v3 second: %v", marshalSecondErr)
+	}
+	first = append(first, '\n')
+	second = append(second, '\n')
+	if string(first) != string(second) || Digest(first) != Digest(second) {
+		t.Fatal("v3 manifest serialization or digest is not deterministic")
+	}
+}
+
+func TestV3ManifestImportPreservesBytesAndRejectsConflicts(t *testing.T) {
+	root := t.TempDir()
+	publisher, publisherErr := NewFilePublisher(root)
+	if publisherErr != nil {
+		t.Fatalf("publisher: %v", publisherErr)
+	}
+	manifest := validV3Manifest()
+	data, marshalErr := json.MarshalIndent(manifest, "", "  ")
+	if marshalErr != nil {
+		t.Fatalf("marshal manifest: %v", marshalErr)
+	}
+	data = append(data, '\n')
+	_, firstDigest, firstImportErr := publisher.ImportManifest(context.Background(), data)
+	if firstImportErr != nil {
+		t.Fatalf("first import: %v", firstImportErr)
+	}
+	_, retryDigest, retryImportErr := publisher.ImportManifest(context.Background(), data)
+	if retryImportErr != nil || retryDigest != firstDigest {
+		t.Fatalf("identical retry digest=%s err=%v, want %s and nil", retryDigest, retryImportErr, firstDigest)
+	}
+	stored, fetchErr := publisher.FetchManifest(context.Background(), manifest.Release)
+	if fetchErr != nil {
+		t.Fatalf("fetch stored manifest: %v", fetchErr)
+	}
+	if !bytes.Equal(stored.Data, data) || stored.Digest != firstDigest {
+		t.Fatalf("stored document was not preserved: digest=%s", stored.Digest)
+	}
+	manifest.Compatibility.Maintenance = "maintenance"
+	conflictingData, marshalConflictErr := json.MarshalIndent(manifest, "", "  ")
+	if marshalConflictErr != nil {
+		t.Fatalf("marshal conflicting manifest: %v", marshalConflictErr)
+	}
+	conflictingData = append(conflictingData, '\n')
+	if _, _, conflictErr := publisher.ImportManifest(context.Background(), conflictingData); !errors.Is(conflictErr, ErrManifestConflict) {
+		t.Fatalf("conflicting import error=%v, want %v", conflictErr, ErrManifestConflict)
 	}
 }
 
