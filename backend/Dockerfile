@@ -47,17 +47,17 @@ ARG COYOTE_COMMIT=unknown
 ARG COYOTE_BUILD_DATE=
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_APPLICATION_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o mcp ./cmd/mcp
 
-FROM base AS migration-builder
+FROM source AS migration-builder
 
-RUN go install github.com/pressly/goose/v3/cmd/goose@v3.24.1
+RUN CGO_ENABLED=0 GOOS=linux go build -o migrate ./cmd/migrate
 
 FROM runtime-base AS migrate-runtime
 
-COPY --from=migration-builder /go/bin/goose /usr/local/bin/goose
+COPY --from=migration-builder /app/migrate /usr/local/bin/migrate
 COPY db/migrations /migrations
 
-ENTRYPOINT ["/bin/sh", "-ec"]
-CMD ["if [ -n \"${DATABASE_URL_FILE:-}\" ]; then if [ ! -r \"$DATABASE_URL_FILE\" ]; then echo \"DATABASE_URL_FILE is not readable: $DATABASE_URL_FILE\" >&2; exit 1; fi; DATABASE_URL=\"$(cat \"$DATABASE_URL_FILE\")\"; fi; if [ -z \"${DATABASE_URL:-}\" ]; then echo \"DATABASE_URL or DATABASE_URL_FILE is required\" >&2; exit 1; fi; exec goose -dir /migrations postgres \"$DATABASE_URL\" up"]
+ENTRYPOINT ["/usr/local/bin/migrate"]
+CMD ["up"]
 
 FROM base AS dev
 

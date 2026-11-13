@@ -23,6 +23,9 @@ release:
   version: ""
   channel: ""
   manifestDigest: ""
+compatibility:
+  schema_target: ""
+  upgrade_from: ""
 
 serviceAccounts:
   server:
@@ -139,8 +142,10 @@ frontend:
     limits: {cpu: 250m, memory: 256Mi, ephemeral-storage: 256Mi}
 
 migration:
-  render: false
-  runID: ""
+  activeDeadlineSeconds: 600
+  sourceVersion: ""
+  onlineUpgradeApproved: false
+  maintenanceAcknowledged: false
   resources:
     requests: {cpu: 250m, memory: 256Mi, ephemeral-storage: 128Mi}
     limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 256Mi}

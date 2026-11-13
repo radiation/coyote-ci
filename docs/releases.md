@@ -44,7 +44,19 @@ the target only, while Goose remains responsible for tracking and applying
 migrations. `compatibility.upgrade_from` is a nonempty, ascending, half-open
 semantic-version interval written exactly as `>=MIN_VERSION <MAX_VERSION`, with
 one ASCII space between comparators; compatibility is declarative in V3.
-`maintenance` is one of `active`, `maintenance`, or `end-of-life`.
+`maintenance` is one of `active`, `maintenance`, or `end-of-life`. It is not a
+downtime authorization flag.
+
+V3 Helm image overlays carry `compatibility.schema_target` and `upgrade_from`
+without changing manifest bytes or the V3 contract. The automatic migration hook
+checks the declared target against the bundled migration files before database
+writes and checks Goose history under an advisory lock. Publishers must verify
+the target against the exact image digest (`docker run --rm "$COYOTE_MIGRATE_IMAGE"
+target`); runtime verification does not replace publication validation or SQL
+immutability. A supported source range alone does not certify online-safe DDL.
+Online and maintenance approvals, missing source history, timeout/retry behavior,
+and the application-only rollback boundary are documented in the
+[migration runbook](../deploy/docs/database-migrations.md).
 
 ```json
 {

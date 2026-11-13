@@ -1,15 +1,23 @@
-{{- if .Values.migration.render }}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: coyote-migrate-{{ .Values.migration.runID }}
+  name: coyote-migrate-{{ .Release.Name | trunc 25 | trimSuffix "-" }}-{{ .Release.Revision }}
   namespace: {{ (include "coyote-ci.namespace" .) }}
+  labels:
+    app.kubernetes.io/name: coyote-migrate
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
   template:
     metadata:
       labels:
         app.kubernetes.io/name: coyote-migrate
+        app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       restartPolicy: Never
       serviceAccountName: {{ .Values.serviceAccounts.migrate.name }}
@@ -20,9 +28,18 @@ spec:
         - name: migrate
           image: {{ .Values.images.migrate }}
           imagePullPolicy: IfNotPresent
+          args: [{{ printf "-timeout=%ds" (sub (int .Values.migration.activeDeadlineSeconds) 30) | quote }}, "up"]
           env:
             - name: DATABASE_URL_FILE
               value: /var/run/secrets/coyote/database-url
+            - name: MIGRATION_SCHEMA_TARGET
+              value: {{ .Values.compatibility.schema_target | quote }}
+            - name: MIGRATION_GUARD_UPGRADE
+              value: "true"
+            - name: MIGRATION_ONLINE_APPROVED
+              value: {{ include "coyote-ci.onlineMigrationApproved" . | quote }}
+            - name: MIGRATION_MAINTENANCE_ACKNOWLEDGED
+              value: {{ .Values.migration.maintenanceAcknowledged | quote }}
           resources: {{- toYaml .Values.migration.resources | nindent 12 }}
           volumeMounts:
             - name: database-url
@@ -33,7 +50,13 @@ spec:
         - name: cloud-sql-proxy
           image: {{ .Values.images.cloudSqlProxy }}
           restartPolicy: Always
-          args: [{{ printf "--address=%s" .Values.cloudSql.proxy.address | quote }}, {{ printf "--port=%v" .Values.cloudSql.proxy.port | quote }}, {{ .Values.cloudSql.connectionName | quote }}]
+          args: ["--health-check", {{ printf "--address=%s" .Values.cloudSql.proxy.address | quote }}, {{ printf "--port=%v" .Values.cloudSql.proxy.port | quote }}, {{ .Values.cloudSql.connectionName | quote }}]
+          startupProbe:
+            exec:
+              command: ["/cloud-sql-proxy", "wait", "--max=60s"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 24
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
@@ -43,4 +66,3 @@ spec:
           {{- end }}
       volumes:
         {{- include "coyote-ci.secretVolume" (dict "root" . "name" "database-url" "providerClass" "coyote-migrate-secrets" "databaseOnly" true) | nindent 8 }}
-{{- end }}

@@ -96,11 +96,11 @@ control_archive="$package_dir/coyote-ci-$control_version.tgz"
 
 validate_archive_contents "$control_archive" coyote-ci
 render_and_compare coyote-ci "$control_chart" "$control_values" "$control_archive" coyote-ci
-render_and_compare coyote-ci "$control_chart" "$control_values" "$control_archive" coyote-ci --set migration.render=true --set migration.runID=package-check
+render_and_compare coyote-ci "$control_chart" "$control_values" "$control_archive" coyote-ci --is-upgrade
 render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-control-plane-values.yaml" "$control_archive" portable-control
-render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-control-plane-values.yaml" "$control_archive" portable-control --set migration.render=true --set migration.runID=package-check
+render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-control-plane-values.yaml" "$control_archive" portable-control --is-upgrade
 render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-values.yaml" "$control_archive" portable-control
-render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-values.yaml" "$control_archive" portable-control --set server.replicas=0 --set frontend.replicas=0 --set worker.replicas=0 --set migration.render=true --set migration.runID=package-check
+render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-values.yaml" "$control_archive" portable-control --is-upgrade
 for profile in staging production; do
   render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/gke-$profile-control-plane-values.yaml" "$control_archive" coyote-ci --values "$repo_root/deploy/helm/examples/gke-$profile-unified-worker-values.yaml"
 done

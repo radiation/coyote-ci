@@ -10,7 +10,11 @@ kind: ServiceAccount
 metadata:
   name: {{ .Values.serviceAccounts.migrate.name }}
   namespace: {{ (include "coyote-ci.namespace" .) }}
-  {{- include "coyote-ci.annotations" (dict "root" . "account" .Values.serviceAccounts.migrate) | nindent 2 }}
+  {{- $account := deepCopy .Values.serviceAccounts.migrate }}
+  {{- $_ := set $account.annotations "helm.sh/hook" "pre-install,pre-upgrade" }}
+  {{- $_ := set $account.annotations "helm.sh/hook-weight" "-30" }}
+  {{- $_ := set $account.annotations "helm.sh/hook-delete-policy" "before-hook-creation" }}
+  {{- include "coyote-ci.annotations" (dict "root" . "account" $account) | nindent 2 }}
 {{- if .Values.mcp.enabled }}
 ---
 apiVersion: v1
