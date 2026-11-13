@@ -460,6 +460,13 @@ input[type="radio"] {
   gap: 16px;
 }
 
+.sidebar-version {
+  margin: 14px 12px 0;
+  color: var(--color-text-subtle);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
 .sidebar-section {
   padding: 14px;
   border: 1px solid var(--color-border);

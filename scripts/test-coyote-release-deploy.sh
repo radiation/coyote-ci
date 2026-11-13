@@ -62,9 +62,16 @@ case "$1" in
     fi
     ;;
   status)
-    if [[ "$2" == coyote-ci-worker ]]; then printf '%s\n' '{"chart":"coyote-ci-worker-0.1.0","version":1}'; else printf '%s\n' '{"chart":"coyote-ci-0.1.0","version":1}'; fi
+    if [[ "$2" == coyote-ci-worker ]]; then printf '%s\n' '{"chart":{"metadata":{"name":"coyote-ci-worker","version":"0.1.0"}}}'; else printf '%s\n' '{"chart":{"metadata":{"name":"coyote-ci","version":"0.1.0"}}}'; fi
     ;;
   template)
+    if [[ "$2" == coyote-ci ]]; then
+      overlay=""
+      for ((index = 1; index <= $#; index++)); do
+        if [[ "${!index}" == --values ]]; then next=$((index + 1)); overlay="${!next}"; fi
+      done
+      jq -e '.release.channel == ""' "$overlay" >/dev/null
+    fi
     if [[ "${TEST_HELM_TAGGED_MANIFEST_IMAGES:-false}" == true ]]; then
       if [[ "$2" == coyote-ci-worker ]]; then image="$TEST_WORKER_IMAGE"; else image="registry.example/coyote-server@$TEST_SERVER_IMAGE"; fi
       printf '%s\n' 'apiVersion: apps/v1' 'kind: Deployment' 'spec:' '  template:' '    spec:' '      containers:' '      - name: test' "        image: $image"

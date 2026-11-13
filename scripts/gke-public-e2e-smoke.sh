@@ -225,7 +225,7 @@ pipeline_yaml=$(cat <<'YAML'
 version: 1
 pipeline:
   name: gke-staging-public-e2e
-  image: golang:1.27.3
+  image: golang:1.27.4
 steps:
   - name: prepare
     run: |

@@ -44,7 +44,7 @@ func TestReleaseResolveCommand(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("read output: %v", readErr)
 	}
-	if !strings.Contains(string(data), "server: registry.example/coyote-server@sha256:") || !strings.Contains(string(data), "worker: registry.example/coyote-worker@sha256:") {
+	if !strings.Contains(string(data), "server: registry.example/coyote-server@sha256:") || !strings.Contains(string(data), "worker: registry.example/coyote-worker@sha256:") || !strings.Contains(string(data), "channel: \"\"") {
 		t.Fatalf("unexpected output: %s", data)
 	}
 
@@ -55,6 +55,13 @@ func TestReleaseResolveCommand(t *testing.T) {
 	channelOutput := filepath.Join(t.TempDir(), "stable.yaml")
 	if code := Run(Dependencies{Stdout: &bytes.Buffer{}, Stderr: stderr, Args: []string{"release", "resolve", "--channel", "stable", "--release-source", publishSource, "--output", channelOutput}}); code != 0 {
 		t.Fatalf("channel resolve exit %d stderr=%s", code, stderr.String())
+	}
+	channelData, channelReadErr := os.ReadFile(channelOutput)
+	if channelReadErr != nil {
+		t.Fatalf("read channel output: %v", channelReadErr)
+	}
+	if !strings.Contains(string(channelData), "channel: \"stable\"") {
+		t.Fatalf("unexpected channel output: %s", channelData)
 	}
 }
 

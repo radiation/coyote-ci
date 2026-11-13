@@ -7,6 +7,9 @@ worker_chart="$repo_root/deploy/helm/coyote-ci-worker"
 control_values="${GKE_HELM_CONTROL_PLANE_VALUES:-$repo_root/.local/helm/gke-staging-control-plane-values.yaml}"
 worker_values="${GKE_HELM_WORKER_VALUES:-$repo_root/.local/helm/gke-staging-worker-values.yaml}"
 release_values="${GKE_HELM_RELEASE_VALUES:-}"
+deployment_topology="${GKE_HELM_DEPLOYMENT_TOPOLOGY:-control-plane-and-worker}"
+migration_mode="${GKE_HELM_MIGRATION_MODE:-required}"
+migration_free_confirmed="${GKE_HELM_MIGRATION_FREE_CONFIRMED:-false}"
 control_namespace="${GKE_HELM_CONTROL_PLANE_NAMESPACE:-coyote-ci}"
 worker_namespace="${GKE_HELM_WORKER_NAMESPACE:-coyote-ci-staging}"
 control_release="${GKE_HELM_CONTROL_PLANE_RELEASE:-coyote-ci}"
@@ -87,10 +90,24 @@ require_command kubectl
 require_command ruby
 
 [[ -f "$control_values" ]] || fail "control-plane values file does not exist: $control_values"
-[[ -f "$worker_values" ]] || fail "worker values file does not exist: $worker_values"
+if [[ "$deployment_topology" == "control-plane-and-worker" ]]; then
+  [[ -f "$worker_values" ]] || fail "worker values file does not exist: $worker_values"
+fi
 [[ -z "$release_values" || -f "$release_values" ]] || fail "release values file does not exist: $release_values"
+[[ "$deployment_topology" == "control-plane-only" || "$deployment_topology" == "control-plane-and-worker" ]] || fail "GKE_HELM_DEPLOYMENT_TOPOLOGY must be control-plane-only or control-plane-and-worker"
+[[ "$migration_mode" == "none" || "$migration_mode" == "required" ]] || fail "GKE_HELM_MIGRATION_MODE must be none or required"
+[[ "$migration_free_confirmed" == "true" || "$migration_free_confirmed" == "false" ]] || fail "GKE_HELM_MIGRATION_FREE_CONFIRMED must be true or false"
+if [[ "$deployment_topology" == "control-plane-only" && "$migration_mode" != "none" ]]; then
+  fail "control-plane-only rollouts require GKE_HELM_MIGRATION_MODE=none; use control-plane-and-worker with GKE_HELM_MIGRATION_MODE=required for guarded migrations"
+fi
+if [[ "$deployment_topology" == "control-plane-and-worker" && "$migration_mode" != "required" ]]; then
+  fail "control-plane-and-worker rollouts require GKE_HELM_MIGRATION_MODE=required"
+fi
 [[ "$dry_run" == "true" || "$dry_run" == "false" ]] || fail "GKE_HELM_DRY_RUN must be true or false"
 [[ "$operation" == "start" || "$operation" == "status" || "$operation" == "resume" || "$operation" == "restore-replicas" ]] || fail "GKE_HELM_OPERATION must be start, status, resume, or restore-replicas"
+if [[ "$migration_mode" == "none" && "$operation" != "start" && "$operation" != "status" ]]; then
+  fail "migration-free rollouts support only GKE_HELM_OPERATION=start or status"
+fi
 [[ "$unmanaged_mcp_database_isolation_confirmed" == "true" || "$unmanaged_mcp_database_isolation_confirmed" == "false" ]] || fail "GKE_HELM_UNMANAGED_MCP_DATABASE_ISOLATION_CONFIRMED must be true or false"
 [[ "$restore_replicas_confirmed" == "true" || "$restore_replicas_confirmed" == "false" ]] || fail "GKE_HELM_RESTORE_REPLICAS_CONFIRMED must be true or false"
 [[ "$missing_state_reconciliation_confirmed" == "true" || "$missing_state_reconciliation_confirmed" == "false" ]] || fail "GKE_HELM_MISSING_STATE_RECONCILIATION_CONFIRMED must be true or false"
@@ -101,14 +118,23 @@ require_command ruby
 [[ "$worker_release" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || fail "invalid worker release: $worker_release"
 [[ "$lease_duration_seconds" =~ ^[1-9][0-9]*$ ]] || fail "GKE_HELM_LEASE_DURATION_SECONDS must be a positive integer"
 
-if [[ "$operation" != "status" || "$dry_run" != "true" ]]; then
+if [[ "$migration_mode" == "required" && ( "$operation" != "status" || "$dry_run" != "true" ) ]]; then
   [[ "$rollout_id" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ && ${#rollout_id} -le 48 ]] || fail "HELM_ROLLOUT_ID must be a Kubernetes-safe lowercase identifier of at most 48 characters"
+fi
+if [[ "$migration_mode" == "none" ]]; then
+  [[ -n "$expected_context" ]] || fail "GKE_HELM_EXPECTED_CONTEXT is required for migration-free rollouts"
+  [[ -n "$expected_cluster_uid" ]] || fail "GKE_HELM_EXPECTED_CLUSTER_UID is required for migration-free rollouts"
+  [[ "$migration_free_confirmed" == "true" ]] || fail "GKE_HELM_MIGRATION_FREE_CONFIRMED=true is required to acknowledge that this release needs no database migration"
 fi
 if [[ "$target_environment" == "production" && "$dry_run" != "true" ]]; then
   [[ -n "$expected_context" ]] || fail "GKE_HELM_EXPECTED_CONTEXT is required for state-changing production operations"
   [[ -n "$expected_cluster_uid" ]] || fail "GKE_HELM_EXPECTED_CLUSTER_UID is required for state-changing production operations"
-  [[ "$control_namespace" == "coyote-ci" && "$worker_namespace" == "coyote-ci" ]] || fail "production rollout namespaces must both be coyote-ci"
-  [[ "$control_release" == "coyote-ci" && "$worker_release" == "coyote-ci-worker" ]] || fail "production Helm release names must be coyote-ci and coyote-ci-worker"
+  [[ "$control_namespace" == "coyote-ci" ]] || fail "production control-plane namespace must be coyote-ci"
+  [[ "$control_release" == "coyote-ci" ]] || fail "production control-plane Helm release must be coyote-ci"
+  if [[ "$migration_mode" == "required" ]]; then
+    [[ "$worker_namespace" == "coyote-ci" ]] || fail "production guarded migration worker namespace must be coyote-ci"
+    [[ "$worker_release" == "coyote-ci-worker" ]] || fail "production guarded migration worker Helm release must be coyote-ci-worker"
+  fi
 fi
 
 state_file="$state_dir/${target_environment}-${rollout_id}.json"
@@ -140,7 +166,55 @@ worker_deployment_name() {
 }
 
 mcp_enabled() {
-  ruby -ryaml -e 'puts YAML.load_file(ARGV.fetch(0)).fetch("mcp", {}).fetch("enabled", false) == true' "$control_values"
+  ruby -ryaml -e 'puts YAML.load_file(ARGV.fetch(0)).fetch("mcp", {}).fetch("enabled", false) == true' "$1"
+}
+
+verify_routine_effective_values() {
+  local deployed_values="$1"
+  local effective_values="$2"
+  ruby -ryaml -e '
+    def merge(left, right)
+      left.merge(right) { |_key, old, new| old.is_a?(Hash) && new.is_a?(Hash) ? merge(old, new) : new }
+    end
+
+    def migration_inputs(values)
+      {
+        "migration" => values["migration"],
+        "migrate_service_account" => values.dig("serviceAccounts", "migrate"),
+        "cloud_sql" => values["cloudSql"],
+        "database_secret_project" => values.dig("secrets", "project"),
+        "database_secret" => values.dig("secrets", "databaseUrl"),
+        "gke" => values["gke"]
+      }
+    end
+
+    deployed_path, control_path, release_path, output_path = ARGV
+    deployed = YAML.load_file(deployed_path) || {}
+    control = YAML.load_file(control_path) || {}
+    release = release_path.empty? ? {} : (YAML.load_file(release_path) || {})
+    effective = merge(merge(deployed, control), release)
+    effective["release"]["channel"] = "" if effective["release"].is_a?(Hash) && effective["release"].key?("channel") && effective["release"]["channel"].nil?
+    abort "routine migration-free rollout changes migration configuration inputs from deployed Helm values" unless migration_inputs(deployed) == migration_inputs(effective)
+    abort "routine migration-free rollout requires inherited migration.render=false" unless effective.dig("migration", "render") == false
+    images = {"server" => effective.dig("images", "server"), "frontend" => effective.dig("images", "frontend"), "migrate" => effective.dig("images", "migrate")}
+    images["mcp"] = effective.dig("images", "mcp") if effective.dig("mcp", "enabled") == true
+    abort "effective routine release images must use complete SHA-256 digest references" unless images.values.all? { |value| value.is_a?(String) && value.match?(/\A.+@sha256:[0-9a-f]{64}\z/) }
+    File.write(output_path, YAML.dump(effective))
+  ' "$deployed_values" "$control_values" "$release_values" "$effective_values"
+}
+
+verify_routine_manifest() {
+  ruby -ryaml -e '
+    documents = YAML.load_stream(STDIN.read).compact
+    unsafe = documents.flat_map do |document|
+      next [] unless document.is_a?(Hash)
+      metadata = document.fetch("metadata", {})
+      name = metadata["name"] || "unnamed"
+      hook = metadata.fetch("annotations", {})["helm.sh/hook"]
+      [document["kind"] == "Job" ? "Job/#{name}" : nil, hook ? "hook/#{name}" : nil].compact
+    end
+    abort "routine migration-free Helm render contains Jobs or hooks: #{unsafe.join(", ")}" unless unsafe.empty?
+  '
 }
 
 release_identity() {
@@ -149,16 +223,19 @@ release_identity() {
       left.merge(right) { |_key, old, new| old.is_a?(Hash) && new.is_a?(Hash) ? merge(old, new) : new }
     end
     control = YAML.load_file(ARGV.fetch(0)) || {}
-    worker = YAML.load_file(ARGV.fetch(1)) || {}
+    worker = ARGV.fetch(1).empty? ? {} : (YAML.load_file(ARGV.fetch(1)) || {})
     overlay = ARGV.fetch(2).empty? ? {} : (YAML.load_file(ARGV.fetch(2)) || {})
+    migration_mode = ARGV.fetch(3)
     control = merge(control, overlay)
     worker = merge(worker, overlay)
     images = {
       "server" => control.dig("images", "server"),
-      "frontend" => control.dig("images", "frontend"),
-      "migrate" => control.dig("images", "migrate"),
-      "worker" => worker.dig("images", "worker")
+      "frontend" => control.dig("images", "frontend")
     }
+    if migration_mode == "required"
+      images["migrate"] = control.dig("images", "migrate")
+      images["worker"] = worker.dig("images", "worker")
+    end
     mcp_enabled = control.dig("mcp", "enabled") == true
     images["mcp"] = control.dig("images", "mcp") if mcp_enabled
     abort "release images must use complete SHA-256 digest references" unless images.values.all? { |value| value.is_a?(String) && value.match?(/\A.+@sha256:[0-9a-f]{64}\z/) }
@@ -173,7 +250,7 @@ release_identity() {
     }
     record["mcp_enabled"] = true if mcp_enabled
     puts JSON.generate(record)
-  ' "$control_values" "$worker_values" "$release_values"
+  ' "$control_values" "$( [[ "$migration_mode" == "required" ]] && printf '%s' "$worker_values" )" "$release_values" "$migration_mode"
 }
 
 current_context() {
@@ -191,7 +268,7 @@ verify_target_identity() {
   if [[ -n "$expected_context" && "$actual_context" != "$expected_context" ]]; then
     fail "active Kubernetes context $actual_context does not match expected context $expected_context"
   fi
-  if [[ "$target_environment" == "production" || -n "$expected_cluster_uid" ]]; then
+  if [[ "$migration_mode" == "none" || "$target_environment" == "production" || -n "$expected_cluster_uid" ]]; then
     actual_cluster_uid="$(current_cluster_uid)"
     [[ "$actual_cluster_uid" == "$expected_cluster_uid" ]] || fail "active Kubernetes cluster identity does not match the configured target"
   else
@@ -678,6 +755,11 @@ restore_replicas() {
 }
 
 print_status() {
+  if [[ "$migration_mode" == "none" ]]; then
+    echo "routine_topology=control-plane-only"
+    echo "control_helm_revision=$(helm_revision "$control_release" "$control_namespace")"
+    return
+  fi
   if [[ ! -f "$state_file" ]]; then
     echo "no local rollout state exists for rollout_id=$rollout_id environment=$target_environment"
     echo "inspect migration Jobs and Helm releases before starting a rollout with this ID"
@@ -690,23 +772,23 @@ print_status() {
   echo "worker_helm_revision=$(helm_revision "$worker_release" "$worker_namespace")"
 }
 
-worker_deployment="$(worker_deployment_name)"
 control_values_args=(--values "$control_values")
-worker_values_args=(--values "$worker_values")
 if [[ -n "$release_values" ]]; then
   control_values_args+=(--values "$release_values")
-  worker_values_args+=(--values "$release_values")
 fi
-mcp_replicas=""
-mcp_is_desired=false
-if [[ "$(mcp_enabled)" == "true" ]]; then
-  mcp_is_desired=true
-  mcp_replicas="$(external_replica_value "$control_values" mcp)"
+if [[ "$migration_mode" == "required" ]]; then
+  worker_deployment="$(worker_deployment_name)"
+  worker_values_args=(--values "$worker_values")
+  if [[ -n "$release_values" ]]; then
+    worker_values_args+=(--values "$release_values")
+  fi
 fi
 
 release_json="$(release_identity)"
 release_fingerprint="$(ruby -rjson -e 'puts JSON.parse(STDIN.read).fetch("fingerprint")' <<<"$release_json")"
-expected_migration_image="$(ruby -rjson -e 'puts JSON.parse(STDIN.read).fetch("images").fetch("migrate")' <<<"$release_json")"
+if [[ "$migration_mode" == "required" ]]; then
+  expected_migration_image="$(ruby -rjson -e 'puts JSON.parse(STDIN.read).fetch("images").fetch("migrate")' <<<"$release_json")"
+fi
 
 if [[ "$operation" == "status" ]]; then
   verify_target_identity
@@ -716,22 +798,29 @@ fi
 
 verify_target_identity
 
+if [[ "$migration_mode" == "none" ]]; then
+  lease_acquire
+  start_lease_renewal
+  routine_deployed_values="$(mktemp "${TMPDIR:-/tmp}/coyote-routine-values.XXXXXX")"
+  routine_effective_values="$(mktemp "${TMPDIR:-/tmp}/coyote-routine-values.XXXXXX")"
+  helm get values "$control_release" --namespace "$control_namespace" --all --output yaml >"$routine_deployed_values"
+  verify_routine_effective_values "$routine_deployed_values" "$routine_effective_values" || fail "routine migration-free preflight rejected the effective Helm values"
+  rm -f "$routine_deployed_values"
+  mcp_values="$routine_effective_values"
+else
+  mcp_values="$control_values"
+fi
+mcp_replicas=""
+mcp_is_desired=false
+if [[ "$(mcp_enabled "$mcp_values")" == "true" ]]; then
+  mcp_is_desired=true
+  mcp_replicas="$(external_replica_value "$mcp_values" mcp)"
+fi
+
 # Rendering validates the supplied digest-pinned images and chart-required inputs before mutation.
 helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" >/dev/null
-helm template "$worker_release" "$worker_chart" --namespace "$worker_namespace" "${worker_values_args[@]}" >/dev/null
 gateway_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" --show-only templates/gateway.yaml)"
-migrator_prerequisite_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" --show-only templates/identities-rbac.yaml --show-only templates/secrets.yaml | ruby -ryaml -e '
-  documents = YAML.load_stream(STDIN.read).compact
-  required = [["v1", "ServiceAccount", "coyote-migrate"], ["secrets-store.csi.x-k8s.io/v1", "SecretProviderClass", "coyote-migrate-secrets"]]
-  selected = required.map { |api_version, kind, name| documents.find { |document| document["apiVersion"] == api_version && document["kind"] == kind && document.dig("metadata", "name") == name } }
-  missing = required.zip(selected).map { |resource, document| resource.join("/") unless document }.compact
-  abort "missing migrator prerequisite resources: #{missing.join(", ")}" unless missing.empty?
-  puts YAML.dump_stream(*selected)
-')"
-migration_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" --show-only templates/migration-job.yaml --set migration.render=true --set "migration.runID=$rollout_id")"
-[[ -n "$migration_manifest" ]] || fail "migration render did not produce a Job"
 helm status "$control_release" --namespace "$control_namespace" >/dev/null || fail "control-plane Helm release is not installed; ownership adoption must complete before Helm rollout"
-helm status "$worker_release" --namespace "$worker_namespace" >/dev/null || fail "worker Helm release is not installed; ownership adoption must complete before Helm rollout"
 
 mcp_state="$(mcp_deployment_state)" || exit $?
 case "$mcp_state:$mcp_is_desired" in
@@ -743,6 +832,40 @@ case "$mcp_state:$mcp_is_desired" in
     ;;
   other:false) fail "coyote-mcp is owned by another or partial Helm release; refusing to continue while it remains unmanaged by $control_release" ;;
 esac
+
+if [[ "$migration_mode" == "none" ]]; then
+  routine_values_args=(--values "$routine_effective_values")
+  if ! helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" "${routine_values_args[@]}" --reuse-values --wait --timeout "${timeout_seconds}s" --dry-run=client >/dev/null; then
+    rm -f "$routine_effective_values"
+    fail "routine migration-free preflight rejected the Helm upgrade values"
+  fi
+  routine_rendered_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${routine_values_args[@]}")"
+  verify_routine_manifest <<<"$routine_rendered_manifest" || fail "routine migration-free preflight rejected rendered Jobs or hooks"
+  echo "Routine control-plane-only Helm upgrade; no migration Job or workload quiescence is authorized."
+  run helm upgrade "$control_release" "$control_chart" --namespace "$control_namespace" "${routine_values_args[@]}" --reuse-values --wait --timeout "${timeout_seconds}s"
+  rm -f "$routine_effective_values"
+  run kubectl -n "$control_namespace" rollout status deployment/coyote-server --timeout="${timeout_seconds}s"
+  run kubectl -n "$control_namespace" rollout status deployment/coyote-frontend --timeout="${timeout_seconds}s"
+  if [[ "$mcp_is_desired" == "true" && "$mcp_state" == "managed" ]]; then
+    run kubectl -n "$control_namespace" rollout status deployment/coyote-mcp --timeout="${timeout_seconds}s"
+  fi
+  lease_release
+  echo "Routine control-plane-only Helm upgrade completed."
+  exit 0
+fi
+
+helm template "$worker_release" "$worker_chart" --namespace "$worker_namespace" "${worker_values_args[@]}" >/dev/null
+migrator_prerequisite_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" --show-only templates/identities-rbac.yaml --show-only templates/secrets.yaml | ruby -ryaml -e '
+  documents = YAML.load_stream(STDIN.read).compact
+  required = [["v1", "ServiceAccount", "coyote-migrate"], ["secrets-store.csi.x-k8s.io/v1", "SecretProviderClass", "coyote-migrate-secrets"]]
+  selected = required.map { |api_version, kind, name| documents.find { |document| document["apiVersion"] == api_version && document["kind"] == kind && document.dig("metadata", "name") == name } }
+  missing = required.zip(selected).map { |resource, document| resource.join("/") unless document }.compact
+  abort "missing migrator prerequisite resources: #{missing.join(", ")}" unless missing.empty?
+  puts YAML.dump_stream(*selected)
+')"
+migration_manifest="$(helm template "$control_release" "$control_chart" --namespace "$control_namespace" "${control_values_args[@]}" --show-only templates/migration-job.yaml --set migration.render=true --set "migration.runID=$rollout_id")"
+[[ -n "$migration_manifest" ]] || fail "migration render did not produce a Job"
+helm status "$worker_release" --namespace "$worker_namespace" >/dev/null || fail "worker Helm release is not installed; ownership adoption must complete before Helm rollout"
 
 if [[ "$operation" == "start" ]]; then
   [[ ! -f "$state_file" ]] || fail "rollout state already exists: $state_file; use GKE_HELM_OPERATION=status, resume, or restore-replicas"

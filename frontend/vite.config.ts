@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { THEME_STORAGE_KEY } from "./src/theme-shared";
+import { applicationVersionDefine } from "./build-version";
 
 const backendTarget = process.env.VITE_API_BASE || "http://localhost:8080";
 
@@ -14,6 +15,9 @@ export default defineConfig({
     },
     react(),
   ],
+  define: {
+    __COYOTE_VERSION__: applicationVersionDefine,
+  },
   server: {
     port: 3000,
     proxy: {

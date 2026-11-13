@@ -99,6 +99,9 @@ describe("Layout", () => {
       expect(screen.getByRole("link", { name: "Artifacts" })).toHaveClass(
         "is-active",
       );
+      expect(screen.getByLabelText("Application version")).toHaveTextContent(
+        "Coyote CI 0.0.11",
+      );
       expect(screen.getByRole("link", { name: "Profile" })).toBeTruthy();
       expect(
         screen.getByRole("link", { name: "My notifications" }),

@@ -598,10 +598,10 @@ func WriteValuesOverlay(w io.Writer, resolved Resolved) error {
 			images[name] = component.Image
 		}
 	}
-	format := "release:\n  version: %s\n  channel: %s\n  manifestDigest: %s\nimages:\n  server: %s\n  frontend: %s\n  worker: %s\n  migrate: %s\n"
+	format := "release:\n  version: %s\n  channel: %q\n  manifestDigest: %s\nimages:\n  server: %s\n  frontend: %s\n  worker: %s\n  migrate: %s\n"
 	arguments := []any{resolved.Manifest.Release, resolved.Channel, resolved.ManifestDigest, images["server"], images["frontend"], images["worker"], images["migrate"]}
 	if resolved.Manifest.SchemaVersion == ManifestSchemaVersionV2 {
-		format = "release:\n  version: %s\n  channel: %s\n  manifestDigest: %s\nimages:\n  server: %s\n  frontend: %s\n  worker: %s\n  migrate: %s\n  mcp: %s\n"
+		format = "release:\n  version: %s\n  channel: %q\n  manifestDigest: %s\nimages:\n  server: %s\n  frontend: %s\n  worker: %s\n  migrate: %s\n  mcp: %s\n"
 		arguments = append(arguments, images["mcp"])
 	}
 	_, err := fmt.Fprintf(w, format, arguments...)

@@ -131,7 +131,8 @@ write_profile "file://$temp_dir/store"
 TEST_PREDECESSOR_MANIFEST="$(write_manifest)"
 TEST_CHANGED_FILES='frontend/src/App.tsx'
 reset_logs
-run_facade plan --release 0.0.11 --from latest --target production --profile "$temp_dir/profile.json" --build-date 2026-11-11T12:00:00Z --output "$temp_dir/approved.json" >/dev/null
+run_facade plan --release 0.0.11 --from latest --target production --profile "$temp_dir/profile.json" --output "$temp_dir/approved.json" >/dev/null
+jq -e '.fixed_inputs.build_date | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")' "$temp_dir/approved.json" >/dev/null
 approved_hash="$(jq -r '.plan_sha256' "$temp_dir/approved.json")"
 reset_logs
 run_facade publish --plan "$temp_dir/approved.json" --expected-plan-sha256 "$approved_hash" --profile "$temp_dir/profile.json" >/dev/null
@@ -143,7 +144,7 @@ reset_attempt_logs
 RELEASE_PLAN=true RELEASE_CHANNEL=stable RELEASE_BUILD_DATE=1999-01-01T00:00:00Z RELEASE_COMMIT="$commit_a" RELEASE_SOURCE=gs://wrong-source RELEASE_REGISTRY=wrong.registry/coyote PREVIOUS_RELEASE=9.9.9 COMPONENT_FRONTEND_ACTION=reuse COMPONENT_FRONTEND_VERSION=9.9.9 COMPONENT_FRONTEND_IMAGE="wrong.registry/coyote-frontend@$(digest f)" GIT_DIR=/wrong-git-dir GIT_WORK_TREE=/wrong-worktree run_facade publish --plan "$temp_dir/approved.json" --expected-plan-sha256 "$approved_hash" --profile "$temp_dir/profile.json" >/dev/null
 assert_not_contains "$(cat "$temp_dir/publish.log")" --channel
 assert_eq "$(jq -r '.source.commit' "$temp_dir/store/releases/0.0.11.json")" "$commit_b"
-assert_eq "$(jq -r '.source.created_at' "$temp_dir/store/releases/0.0.11.json")" 2026-11-11T12:00:00Z
+assert_eq "$(jq -r '.source.created_at' "$temp_dir/store/releases/0.0.11.json")" "$(jq -r '.fixed_inputs.build_date' "$temp_dir/approved.json")"
 assert_eq "$(jq -r '.components.frontend.version' "$temp_dir/store/releases/0.0.11.json")" 0.0.11
 assert_not_contains "$(cat "$temp_dir/coyote.log")" wrong-source
 assert_not_contains "$(cat "$temp_dir/docker.log")" 'buildx build'
@@ -185,8 +186,10 @@ rejects_without_mutation predecessor-drift --plan "$temp_dir/approved.json" --ex
 
 TEST_PREDECESSOR_MANIFEST="$(write_manifest)"
 reset_logs
-run_facade plan --release 0.0.11 --from latest --target production --profile "$temp_dir/profile.json" --output "$temp_dir/no-date.json" >/dev/null
-no_date_hash="$(jq -r '.plan_sha256' "$temp_dir/no-date.json")"
+no_date_base="$temp_dir/no-date-base.json"
+jq 'del(.plan_sha256) | .fixed_inputs.build_date = null' "$temp_dir/approved.json" >"$no_date_base"
+no_date_hash="sha256:$(jq -S -c . "$no_date_base" | shasum -a 256 | awk '{print $1}')"
+jq --arg hash "$no_date_hash" '. + {plan_sha256: $hash}' "$no_date_base" >"$temp_dir/no-date.json"
 rejects_without_mutation missing-build-date --plan "$temp_dir/no-date.json" --expected-plan-sha256 "$no_date_hash"
 
 TEST_GIT_STATUS=' M scripts/coyote-release'

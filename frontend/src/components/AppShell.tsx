@@ -1,6 +1,8 @@
 import { NavLink } from "react-router-dom";
 import type { ReactNode } from "react";
 
+declare const __COYOTE_VERSION__: string;
+
 export type AppShellNavigationItem = {
   to: string;
   label: string;
@@ -35,6 +37,9 @@ export function AppShell({
               ))}
           </div>
         </nav>
+        <p className="sidebar-version" aria-label="Application version">
+          Coyote CI {__COYOTE_VERSION__}
+        </p>
       </aside>
       <section className="content-shell">
         <div className="page-container">{children}</div>
