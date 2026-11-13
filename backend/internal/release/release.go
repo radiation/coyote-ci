@@ -159,8 +159,20 @@ type Resolved struct {
 }
 
 func ParseManifest(data []byte) (Manifest, error) {
+	var header struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if decodeErr := json.Unmarshal(data, &header); decodeErr != nil {
+		return Manifest{}, fmt.Errorf("decode release manifest: %w", decodeErr)
+	}
 	var manifest Manifest
-	if decodeErr := json.Unmarshal(data, &manifest); decodeErr != nil {
+	var decodeErr error
+	if header.SchemaVersion == SchemaVersion || header.SchemaVersion == ManifestSchemaVersionV2 {
+		manifest, decodeErr = decodeLegacyManifest(data)
+	} else {
+		decodeErr = json.Unmarshal(data, &manifest)
+	}
+	if decodeErr != nil {
 		return Manifest{}, fmt.Errorf("decode release manifest: %w", decodeErr)
 	}
 	if manifest.SchemaVersion == ManifestSchemaVersionV3 {
@@ -174,6 +186,39 @@ func ParseManifest(data []byte) (Manifest, error) {
 	}
 	if validateErr := manifest.Validate(); validateErr != nil {
 		return Manifest{}, validateErr
+	}
+	return manifest, nil
+}
+
+func decodeLegacyManifest(data []byte) (Manifest, error) {
+	// V3 field names were ignored extensions in V1/V2, regardless of JSON type.
+	type legacyComponent struct {
+		Version string `json:"version"`
+		Image   string `json:"image"`
+	}
+	var wire struct {
+		SchemaVersion int                        `json:"schema_version"`
+		Release       string                     `json:"release"`
+		Source        SourceIdentity             `json:"source"`
+		Images        map[string]string          `json:"images"`
+		Components    map[string]legacyComponent `json:"components"`
+		Deployment    *Deployment                `json:"deployment"`
+	}
+	if decodeErr := json.Unmarshal(data, &wire); decodeErr != nil {
+		return Manifest{}, decodeErr
+	}
+	manifest := Manifest{
+		SchemaVersion: wire.SchemaVersion,
+		Release:       wire.Release,
+		Source:        wire.Source,
+		Images:        wire.Images,
+		Deployment:    wire.Deployment,
+	}
+	if wire.Components != nil {
+		manifest.Components = make(map[string]Component, len(wire.Components))
+		for name, component := range wire.Components {
+			manifest.Components[name] = Component{Version: component.Version, Image: component.Image}
+		}
 	}
 	return manifest, nil
 }
@@ -525,7 +570,7 @@ func validateCLIArtifacts(artifacts map[string]CLIArtifact) error {
 		if parseErr != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return fmt.Errorf("CLI artifact %q url must be an absolute HTTP(S) download URL", platform)
 		}
-		if strings.TrimSpace(artifact.Filename) == "" || filepath.Base(artifact.Filename) != artifact.Filename {
+		if strings.TrimSpace(artifact.Filename) == "" || strings.ContainsAny(artifact.Filename, `/\`) {
 			return fmt.Errorf("CLI artifact %q filename must be a file name", platform)
 		}
 		if artifact.Size <= 0 {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -287,6 +288,97 @@ func TestLegacyManifestAllowsUnknownFields(t *testing.T) {
 	}
 	if _, parseErr := ParseManifest(data); parseErr != nil {
 		t.Fatalf("parse extended legacy manifest: %v", parseErr)
+	}
+}
+
+func TestLegacyManifestIgnoresV3Extensions(t *testing.T) {
+	for _, legacy := range []Manifest{validManifest(), validV2Manifest()} {
+		for _, extension := range []string{`{}`, `"historical"`, `42`, `true`, `[]`, `null`} {
+			t.Run(legacy.Release+"/"+extension, func(t *testing.T) {
+				data, marshalErr := json.Marshal(legacy)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				var fields map[string]json.RawMessage
+				if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil {
+					t.Fatal(decodeErr)
+				}
+				for _, name := range []string{"assembly", "helm", "cli_artifacts", "compatibility"} {
+					fields[name] = json.RawMessage(extension)
+				}
+				if legacy.SchemaVersion == ManifestSchemaVersionV2 {
+					var components map[string]map[string]json.RawMessage
+					if decodeErr := json.Unmarshal(fields["components"], &components); decodeErr != nil {
+						t.Fatal(decodeErr)
+					}
+					for _, component := range components {
+						component["build"] = json.RawMessage(extension)
+					}
+					componentData, componentErr := json.Marshal(components)
+					if componentErr != nil {
+						t.Fatal(componentErr)
+					}
+					fields["components"] = componentData
+				}
+				data, marshalErr = json.MarshalIndent(fields, "", "  ")
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				data = append(data, '\n')
+				parsed, parseErr := ParseManifest(data)
+				if parseErr != nil {
+					t.Fatalf("parse legacy extensions: %v", parseErr)
+				}
+				if !reflect.DeepEqual(parsed, legacy) {
+					t.Fatalf("extensions changed legacy metadata: %+v", parsed)
+				}
+				store, storeErr := NewFileStore(t.TempDir())
+				if storeErr != nil {
+					t.Fatal(storeErr)
+				}
+				_, digest, importErr := store.ImportManifest(context.Background(), data)
+				if importErr != nil {
+					t.Fatalf("import legacy extensions: %v", importErr)
+				}
+				stored, fetchErr := store.FetchManifest(context.Background(), legacy.Release)
+				if fetchErr != nil {
+					t.Fatal(fetchErr)
+				}
+				if !bytes.Equal(stored.Data, data) || digest != Digest(data) || stored.Digest != digest {
+					t.Fatal("legacy import changed stored bytes or digest")
+				}
+				resolved, resolveErr := Resolve(context.Background(), store, legacy.Release, "")
+				if resolveErr != nil {
+					t.Fatalf("resolve legacy extensions: %v", resolveErr)
+				}
+				if !reflect.DeepEqual(resolved.Manifest, legacy) || resolved.ManifestDigest != digest {
+					t.Fatal("resolution changed legacy metadata or digest")
+				}
+			})
+		}
+	}
+}
+
+func TestLegacyManifestStillRejectsMalformedKnownFields(t *testing.T) {
+	for _, legacy := range []Manifest{validManifest(), validV2Manifest()} {
+		t.Run(legacy.Release, func(t *testing.T) {
+			data, marshalErr := json.Marshal(legacy)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			var fields map[string]json.RawMessage
+			if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			fields["source"] = json.RawMessage(`"not an object"`)
+			data, marshalErr = json.Marshal(fields)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if _, parseErr := ParseManifest(data); parseErr == nil {
+				t.Fatal("expected malformed legacy source to be rejected")
+			}
+		})
 	}
 }
 

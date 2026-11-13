@@ -97,7 +97,6 @@
     {
       "not": {"required": ["components"]},
       "required": ["schema_version", "release", "source", "images"],
-      "additionalProperties": false,
       "properties": {
         "schema_version": {"const": 1},
         "release": {"$ref": "#/definitions/semver"},
@@ -119,7 +118,6 @@
     {
       "not": {"required": ["images"]},
       "required": ["schema_version", "release", "source", "components"],
-      "additionalProperties": false,
       "properties": {
         "schema_version": {"const": 2},
         "release": {"$ref": "#/definitions/semver"},

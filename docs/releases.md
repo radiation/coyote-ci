@@ -60,6 +60,9 @@ V1 and V2 manifests remain accepted as stored. Fetch and import preserve their
 original bytes and digest; resolution does not synthesize V3 assembly,
 component-build, Helm, CLI, or compatibility metadata. Channels remain in the
 separate mutable `channels.json` index for all manifest versions.
+Legacy readers continue to ignore V3-named extensions, including non-object
+values and V2 component `build` fields; these extensions are not interpreted as
+V3 metadata. V3 readers retain strict field validation.
 
 The currently supported provider-neutral release source is a filesystem directory,
 `file://` URL, or `gs://bucket[/prefix]` location. Each source stores
