@@ -123,6 +123,7 @@ ruby -rjson -ryaml -e '
   abort "worker verifier API URL is not #{expected_internal_url}" unless worker_config["WORKER_KUBERNETES_INTERNAL_API_URL"] == expected_internal_url
 
   control_values = {
+    "gke" => {"enabled" => true, "secretManagerCSI" => {"enabled" => true}, "workloadIdentity" => {"enabled" => true}},
     "namespace" => server.dig("metadata", "namespace"),
     "executionNamespace" => worker.dig("metadata", "namespace"),
     "rbac" => {"tokenReviewNameOverride" => "coyote-server-tokenreview"},
@@ -136,7 +137,7 @@ ruby -rjson -ryaml -e '
       "server" => {"name" => server.dig("spec", "template", "spec", "serviceAccountName"), "gsaEmail" => service_account_gsa(document(control_sa_path), "coyote-server")},
       "migrate" => {"name" => "coyote-migrate", "gsaEmail" => service_account_gsa(document(control_sa_path), "coyote-migrate")}
     },
-    "cloudSql" => {"connectionName" => cloud_sql_connection, "proxy" => {"resources" => resources(server_proxy, "server Cloud SQL proxy")}},
+    "cloudSql" => {"enabled" => true, "connectionName" => cloud_sql_connection, "proxy" => {"resources" => resources(server_proxy, "server Cloud SQL proxy")}},
     "secrets" => {
       "project" => secret_project,
       "databaseUrl" => control_secrets.fetch("database-url").fetch(1),
@@ -145,6 +146,7 @@ ruby -rjson -ryaml -e '
       "session" => control_secrets.fetch("session-secret").fetch(1)
     },
     "storage" => {
+      "provider" => "gcs",
       "project" => required(control_config, "ARTIFACT_GCS_PROJECT"),
       "artifacts" => {"bucket" => required(control_config, "ARTIFACT_GCS_BUCKET"), "prefix" => required(control_config, "ARTIFACT_GCS_PREFIX")},
       "cache" => {"bucket" => required(control_config, "WORKER_CACHE_GCS_BUCKET"), "prefix" => required(control_config, "WORKER_CACHE_GCS_PREFIX")},
@@ -173,19 +175,22 @@ ruby -rjson -ryaml -e '
     }
   }
   worker_values = {
+    "gke" => {"enabled" => true, "secretManagerCSI" => {"enabled" => true}, "workloadIdentity" => {"enabled" => true}},
     "namespace" => worker.dig("metadata", "namespace"),
     "controlPlaneNamespace" => server.dig("metadata", "namespace"),
     "images" => {"worker" => image(worker_container, "worker"), "cloudSqlProxy" => image(worker_proxy, "worker Cloud SQL proxy")},
     "serviceAccounts" => {
       "worker" => {"name" => worker.dig("spec", "template", "spec", "serviceAccountName"), "gsaEmail" => service_account_gsa(document(worker_sa_path), "coyote-kubernetes-worker-staging")}
     },
-    "cloudSql" => {"connectionName" => cloud_sql_connection, "proxy" => {"resources" => resources(worker_proxy, "worker Cloud SQL proxy")}},
+    "cloudSql" => {"enabled" => true, "connectionName" => cloud_sql_connection, "proxy" => {"resources" => resources(worker_proxy, "worker Cloud SQL proxy")}},
     "secrets" => {"project" => secret_project, "databaseUrl" => worker_secrets.fetch("database-url").fetch(1)},
     "storage" => {
+      "provider" => "gcs",
       "project" => required(worker_env, "ARTIFACT_GCS_PROJECT"),
       "artifacts" => {"bucket" => required(worker_env, "ARTIFACT_GCS_BUCKET"), "prefix" => required(worker_env, "ARTIFACT_GCS_PREFIX")}
     },
     "cloudBuild" => {
+      "enabled" => true,
       "project" => required(worker_env, "GOOGLE_CLOUD_PROJECT"),
       "location" => required(worker_env, "CLOUD_BUILD_LOCATION"),
       "runtimeServiceAccount" => required(worker_env, "CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT"),

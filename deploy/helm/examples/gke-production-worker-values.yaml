@@ -1,16 +1,22 @@
 namespace: coyote-ci
+gke:
+  enabled: true
+  secretManagerCSI: {enabled: true}
+  workloadIdentity: {enabled: true}
 controlPlaneNamespace: coyote-ci
 allowSharedControlPlaneNamespace: true
 images:
   worker: example.invalid/coyote-worker@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 serviceAccounts:
   worker: {name: coyote-kubernetes-worker, gsaEmail: coyote-ci-worker@bryanchoate.iam.gserviceaccount.com}
-cloudSql: {connectionName: "bryanchoate:us-central1:bryanchoate-postgres"}
+cloudSql: {enabled: true, connectionName: "bryanchoate:us-central1:bryanchoate-postgres"}
 secrets: {project: bryanchoate, databaseUrl: coyote-ci-database-url}
 storage:
+  provider: gcs
   project: bryanchoate
   artifacts: {bucket: example-production-artifacts, prefix: builds}
 cloudBuild:
+  enabled: true
   project: bryanchoate
   location: us-central1
   runtimeServiceAccount: coyote-cloud-build@bryanchoate.iam.gserviceaccount.com

@@ -504,7 +504,7 @@ func TestV2ManifestParsingResolutionAndOverlay(t *testing.T) {
 	}
 }
 
-func TestV3ManifestParsingResolutionAndOverlay(t *testing.T) {
+func TestV3ManifestResolutionWithoutPredecessorOrGitHistory(t *testing.T) {
 	root := t.TempDir()
 	publisher, publisherErr := NewFilePublisher(root)
 	if publisherErr != nil {
@@ -525,6 +525,9 @@ func TestV3ManifestParsingResolutionAndOverlay(t *testing.T) {
 	}
 	if got := resolved.Manifest.Components["mcp"].Build.ID; got != "mcp-build-240" {
 		t.Fatalf("unexpected reused component build identity: %q", got)
+	}
+	if !reflect.DeepEqual(resolved.Manifest.Assembly, manifest.Assembly) || !reflect.DeepEqual(resolved.Manifest.Components, manifest.Components) {
+		t.Fatal("resolution must preserve independent assembly and component provenance")
 	}
 	var output bytes.Buffer
 	if overlayErr := WriteValuesOverlay(&output, resolved); overlayErr != nil {

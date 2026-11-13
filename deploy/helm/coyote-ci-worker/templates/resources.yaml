@@ -2,18 +2,19 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ .Values.serviceAccounts.worker.name }}
-  namespace: {{ .Values.namespace }}
-  {{- if and .Values.gke.enabled .Values.gke.workloadIdentity.enabled }}
-  annotations: {iam.gke.io/gcp-service-account: {{ .Values.serviceAccounts.worker.gsaEmail | quote }}}
-  {{- end }}
+  namespace: {{ (include "coyote-ci-worker.namespace" .) }}
+  {{- include "coyote-ci-worker.annotations" (dict "root" . "account" .Values.serviceAccounts.worker) | nindent 2 }}
 ---
 apiVersion: v1
 kind: ServiceAccount
-metadata: {name: {{ .Values.serviceAccounts.helper.name }}, namespace: {{ .Values.namespace }}}
+metadata:
+  name: {{ .Values.serviceAccounts.helper.name }}
+  namespace: {{ (include "coyote-ci-worker.namespace" .) }}
+  {{- include "coyote-ci-worker.annotations" (dict "root" . "account" .Values.serviceAccounts.helper) | nindent 2 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: {name: {{ .Values.worker.name }}, namespace: {{ .Values.namespace }}}
+metadata: {name: {{ .Values.worker.name }}, namespace: {{ (include "coyote-ci-worker.namespace" .) }}}
 rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
@@ -27,32 +28,32 @@ rules:
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: {name: coyote-workspace-helper, namespace: {{ .Values.namespace }}}
+metadata: {name: coyote-workspace-helper, namespace: {{ (include "coyote-ci-worker.namespace" .) }}}
 rules: [{apiGroups: [""], resources: ["pods"], verbs: ["get"]}]
 ---
-{{- if ne .Values.namespace .Values.controlPlaneNamespace }}
+{{- if ne (include "coyote-ci-worker.namespace" .) .Values.controlPlaneNamespace }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: {name: coyote-server-workspace-verifier, namespace: {{ .Values.namespace }}}
+metadata: {name: coyote-server-workspace-verifier, namespace: {{ (include "coyote-ci-worker.namespace" .) }}}
 rules: [{apiGroups: [""], resources: ["pods"], verbs: ["get"]}]
 ---
 {{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: {name: {{ .Values.worker.name }}, namespace: {{ .Values.namespace }}}
-subjects: [{kind: ServiceAccount, name: {{ .Values.serviceAccounts.worker.name }}, namespace: {{ .Values.namespace }}}]
+metadata: {name: {{ .Values.worker.name }}, namespace: {{ (include "coyote-ci-worker.namespace" .) }}}
+subjects: [{kind: ServiceAccount, name: {{ .Values.serviceAccounts.worker.name }}, namespace: {{ (include "coyote-ci-worker.namespace" .) }}}]
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ .Values.worker.name }}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: {name: coyote-workspace-helper, namespace: {{ .Values.namespace }}}
-subjects: [{kind: ServiceAccount, name: {{ .Values.serviceAccounts.helper.name }}, namespace: {{ .Values.namespace }}}]
+metadata: {name: coyote-workspace-helper, namespace: {{ (include "coyote-ci-worker.namespace" .) }}}
+subjects: [{kind: ServiceAccount, name: {{ .Values.serviceAccounts.helper.name }}, namespace: {{ (include "coyote-ci-worker.namespace" .) }}}]
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: coyote-workspace-helper}
 ---
-{{- if ne .Values.namespace .Values.controlPlaneNamespace }}
+{{- if ne (include "coyote-ci-worker.namespace" .) .Values.controlPlaneNamespace }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: {name: coyote-server-workspace-verifier, namespace: {{ .Values.namespace }}}
+metadata: {name: coyote-server-workspace-verifier, namespace: {{ (include "coyote-ci-worker.namespace" .) }}}
 subjects: [{kind: ServiceAccount, name: {{ .Values.serviceAccounts.server.name }}, namespace: {{ .Values.controlPlaneNamespace }}}]
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: coyote-server-workspace-verifier}
 ---
@@ -60,7 +61,7 @@ roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: coyote-server-w
 {{- if and .Values.gke.enabled .Values.gke.secretManagerCSI.enabled }}
 apiVersion: secrets-store.csi.x-k8s.io/v1
 kind: SecretProviderClass
-metadata: {name: {{ .Values.worker.databaseSecretProviderClass }}, namespace: {{ .Values.namespace }}}
+metadata: {name: {{ .Values.worker.databaseSecretProviderClass }}, namespace: {{ (include "coyote-ci-worker.namespace" .) }}}
 spec:
   provider: gke
   parameters:
@@ -71,13 +72,13 @@ spec:
 {{- end }}
 apiVersion: v1
 kind: ConfigMap
-metadata: {name: {{ .Values.worker.configMapName }}, namespace: {{ .Values.namespace }}}
+metadata: {name: {{ .Values.worker.configMapName }}, namespace: {{ (include "coyote-ci-worker.namespace" .) }}}
 data:
   WORKER_KUBERNETES_INTERNAL_API_URL: {{ default (printf "http://coyote-server.%s.svc.cluster.local:8080" .Values.controlPlaneNamespace) .Values.worker.internalAPIURL | quote }}
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: {{ .Values.worker.name }}, namespace: {{ .Values.namespace }}}
+metadata: {name: {{ .Values.worker.name }}, namespace: {{ (include "coyote-ci-worker.namespace" .) }}}
 spec:
   {{- if not .Values.worker.replicasManagedExternally }}
   replicas: {{ .Values.worker.replicas }}
@@ -98,21 +99,19 @@ spec:
           env:
             - {name: DATABASE_URL_FILE, value: /var/run/secrets/coyote/database-url}
             - {name: WORKER_EXECUTION_BACKEND, value: kubernetes}
-            - {name: WORKER_KUBERNETES_NAMESPACE, value: {{ .Values.namespace }}}
+            - {name: WORKER_KUBERNETES_NAMESPACE, value: {{ (include "coyote-ci-worker.namespace" .) }}}
+            {{- if .Values.cloudBuild.enabled }}
             - {name: GOOGLE_CLOUD_PROJECT, value: {{ .Values.cloudBuild.project | quote }}}
             - {name: CLOUD_BUILD_LOCATION, value: {{ .Values.cloudBuild.location | quote }}}
             - {name: CLOUD_BUILD_RUNTIME_SERVICE_ACCOUNT, value: {{ .Values.cloudBuild.runtimeServiceAccount | quote }}}
             - {name: CLOUD_BUILD_ARTIFACT_REGISTRY_REPOSITORY, value: {{ .Values.cloudBuild.artifactRegistryRepository | quote }}}
             - {name: CLOUD_BUILD_SOURCE_BUCKET, value: {{ .Values.cloudBuild.source.bucket | quote }}}
+            {{- end }}
             {{- if .Values.worker.legacyEnvironmentLayout }}
             - {name: WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS, value: {{ .Values.worker.maxInFlightJobs | quote }}}
-            - {name: ARTIFACT_STORAGE_PROVIDER, value: gcs}
-            - {name: ARTIFACT_GCS_BUCKET, value: {{ .Values.storage.artifacts.bucket | quote }}}
-            - {name: ARTIFACT_GCS_PREFIX, value: {{ .Values.storage.artifacts.prefix | quote }}}
-            - {name: ARTIFACT_GCS_PROJECT, value: {{ .Values.storage.project | quote }}}
-            - {name: ARTIFACT_STORAGE_STRICT, value: {{ .Values.storage.artifacts.strict | quote }}}
+            {{- include "coyote-ci-worker.artifactEnv" . | nindent 12 }}
             {{- else }}
-            {{- if .Values.cloudBuild.source.includePrefix }}
+            {{- if and .Values.cloudBuild.enabled .Values.cloudBuild.source.includePrefix }}
             - {name: CLOUD_BUILD_SOURCE_PREFIX, value: {{ .Values.cloudBuild.source.prefix | quote }}}
             {{- end }}
             - {name: WORKER_KUBERNETES_MAX_IN_FLIGHT_JOBS, value: {{ .Values.worker.maxInFlightJobs | quote }}}
@@ -125,27 +124,22 @@ spec:
             - {name: COYOTE_KUBERNETES_ARTIFACT_HELPER_ENABLED, value: "true"}
             - {name: WORKER_STEP_LEASE_SECONDS, value: "45"}
             {{- if not .Values.worker.legacyEnvironmentLayout }}
-            - {name: ARTIFACT_STORAGE_PROVIDER, value: gcs}
-            - {name: ARTIFACT_STORAGE_STRICT, value: {{ .Values.storage.artifacts.strict | quote }}}
-            - {name: ARTIFACT_GCS_BUCKET, value: {{ .Values.storage.artifacts.bucket | quote }}}
-            - {name: ARTIFACT_GCS_PREFIX, value: {{ .Values.storage.artifacts.prefix | quote }}}
-            - {name: ARTIFACT_GCS_PROJECT, value: {{ .Values.storage.project | quote }}}
+            {{- include "coyote-ci-worker.artifactEnv" . | nindent 12 }}
             {{- end }}
             - {name: EMAIL_NOTIFICATIONS_ENABLED, value: "false"}
-          {{- if and .Values.gke.enabled .Values.gke.secretManagerCSI.enabled }}
+            {{- range $name, $reference := .Values.worker.extraEnvSecrets }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef: {{- toYaml $reference | nindent 18 }}
+            {{- end }}
           volumeMounts: [{name: database-url, mountPath: /var/run/secrets/coyote, readOnly: true}]
-          {{- end }}
+        {{- if .Values.cloudSql.enabled }}
         - name: cloud-sql-proxy
           image: {{ .Values.images.cloudSqlProxy }}
           args: [{{ printf "--address=%s" .Values.cloudSql.proxy.address | quote }}, {{ printf "--port=%v" .Values.cloudSql.proxy.port | quote }}, {{ .Values.cloudSql.connectionName | quote }}]
           ports: [{name: postgres, containerPort: 5432}]
           securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}, seccompProfile: {type: RuntimeDefault}}
           resources: {{- toYaml (default .Values.cloudSql.proxy.resources .Values.worker.legacyCloudSqlProxyResources) | nindent 12 }}
-      volumes:
-        {{- if and .Values.gke.enabled .Values.gke.secretManagerCSI.enabled }}
-        - name: database-url
-          csi:
-            driver: secrets-store-gke.csi.k8s.io
-            readOnly: true
-            volumeAttributes: {secretProviderClass: {{ .Values.worker.databaseSecretProviderClass }}}
         {{- end }}
+      volumes:
+        {{- include "coyote-ci-worker.databaseVolume" . | nindent 8 }}

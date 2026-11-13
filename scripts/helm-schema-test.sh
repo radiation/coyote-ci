@@ -56,7 +56,7 @@ EOF
 expect_template_failure coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" coyote-ci "$worker_values" "$temp_dir/shared-worker-namespace-without-opt-in.yaml"
 
 cat >"$temp_dir/missing-namespace.yaml" <<'EOF'
-namespace: ""
+namespace: mismatched-namespace
 EOF
 expect_template_failure coyote-ci "$repo_root/deploy/helm/coyote-ci" coyote-ci "$control_values" "$temp_dir/missing-namespace.yaml"
 
@@ -177,5 +177,126 @@ images:
 EOF
 helm template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci --values "$control_values" --values "$temp_dir/release-overlay.yaml" >/dev/null
 helm template coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" --namespace coyote-ci-staging --values "$worker_values" --values "$temp_dir/release-overlay.yaml" >/dev/null
+
+ruby -ryaml -rjson -ropen3 - "$repo_root" <<'RUBY'
+root = ARGV.fetch(0)
+
+def render(root, worker: false, overrides: {}, failure: nil, gke: false)
+  chart = worker ? "coyote-ci-worker" : "coyote-ci"
+  namespace = worker ? "portable-execution" : "portable-control"
+  example = worker ? "worker" : "control-plane"
+  if gke
+    namespace = worker ? "coyote-ci-staging" : "coyote-ci"
+    example = "gke-staging-#{example}"
+  else
+    example = "generic-#{example}"
+  end
+  output, error, result = Open3.capture3("helm", "template", "portable", "#{root}/deploy/helm/#{chart}",
+    "--namespace", namespace, "--values", "#{root}/deploy/helm/examples/#{example}-values.yaml",
+    "--values", "-", stdin_data: JSON.generate(overrides))
+  if failure
+    abort "expected failure containing #{failure.inspect}: #{error}" if result.success? || !error.include?(failure)
+    return
+  end
+  abort error unless result.success?
+  if !gke && output.match?(/secrets-store|cloud-sql|iam\.gke|GOOGLE_|CLOUD_BUILD_|_GCS_|SecretProviderClass|networking\.gke/)
+    abort "generic render contains cloud integration"
+  end
+  documents = YAML.load_stream(output).compact
+  abort "credential values must not be rendered" if documents.any? { |doc| doc["kind"] == "Secret" }
+  documents.each do |document|
+    next if document["kind"].start_with?("Cluster")
+    abort "incorrect namespace" unless document.dig("metadata", "namespace") == namespace
+  end
+  documents
+end
+
+def resource(documents, kind, name)
+  documents.find { |doc| doc["kind"] == kind && doc.dig("metadata", "name") == name } or abort "missing #{kind}/#{name}"
+end
+
+control = render(root)
+migration_phase = render(root, overrides: {"server" => {"replicas" => 0}, "frontend" => {"replicas" => 0}, "migration" => {"render" => true, "runID" => "portable"}})
+abort "zero-replica migration must not wait on an unconsumed PVC" if migration_phase.any? { |doc| doc["kind"] == "PersistentVolumeClaim" }
+resource(migration_phase, "Job", "coyote-migrate-portable")
+deployment = resource(control, "Deployment", "coyote-server")
+pod = deployment.dig("spec", "template", "spec")
+abort "filesystem server requires Recreate" unless deployment.dig("spec", "strategy", "type") == "Recreate"
+abort "filesystem ownership must be non-root" unless pod.dig("securityContext", "runAsNonRoot") && pod.dig("securityContext", "runAsUser") == 10001 && pod.dig("securityContext", "fsGroup") == 10001
+mount = pod.fetch("containers").first.fetch("volumeMounts").find { |entry| entry["name"] == "data" }
+abort "durable mount is missing" unless mount["mountPath"] == "/var/lib/coyote"
+volume = pod.fetch("volumes").find { |entry| entry["name"] == "data" }
+claim = resource(control, "PersistentVolumeClaim", volume.dig("persistentVolumeClaim", "claimName"))
+abort "PVC must be retained" unless claim.dig("metadata", "annotations", "helm.sh/resource-policy") == "keep"
+abort "PVC access mode incorrect" unless claim.dig("spec", "accessModes") == ["ReadWriteOnce"]
+abort "default storage class must be omitted" if claim.fetch("spec").key?("storageClassName")
+config = resource(control, "ConfigMap", "coyote-control-plane").fetch("data")
+%w[ARTIFACT_STORAGE_ROOT WORKER_CACHE_STORAGE_ROOT COYOTE_WORKSPACE_REVISION_STORAGE_ROOT].each do |key|
+  abort "#{key} is not persistent" unless config.fetch(key).start_with?(mount["mountPath"] + "/")
+end
+references = pod.fetch("volumes").find { |entry| entry["name"] == "control-plane-secrets" }.dig("projected", "sources")
+abort "server must project four selected keys" unless references.length == 4 && references.all? { |entry| entry.dig("secret", "items").length == 1 }
+database = references.find { |entry| entry.dig("secret", "name") == "coyote-database" }
+abort "database Secret selection incorrect" unless database.dig("secret", "items") == [{"key" => "url", "path" => "database-url"}]
+
+extras = render(root, overrides: {"serviceAccounts" => {"server" => {"annotations" => {"example.org/identity" => "server"}}}, "server" => {"extraEnvSecrets" => {"GITHUB_STATUS_TOKEN" => {"name" => "github", "key" => "token"}}}})
+abort "custom annotations missing" unless resource(extras, "ServiceAccount", "coyote-server").dig("metadata", "annotations", "example.org/identity") == "server"
+env = resource(extras, "Deployment", "coyote-server").dig("spec", "template", "spec", "containers").first.fetch("env")
+abort "extra credential must use secretKeyRef" unless env.find { |entry| entry["name"] == "GITHUB_STATUS_TOKEN" }&.dig("valueFrom", "secretKeyRef") == {"name" => "github", "key" => "token"}
+
+existing = render(root, overrides: {"storage" => {"filesystem" => {"existingClaim" => "operator-data"}}})
+abort "existing claim must not be managed" if existing.any? { |doc| doc["kind"] == "PersistentVolumeClaim" }
+existing_volumes = resource(existing, "Deployment", "coyote-server").dig("spec", "template", "spec", "volumes")
+abort "existing claim not mounted" unless existing_volumes.any? { |entry| entry.dig("persistentVolumeClaim", "claimName") == "operator-data" }
+explicit_class = render(root, overrides: {"storage" => {"filesystem" => {"storageClassName" => "", "accessModes" => ["ReadWriteOncePod"]}}})
+abort "explicit empty storage class lost" unless resource(explicit_class, "PersistentVolumeClaim", "coyote-data").dig("spec", "storageClassName") == ""
+
+with_consumers = render(root, overrides: {"migration" => {"render" => true, "runID" => "portable"}, "mcp" => {"enabled" => true}, "images" => {"mcp" => "example.invalid/mcp@sha256:" + "e" * 64}})
+[["Job", "coyote-migrate-portable"], ["Deployment", "coyote-mcp"]].each do |kind, name|
+  consumer = resource(with_consumers, kind, name).dig("spec", "template", "spec")
+  abort "#{name} must not mount a service-account token" unless consumer["automountServiceAccountToken"] == false
+  abort "#{name} must not run a proxy" if consumer["initContainers"] || consumer.fetch("containers").length != 1
+  sources = consumer.fetch("volumes").first.dig("projected", "sources")
+  abort "#{name} must receive only the database" unless sources.length == 1 && sources.first.dig("secret", "name") == "coyote-database"
+end
+
+worker = render(root, worker: true)
+worker_pod = resource(worker, "Deployment", "coyote-kubernetes-worker").dig("spec", "template", "spec")
+abort "worker must receive only its database volume" unless worker_pod.fetch("volumes").length == 1 && worker_pod.fetch("volumes").first.dig("secret", "items") == [{"key" => "url", "path" => "database-url"}]
+abort "worker must not receive the artifact PVC" if worker_pod.fetch("volumes").any? { |entry| entry.key?("persistentVolumeClaim") }
+worker_extras = render(root, worker: true, overrides: {"serviceAccounts" => {"worker" => {"annotations" => {"example.org/identity" => "worker"}}}, "worker" => {"extraEnvSecrets" => {"GITHUB_STATUS_TOKEN" => {"name" => "github", "key" => "token"}}}})
+abort "worker annotations missing" unless resource(worker_extras, "ServiceAccount", "coyote-kubernetes-worker-staging").dig("metadata", "annotations", "example.org/identity") == "worker"
+
+%w[databaseUrl workspaceHelperCapability oidcClient session].each do |key|
+  %w[name key].each do |field|
+    render(root, overrides: {"secrets" => {"existingSecrets" => {key => {field => ""}}}}, failure: "requires name and key")
+  end
+end
+render(root, worker: true, overrides: {"secrets" => {"existingSecrets" => {"databaseUrl" => {"name" => ""}}}}, failure: "requires name and key")
+[
+  [{"server" => {"replicas" => 2}}, "at most one"],
+  [{"server" => {"replicasManagedExternally" => true}}, "at most one"],
+  [{"storage" => {"provider" => "s3"}}, "storage/provider"],
+  [{"storage" => {"filesystem" => {"accessModes" => ["ReadWriteMany"]}}}, "accessModes"],
+  [{"storage" => {"filesystem" => {"securityContext" => {"runAsUser" => 0}}}}, "runAsUser"],
+  [{"storage" => {"provider" => "gcs"}}, "bucket is required"],
+  [{"cloudSql" => {"enabled" => true}}, "requires GKE workload identity"],
+  [{"gke" => {"secretManagerCSI" => {"enabled" => true}}}, "explicit gke.enabled"],
+  [{"serviceAccounts" => {"mcp" => {"gsaEmail" => "legacy@example.invalid"}}}, "opt-ins"],
+  [{"secrets" => {"existingSecrets" => {"databaseUrl" => {"value" => "must-not-render"}}}}, "additional properties"],
+  [{"server" => {"extraEnvSecrets" => {"DATABASE_URL_FILE" => {"name" => "db", "key" => "url"}}}}, "must not override"]
+].each { |overrides, failure| render(root, overrides: overrides, failure: failure) }
+render(root, worker: true, overrides: {"cloudBuild" => {"enabled" => true}}, failure: "requires GCS artifact storage")
+render(root, worker: true, overrides: {"worker" => {"extraEnvSecrets" => {"CLOUD_BUILD_PROJECT" => {"name" => "cloud", "key" => "project"}}}}, failure: "must not override")
+
+[false, true].each do |worker_chart|
+  render(root, worker: worker_chart, gke: true, overrides: {"cloudSql" => {"enabled" => false}}, failure: "explicit cloudSql.enabled")
+  render(root, worker: worker_chart, gke: true, overrides: {"gke" => {"workloadIdentity" => {"enabled" => false}}}, failure: "workload identity")
+  render(root, worker: worker_chart, gke: true, overrides: {"gke" => {"secretManagerCSI" => {"enabled" => false}}}, failure: "CSI opt-ins")
+  render(root, worker: worker_chart, gke: true, overrides: {"storage" => {"provider" => "filesystem"}, "server" => {"replicasManagedExternally" => false}}, failure: "explicit storage.provider=gcs")
+end
+render(root, worker: true, gke: true, overrides: {"cloudBuild" => {"enabled" => false}}, failure: "explicit cloudBuild.enabled")
+puts "Portable Helm configuration tests passed"
+RUBY
 
 echo "Helm schema-negative tests passed"

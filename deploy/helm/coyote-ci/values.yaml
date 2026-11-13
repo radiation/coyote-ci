@@ -6,11 +6,11 @@ rbac:
   tokenReviewNameOverride: ""
 
 gke:
-  enabled: true
+  enabled: false
   secretManagerCSI:
-    enabled: true
+    enabled: false
   workloadIdentity:
-    enabled: true
+    enabled: false
 
 images:
   server: ""
@@ -27,15 +27,19 @@ serviceAccounts:
   server:
     name: coyote-server
     gsaEmail: ""
+    annotations: {}
   migrate:
     name: coyote-migrate
     gsaEmail: ""
+    annotations: {}
   mcp:
     name: coyote-mcp
     gsaEmail: ""
+    annotations: {}
   workspaceHelperName: coyote-workspace-helper
 
 cloudSql:
+  enabled: false
   connectionName: ""
   proxy:
     address: 127.0.0.1
@@ -45,6 +49,11 @@ cloudSql:
       limits: {cpu: 500m, memory: 512Mi}
 
 secrets:
+  existingSecrets:
+    databaseUrl: {name: "", key: ""}
+    workspaceHelperCapability: {name: "", key: ""}
+    oidcClient: {name: "", key: ""}
+    session: {name: "", key: ""}
   project: ""
   databaseUrl: ""
   workspaceHelperCapability: ""
@@ -52,6 +61,19 @@ secrets:
   session: ""
 
 storage:
+  provider: filesystem
+  filesystem:
+    existingClaim: ""
+    size: 10Gi
+    storageClassName: null
+    accessModes: [ReadWriteOnce]
+    mountPath: /var/lib/coyote
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
+      fsGroupChangePolicy: OnRootMismatch
   project: ""
   artifacts: {bucket: "", prefix: builds}
   cache: {bucket: "", prefix: coyote-ci/cache}
@@ -68,6 +90,7 @@ auth:
   publicURL: ""
 
 server:
+  extraEnvSecrets: {}
   replicas: 1
   replicasManagedExternally: false
   resources:

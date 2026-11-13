@@ -65,11 +65,12 @@ render_and_compare() {
   local values_file="$3"
   local archive="$4"
   local namespace="$5"
+  shift 5
   local source_render="$package_dir/$chart_name-source.yaml"
   local package_render="$package_dir/$chart_name-package.yaml"
 
-  "$helm_bin" template "$chart_name" "$chart_dir" --namespace "$namespace" --values "$values_file" | normalize_manifest >"$source_render"
-  "$helm_bin" template "$chart_name" "$archive" --namespace "$namespace" --values "$values_file" | normalize_manifest >"$package_render"
+  "$helm_bin" template "$chart_name" "$chart_dir" --namespace "$namespace" --values "$values_file" "$@" | normalize_manifest >"$source_render"
+  "$helm_bin" template "$chart_name" "$archive" --namespace "$namespace" --values "$values_file" "$@" | normalize_manifest >"$package_render"
   diff -u "$source_render" "$package_render"
 }
 
@@ -102,5 +103,9 @@ validate_archive_contents "$control_archive" coyote-ci
 validate_archive_contents "$worker_archive" coyote-ci-worker
 render_and_compare coyote-ci "$control_chart" "$control_values" "$control_archive" coyote-ci
 render_and_compare coyote-ci-worker "$worker_chart" "$worker_values" "$worker_archive" coyote-ci-staging
+render_and_compare coyote-ci "$control_chart" "$control_values" "$control_archive" coyote-ci --set migration.render=true --set migration.runID=package-check
+render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-control-plane-values.yaml" "$control_archive" portable-control
+render_and_compare coyote-ci "$control_chart" "$repo_root/deploy/helm/examples/generic-control-plane-values.yaml" "$control_archive" portable-control --set migration.render=true --set migration.runID=package-check
+render_and_compare coyote-ci-worker "$worker_chart" "$repo_root/deploy/helm/examples/generic-worker-values.yaml" "$worker_archive" portable-execution
 
 echo "Helm package validation passed: coyote-ci $control_version, coyote-ci-worker $worker_version"
