@@ -18,6 +18,15 @@
         "created_at": {"type": "string", "format": "date-time"}
       }
     },
+    "v3_source": {
+      "type": "object",
+      "required": ["commit", "created_at"],
+      "additionalProperties": false,
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
     "component": {
       "type": "object",
       "required": ["version", "image"],
@@ -26,12 +35,69 @@
         "version": {"$ref": "#/definitions/semver"},
         "image": {"$ref": "#/definitions/image"}
       }
+    },
+    "build": {
+      "type": "object",
+      "required": ["id", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "source": {"$ref": "#/definitions/v3_source"}
+      }
+    },
+    "v3_component": {
+      "type": "object",
+      "required": ["version", "image", "build"],
+      "additionalProperties": false,
+      "properties": {
+        "version": {"$ref": "#/definitions/semver"},
+        "image": {"$ref": "#/definitions/image"},
+        "build": {"$ref": "#/definitions/build"}
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "upgrade_range": {
+      "type": "string",
+      "pattern": "^>=(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)? <(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "cli_artifact": {
+      "type": "object",
+      "required": ["url", "filename", "size", "sha256", "build_id"],
+      "additionalProperties": false,
+      "properties": {
+        "url": {"type": "string", "pattern": "^https?://[^?#]+$"},
+        "filename": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+$"},
+        "size": {"type": "integer", "minimum": 1},
+        "sha256": {"$ref": "#/definitions/sha256"},
+        "build_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "chart": {
+      "type": "object",
+      "required": ["version", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "version": {"$ref": "#/definitions/semver"},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "control_chart": {"$ref": "#/definitions/chart"},
+        "worker_chart": {"$ref": "#/definitions/chart"}
+      }
     }
   },
   "oneOf": [
     {
       "not": {"required": ["components"]},
       "required": ["schema_version", "release", "source", "images"],
+      "additionalProperties": false,
       "properties": {
         "schema_version": {"const": 1},
         "release": {"$ref": "#/definitions/semver"},
@@ -46,12 +112,14 @@
             "worker": {"$ref": "#/definitions/image"},
             "migrate": {"$ref": "#/definitions/image"}
           }
-        }
+        },
+        "deployment": {"$ref": "#/definitions/deployment"}
       }
     },
     {
       "not": {"required": ["images"]},
       "required": ["schema_version", "release", "source", "components"],
+      "additionalProperties": false,
       "properties": {
         "schema_version": {"const": 2},
         "release": {"$ref": "#/definitions/semver"},
@@ -66,6 +134,72 @@
             "worker": {"$ref": "#/definitions/component"},
             "mcp": {"$ref": "#/definitions/component"},
             "migrate": {"$ref": "#/definitions/component"}
+          }
+        },
+        "deployment": {"$ref": "#/definitions/deployment"}
+      }
+    },
+    {
+      "not": {
+        "anyOf": [
+          {"required": ["source"]},
+          {"required": ["images"]},
+          {"required": ["deployment"]}
+        ]
+      },
+      "required": ["schema_version", "release", "assembly", "components", "helm", "cli_artifacts", "compatibility"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": 3},
+        "release": {"$ref": "#/definitions/semver"},
+        "assembly": {
+          "type": "object",
+          "required": ["build_id", "source"],
+          "additionalProperties": false,
+          "properties": {
+            "build_id": {"type": "string", "minLength": 1},
+            "source": {"$ref": "#/definitions/v3_source"}
+          }
+        },
+        "components": {
+          "type": "object",
+          "required": ["server", "frontend", "worker", "mcp", "migrate"],
+          "additionalProperties": false,
+          "properties": {
+            "server": {"$ref": "#/definitions/v3_component"},
+            "frontend": {"$ref": "#/definitions/v3_component"},
+            "worker": {"$ref": "#/definitions/v3_component"},
+            "mcp": {"$ref": "#/definitions/v3_component"},
+            "migrate": {"$ref": "#/definitions/v3_component"}
+          }
+        },
+        "helm": {
+          "type": "object",
+          "required": ["name", "repository", "version", "digest"],
+          "additionalProperties": false,
+          "properties": {
+            "name": {"const": "coyote-ci"},
+            "repository": {"type": "string", "pattern": "^oci://[^?#]+$"},
+            "version": {"$ref": "#/definitions/semver"},
+            "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+          }
+        },
+        "cli_artifacts": {
+          "type": "object",
+          "minProperties": 1,
+          "patternProperties": {
+            "^[a-z0-9]+(?:[-_][a-z0-9]+)+$": {"$ref": "#/definitions/cli_artifact"}
+          },
+          "additionalProperties": false
+        },
+        "compatibility": {
+          "type": "object",
+          "required": ["schema_target", "upgrade_from", "maintenance"],
+          "additionalProperties": false,
+          "properties": {
+            "schema_target": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+            "upgrade_from": {"$ref": "#/definitions/upgrade_range"},
+            "maintenance": {"enum": ["active", "maintenance", "end-of-life"]}
           }
         }
       }
