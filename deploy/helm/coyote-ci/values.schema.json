@@ -50,6 +50,42 @@
       }
     },
     "auth": {"type": "object", "required": ["mode", "bootstrapAdminEmails", "oidc", "publicURL"], "properties": {"mode": {"type": "string", "enum": ["oidc"]}, "bootstrapAdminEmails": {"type": "string", "minLength": 1}, "publicURL": {"type": "string", "pattern": "^https://"}, "oidc": {"type": "object", "required": ["issuerURL", "clientID", "redirectURL"], "properties": {"issuerURL": {"type": "string", "pattern": "^https://"}, "clientID": {"type": "string", "minLength": 1}, "redirectURL": {"type": "string", "pattern": "^https://"}}}}},
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "name", "configMapName", "databaseSecretProviderClass", "replicas", "replicasManagedExternally", "maxInFlightJobs", "resources", "nodeSelector", "affinity", "tolerations", "extraEnvSecrets", "internalAPIURL", "secrets"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "name": {"$ref": "#/definitions/resourceName"},
+        "configMapName": {"$ref": "#/definitions/resourceName"},
+        "databaseSecretProviderClass": {"$ref": "#/definitions/resourceName"},
+        "replicas": {"type": "integer", "minimum": 0},
+        "replicasManagedExternally": {"type": "boolean"},
+        "maxInFlightJobs": {"type": "integer", "minimum": 1},
+        "resources": {"type": "object"},
+        "nodeSelector": {"type": "object", "additionalProperties": {"type": "string"}},
+        "affinity": {"type": "object"},
+        "tolerations": {"type": "array", "items": {"type": "object"}},
+        "extraEnvSecrets": {"$ref": "#/definitions/envSecrets"},
+        "internalAPIURL": {"type": "string", "pattern": "^(|https?://.+)$"},
+        "secrets": {
+          "type": "object", "additionalProperties": false,
+          "required": ["existingSecrets", "project", "databaseUrl"],
+          "properties": {
+            "project": {"type": "string"}, "databaseUrl": {"type": "string"},
+            "existingSecrets": {"type": "object", "additionalProperties": false, "required": ["databaseUrl"], "properties": {"databaseUrl": {"$ref": "#/definitions/secretRef"}}}
+          }
+        }
+      }
+    },
+    "cloudBuild": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"}, "project": {"type": "string"}, "location": {"type": "string"},
+        "runtimeServiceAccount": {"type": "string"}, "artifactRegistryRepository": {"type": "string"},
+        "source": {"type": "object", "additionalProperties": false, "properties": {"bucket": {"type": "string"}, "prefix": {"type": "string"}}}
+      }
+    },
     "server": {"type": "object", "properties": {"extraEnvSecrets": {"$ref": "#/definitions/envSecrets"}, "replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}}},
     "frontend": {"type": "object", "properties": {"replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}}},
     "migration": {
@@ -75,6 +111,21 @@
     "gateway": {"type": "object", "properties": {"enabled": {"type": "boolean"}, "hostname": {"type": "string", "pattern": "^(|[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)$"}}}
   },
   "allOf": [
+    {
+      "if": {"properties": {"worker": {"properties": {"enabled": {"const": true}}}}},
+      "then": {
+        "properties": {
+          "images": {"required": ["worker"], "properties": {"worker": {"type": "string", "pattern": ".+@sha256:[a-f0-9]{64}$"}}},
+          "serviceAccounts": {
+            "required": ["worker", "workspaceHelperName"],
+            "properties": {
+              "worker": {"allOf": [{"$ref": "#/definitions/account"}, {"properties": {"name": {"$ref": "#/definitions/resourceName"}}}]},
+              "workspaceHelperName": {"$ref": "#/definitions/resourceName"}
+            }
+          }
+        }
+      }
+    },
     {
       "if": {"properties": {"gateway": {"properties": {"enabled": {"const": true}}}}},
       "then": {
@@ -116,6 +167,7 @@
     }
   ],
   "definitions": {
+    "resourceName": {"type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
     "gke": {"type": "object", "required": ["enabled", "secretManagerCSI", "workloadIdentity"], "properties": {"enabled": {"type": "boolean"}, "secretManagerCSI": {"$ref": "#/definitions/switch"}, "workloadIdentity": {"$ref": "#/definitions/switch"}}},
     "switch": {"type": "object", "required": ["enabled"], "properties": {"enabled": {"type": "boolean"}}},
     "account": {"type": "object", "required": ["name", "annotations"], "properties": {"name": {"type": "string", "minLength": 1}, "gsaEmail": {"type": "string"}, "annotations": {"type": "object", "additionalProperties": {"type": "string"}}}},

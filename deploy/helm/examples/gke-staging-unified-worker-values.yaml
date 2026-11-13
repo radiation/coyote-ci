@@ -1,0 +1,20 @@
+images:
+  worker: example.invalid/coyote-worker@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+serviceAccounts:
+  worker: {name: coyote-kubernetes-worker-staging, gsaEmail: coyote-gke-staging-worker@example-project.iam.gserviceaccount.com}
+worker:
+  enabled: true
+  name: coyote-kubernetes-worker-staging
+  configMapName: coyote-gke-staging-worker
+  databaseSecretProviderClass: coyote-staging-worker-database-secrets
+  replicas: 1
+  replicasManagedExternally: true
+  maxInFlightJobs: 4
+  secrets: {project: example-project, databaseUrl: coyote-staging-database-url}
+cloudBuild:
+  enabled: true
+  project: example-project
+  location: us-central1
+  runtimeServiceAccount: coyote-cloud-build@example-project.iam.gserviceaccount.com
+  artifactRegistryRepository: us-central1-docker.pkg.dev/example-project/coyote-ci
+  source: {bucket: coyote-sources, prefix: coyote-sources}

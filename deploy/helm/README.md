@@ -1,25 +1,57 @@
-# Coyote CI Helm charts
+# Coyote CI Helm chart
 
-These charts support external PostgreSQL and native Kubernetes Secrets without
+The public `coyote-ci` chart supports external PostgreSQL and native Kubernetes Secrets without
 cloud-provider dependencies. GKE integrations are explicit opt-ins. They do not
 provision a database, identity provider, cloud infrastructure, or credentials.
 
-- `coyote-ci` owns the control plane in its Helm release namespace.
-- `coyote-ci-worker` owns execution-worker resources in its separate Helm release
-  namespace. Chart consolidation and automatic migration hooks are deferred.
+- `coyote-ci` owns the control plane, optional MCP, manual migration resources,
+  and optional Kubernetes worker in one release. Worker resources live in
+  `executionNamespace`; release metadata stays in the control-plane namespace.
+- `coyote-ci-worker` remains only for the existing two-release GKE deployment
+  and recovery. Do not install it for new installations or enable unified worker
+  ownership over an existing worker release. Ownership migration and automatic
+  migration hooks remain separate milestones.
 
 ## Portable installation
 
-Start with `examples/generic-control-plane-values.yaml` and
-`examples/generic-worker-values.yaml`. These contain placeholder image digests
+Start with `examples/generic-values.yaml`. It contains placeholder image digests
 and Secret references, never credentials. Supply real digest-pinned images,
 an HTTPS OIDC issuer, client ID, callback/public URLs and bootstrap admin emails.
 OIDC remains required; the chart does not disable authentication for local use.
 
-Select the namespaces using `helm --namespace`. Leave `namespace: ""` in the
-values to use the release namespace; a nonempty override must match it. Set
-`executionNamespace` on the control plane and `controlPlaneNamespace` on the
-worker explicitly. Namespace sharing remains an explicit legacy exception.
+Select the control-plane namespace using `helm --namespace`. Leave `namespace: ""`
+to use the release namespace; a nonempty override must match it. Set
+`executionNamespace` explicitly and provision it before enabling workers.
+The chart never creates or deletes Namespace resources; `--create-namespace`
+only handles the release namespace. Native Secrets must preexist in each
+consumer namespace. Namespace sharing remains an explicit legacy exception.
+
+### Worker configuration and isolation
+
+Set `worker.enabled: true` to include execution resources (the chart default is
+false; the generic example enables it). Configure `worker.replicas`, `resources`,
+`maxInFlightJobs`, `nodeSelector`, `affinity`, and `tolerations` independently.
+Scheduling applies to the controller Deployment, not build Pods. Fresh installs
+should leave `worker.replicasManagedExternally: false`.
+
+`serviceAccounts.worker` configures the controller account name and optional
+identity annotations. `serviceAccounts.workspaceHelperName` configures the
+separate helper account consistently on server and worker. The helper has no
+cloud identity. Helper containers use projected tokens; build containers do not
+receive those mounts. Execution accounts receive no RBAC in the control-plane
+namespace when execution uses its own namespace. The server receives Pod get in
+the execution namespace and cluster-scoped TokenReview create for verification.
+
+The installer needs resource-management and RoleBinding permissions in both
+namespaces and authority to install the narrow cluster RBAC. The worker needs
+neither namespace-management nor cluster-wide permissions. Job-create permission
+makes the controller trusted within its namespace; namespace separation is not
+network isolation.
+
+The worker/helper image is `images.worker`; no independent helper image is
+accepted. The internal API URL is derived from the release namespace, with
+`worker.internalAPIURL` available for routing overrides. Storage, Cloud SQL, and
+GKE settings are shared. Cloud Build uses the optional `cloudBuild` settings.
 
 ### PostgreSQL and Secrets
 
@@ -38,8 +70,10 @@ worker, MCP and migration image all support `DATABASE_URL_FILE`.
 
 Set `secrets.existingSecrets.<credential>.name` and `.key` for `databaseUrl`,
 `workspaceHelperCapability`, `oidcClient` (the client secret), and `session` in
-the control-plane values. The worker requires only `databaseUrl` in its own
-namespace. Projected volumes expose only the selected keys. MCP and migrations
+the control-plane values. Set `worker.secrets.existingSecrets.databaseUrl.name`
+and `.key` for the worker's namespace-local database Secret. For GKE CSI instead,
+use `worker.secrets.project` and `worker.secrets.databaseUrl`. Do not configure
+both native and CSI references. Volumes expose only selected keys. MCP and migrations
 receive only the database key, not session, OIDC or helper signing credentials.
 Missing references fail rendering; missing Secret objects/keys prevent startup.
 Secret value changes generally require a workload restart to reload configuration.
@@ -91,13 +125,13 @@ GCS artifact storage; the chart rejects Cloud Build with server-local artifacts.
 
 Use the Phase 1 and Phase 2 commands below with the generic customer values:
 first install with zero application replicas and the explicit migration Job,
-then enable the control plane after Goose succeeds. Install the worker chart
-separately afterward. New PVC creation is deferred until the server is enabled,
+then enable the control plane and worker in the same release after Goose succeeds.
+New PVC creation is deferred until the server is enabled,
 so `WaitForFirstConsumer` storage classes do not block the zero-replica migration
 phase; previously created claims remain retained.
 In generic mode the migration Job uses a native database
-Secret with no Cloud SQL proxy or service-account token. Automatic one-operation
-migrations and single-chart installation belong to later milestones.
+Secret with no Cloud SQL proxy or service-account token. Single-chart installation
+is supported now; automatic one-operation first-install migrations are deferred.
 
 Services are private ClusterIP endpoints. Supply your own ingress/TLS setup;
 the existing `gateway` integration is GKE-specific and remains disabled by
@@ -109,8 +143,9 @@ Run `make helm-schema-test helm-package-validate` for provider-neutral renders
 and source/package equivalence. `bash scripts/kind-helm-smoke.sh` creates a
 disposable Kind cluster, builds local OCI test images without pushing them,
 installs PostgreSQL/native Secrets and an HTTPS OIDC discovery fixture, runs
-manual migrations, and checks authenticated artifact downloads across a server
-restart plus PVC retention after uninstall. It seeds one artifact and metadata
+manual migrations, and checks unified installation, compatible upgrade, worker
+enable/disable, scoped RBAC, authenticated artifact downloads across a server
+restart, and Secret/PVC/namespace retention after uninstall. It seeds one artifact and metadata
 instead of duplicating the execution suite. The fixture is not an OIDC login
 test; only the test server pod receives its local CA trust mount. PostgreSQL
 uses plaintext transport only inside this isolated test cluster.
@@ -128,17 +163,24 @@ Use the checked-in non-secret example values only for rendering and validation:
 ```sh
 helm lint --strict deploy/helm/coyote-ci \
   --namespace coyote-ci \
-  --values deploy/helm/examples/gke-staging-control-plane-values.yaml
-helm lint --strict deploy/helm/coyote-ci-worker \
-  --namespace coyote-ci-staging \
-  --values deploy/helm/examples/gke-staging-worker-values.yaml
+  --values deploy/helm/examples/gke-staging-control-plane-values.yaml \
+  --values deploy/helm/examples/gke-staging-unified-worker-values.yaml
+helm lint --strict deploy/helm/coyote-ci \
+  --namespace coyote-ci \
+  --values deploy/helm/examples/gke-production-control-plane-values.yaml \
+  --values deploy/helm/examples/gke-production-unified-worker-values.yaml
 scripts/helm-render-parity.sh
 scripts/helm-schema-test.sh
 ```
 
-## GKE first installation
+The unified worker overlays preserve GKE resource identities and replica
+management for render comparison. They do not migrate ownership. Never apply
+them over an active legacy worker release. Production's shared namespace is a
+legacy exception; new installations should use isolation.
 
-Before installation, provision the external GKE/GCP dependencies described in
+## First installation
+
+For GKE integrations, provision the external dependencies described in
 [`../docs/gke-gcp-deployment.md`](../docs/gke-gcp-deployment.md): Cloud SQL,
 Secret Manager secrets, Workload Identity and IAM bindings, GCS buckets, OIDC,
 and optional Gateway address, certificate, and DNS resources. The migration
@@ -161,14 +203,19 @@ digest-pinned server, frontend, worker, and migration images. MCP remains a
 separate environment-specific image setting.
 
 Use Helm-managed replicas for a fresh installation. For example,
-`customer-values.yaml` can contain:
+`customer-values.yaml` can contain (filesystem storage requires server replicas 1):
 
 ```yaml
 server:
   replicasManagedExternally: false
-  replicas: 2
+  replicas: 1
 
 frontend:
+  replicasManagedExternally: false
+  replicas: 1
+
+worker:
+  enabled: true
   replicasManagedExternally: false
   replicas: 1
 ```
@@ -186,7 +233,7 @@ mcp:
       - https://mcp.example.invalid
 ```
 
-The MCP image and GSA remain required environment-specific settings. Fresh
+The MCP image remains required; a GSA is required only with GKE Workload Identity. Fresh
 installations must not copy `replicasManagedExternally: true` from the
 established GKE integration deployment. External replica management is
 reserved for workflows that explicitly manage the Deployment scale
@@ -215,6 +262,8 @@ helm upgrade --install coyote-ci deploy/helm/coyote-ci \
   --set server.replicas=0 \
   --set frontend.replicasManagedExternally=false \
   --set frontend.replicas=0 \
+  --set worker.replicasManagedExternally=false \
+  --set worker.replicas=0 \
   --set migration.render=true \
   --set "migration.runID=$INSTALL_MIGRATION_ID" \
   --wait \
@@ -222,7 +271,7 @@ helm upgrade --install coyote-ci deploy/helm/coyote-ci \
   --timeout 15m
 ```
 
-When enabling MCP, supply its separately published digest-pinned image and GSA
+When enabling MCP, supply its digest-pinned image (and GSA with Workload Identity)
 in `customer-values.yaml`, and add:
 
 ```sh
@@ -232,7 +281,7 @@ in `customer-values.yaml`, and add:
 
 The first revision temporarily overrides the desired customer replica counts
 to zero. It creates the migration ServiceAccount, SecretProviderClass, and
-Job while the server, frontend, and optional MCP database consumers remain
+Job while the server, frontend, optional worker, and optional MCP consumers remain
 unavailable. Kubernetes object creation does not guarantee operational
 readiness; `--wait --wait-for-jobs` waits for the Job's result and reports its
 failure. The Job image runs Goose against an empty database, applies only
@@ -244,7 +293,7 @@ correct the cause, and repeat Phase 1 with a new migration ID. Do not retry
 while a prior Job might still be running or has ambiguous status. Do not run
 Goose down migrations automatically.
 
-### Phase 2: enable the control plane
+### Phase 2: enable the application
 
 After Phase 1 succeeds, enable the desired replicas from
 `customer-values.yaml`:
@@ -260,29 +309,20 @@ helm upgrade coyote-ci deploy/helm/coyote-ci \
 ```
 
 This removes the completed migration Job from the Helm release and restores
-the configured nonzero server, frontend, and optional MCP replicas from
+the configured nonzero server, frontend, optional worker, and optional MCP replicas from
 `customer-values.yaml`. Capture successful Job status or logs before Phase 2
 if they are needed for installation evidence. If Phase 2 fails, correct the
 workload or configuration issue and repeat only Phase 2; a completed migration
 does not need to be rerun.
 
-### Phase 3: optionally install the Kubernetes worker
+### Worker lifecycle
 
-The control plane can be installed without a Kubernetes execution worker. To
-enable Kubernetes job execution after the control plane is ready:
-
-```sh
-helm upgrade --install coyote-ci-worker deploy/helm/coyote-ci-worker \
-  --namespace "$COYOTE_EXECUTION_NAMESPACE" \
-  --create-namespace \
-  --values worker-values.yaml \
-  --values coyote-release-images.yaml \
-  --wait \
-  --timeout 15m
-```
-
-The worker is installed only after the database is migrated and does not run
-its own migration Job.
+No second Helm release is needed. Set `worker.enabled` in the complete desired
+values and upgrade `coyote-ci`. Before disabling workers or uninstalling, stop new
+execution and drain active Jobs. Disabling the worker removes its Deployment,
+accounts and RBAC; it does not delete runtime-created Jobs or their namespace.
+Changing `executionNamespace` or resource names changes identities and requires
+a deliberate drain/reconfiguration, not an ordinary upgrade.
 
 ### Upgrades
 
@@ -291,7 +331,8 @@ not by itself establish whether a database migration is required. Until
 migrations are backwards-compatible across supported application versions,
 release notes must explicitly state either:
 
-- **No database migration required:** use ordinary `helm upgrade --install`.
+- **No database migration required:** use one `helm upgrade --install` for the
+  unified release with complete desired values and the immutable image overlay.
 - **Database migration required:** use the controlled quiesce/migrate/restore
   procedure for the established environment.
 
@@ -299,6 +340,15 @@ The existing GKE rollout-recovery path remains the schema-changing upgrade
 procedure. Do not use the first-install commands to replace its safeguards.
 
 ### Existing GKE installations
+
+Keep the existing two-release workflow and original values files with
+`worker.enabled: false` on the control-plane release (the default). Standalone
+worker source, values generation, rollout, adoption, and normalization tooling
+remain unchanged. They are a temporary bridge, not a second public install model.
+Do not use unified worker overlays until a separately approved ownership migration
+is complete. Changing live Helm annotations alone is unsafe: the old release's
+stored manifest can still delete resources. This change neither implements nor
+rehearses that migration.
 
 Before upgrading from cloud-enabled chart defaults, explicitly add the following
 to **both** operator values files (and preserve all existing cloud references):

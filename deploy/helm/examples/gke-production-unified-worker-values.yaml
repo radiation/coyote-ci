@@ -1,0 +1,21 @@
+images:
+  worker: example.invalid/coyote-worker@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+serviceAccounts:
+  worker: {name: coyote-kubernetes-worker, gsaEmail: coyote-ci-worker@bryanchoate.iam.gserviceaccount.com}
+worker:
+  enabled: true
+  name: coyote-kubernetes-worker
+  configMapName: coyote-gke-production-worker
+  databaseSecretProviderClass: coyote-production-worker-database-secrets
+  internalAPIURL: http://coyote-server.coyote-ci.svc.cluster.local:8080
+  replicas: 1
+  replicasManagedExternally: true
+  maxInFlightJobs: 1
+  secrets: {project: bryanchoate, databaseUrl: coyote-ci-database-url}
+cloudBuild:
+  enabled: true
+  project: bryanchoate
+  location: us-central1
+  runtimeServiceAccount: coyote-cloud-build@bryanchoate.iam.gserviceaccount.com
+  artifactRegistryRepository: us-central1-docker.pkg.dev/bryanchoate/coyote-ci
+  source: {bucket: example-production-sources, prefix: coyote-sources}

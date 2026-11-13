@@ -300,3 +300,95 @@ puts "Portable Helm configuration tests passed"
 RUBY
 
 echo "Helm schema-negative tests passed"
+
+ruby -ryaml -rjson -ropen3 - "$repo_root" <<'RUBY'
+root = ARGV.fetch(0)
+def unified(root, overrides = {}, failure: nil)
+  output, error, result = Open3.capture3("helm", "template", "portable", "#{root}/deploy/helm/coyote-ci",
+    "--namespace", "portable-control", "--values", "#{root}/deploy/helm/examples/generic-values.yaml",
+    "--values", "-", stdin_data: JSON.generate(overrides))
+  if failure
+    abort "expected #{failure.inspect}: #{error}" if result.success? || !error.include?(failure)
+    return
+  end
+  abort error unless result.success?
+  abort "generic unified render contains cloud integration" if output.match?(/secrets-store|cloud-sql|iam\.gke|GOOGLE_|CLOUD_BUILD_|_GCS_|SecretProviderClass|networking\.gke/)
+  documents = YAML.load_stream(output).compact
+  keys = documents.map { |doc| [doc["kind"], doc.dig("metadata", "namespace"), doc.dig("metadata", "name")] }
+  abort "duplicate resource identities" unless keys.uniq == keys
+  abort "chart must not own namespaces or native Secrets" if documents.any? { |doc| %w[Namespace Secret].include?(doc["kind"]) }
+  documents
+end
+def find_resource(documents, kind, name, namespace = "portable-execution")
+  documents.find { |doc| doc["kind"] == kind && doc.dig("metadata", "name") == name && doc.dig("metadata", "namespace") == namespace } or abort "missing #{namespace}/#{kind}/#{name}"
+end
+documents = unified(root)
+worker = find_resource(documents, "Deployment", "coyote-kubernetes-worker")
+abort "worker replicas missing" unless worker.dig("spec", "replicas") == 1
+pod = worker.dig("spec", "template", "spec")
+abort "worker account incorrect" unless pod["serviceAccountName"] == "coyote-kubernetes-worker"
+abort "worker must not mount server PVC" if pod.fetch("volumes").any? { |volume| volume.key?("persistentVolumeClaim") }
+abort "worker must mount only its database" unless pod.fetch("volumes").length == 1 && pod.fetch("volumes").first.dig("secret", "items") == [{"key" => "url", "path" => "database-url"}]
+env = pod.fetch("containers").first.fetch("env").to_h { |entry| [entry["name"], entry["value"]] }
+abort "incorrect runtime namespace/helper" unless env["WORKER_KUBERNETES_NAMESPACE"] == "portable-execution" && env["COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT"] == "coyote-workspace-helper"
+abort "helper must use the release worker image" unless env["WORKER_KUBERNETES_HELPER_IMAGE"] == pod.fetch("containers").first.fetch("image")
+abort "incorrect internal API URL" unless find_resource(documents, "ConfigMap", "coyote-worker").dig("data", "WORKER_KUBERNETES_INTERNAL_API_URL") == "http://coyote-server.portable-control.svc.cluster.local:8080"
+abort "helper must not have cloud identity" if find_resource(documents, "ServiceAccount", "coyote-workspace-helper").fetch("metadata").key?("annotations")
+worker_rules = find_resource(documents, "Role", "coyote-kubernetes-worker").fetch("rules")
+abort "worker RBAC changed" unless worker_rules == [
+  {"apiGroups" => ["batch"], "resources" => ["jobs"], "verbs" => %w[get list watch create delete]},
+  {"apiGroups" => [""], "resources" => ["pods"], "verbs" => %w[get list watch]},
+  {"apiGroups" => [""], "resources" => ["pods/log"], "verbs" => ["get"]}]
+%w[coyote-workspace-helper coyote-server-workspace-verifier].each do |name|
+  abort "excessive helper/verifier RBAC" unless find_resource(documents, "Role", name).fetch("rules") == [{"apiGroups" => [""], "resources" => ["pods"], "verbs" => ["get"]}]
+end
+verifier = find_resource(documents, "RoleBinding", "coyote-server-workspace-verifier")
+abort "verifier subject incorrect" unless verifier["subjects"] == [{"kind" => "ServiceAccount", "name" => "coyote-server", "namespace" => "portable-control"}]
+documents.select { |doc| %w[RoleBinding ClusterRoleBinding].include?(doc["kind"]) }.each do |binding|
+  binding.fetch("subjects").each do |subject|
+    next unless %w[coyote-kubernetes-worker coyote-workspace-helper].include?(subject["name"])
+    abort "execution identity escaped namespace" unless binding["kind"] == "RoleBinding" && binding.dig("metadata", "namespace") == "portable-execution" && subject["namespace"] == "portable-execution"
+  end
+end
+disabled = unified(root, {"worker" => {"enabled" => false, "secrets" => {"existingSecrets" => {"databaseUrl" => {"name" => "", "key" => ""}}}}, "images" => {"worker" => ""}})
+abort "disabled worker resources rendered" if disabled.any? { |doc| doc.dig("metadata", "namespace") == "portable-execution" }
+abort "disabled worker altered control-plane resources" unless disabled == documents.reject { |doc| doc.dig("metadata", "namespace") == "portable-execution" }
+scheduling = {"replicas" => 3, "resources" => {"requests" => {"cpu" => "100m"}}, "nodeSelector" => {"pool" => "workers"}, "affinity" => {"podAntiAffinity" => {"preferredDuringSchedulingIgnoredDuringExecution" => []}}, "tolerations" => [{"key" => "ci", "operator" => "Exists", "effect" => "NoSchedule"}], "extraEnvSecrets" => {"GITHUB_STATUS_TOKEN" => {"name" => "github", "key" => "token"}}}
+custom = unified(root, {"worker" => scheduling, "serviceAccounts" => {"worker" => {"name" => "controller", "annotations" => {"example.org/identity" => "worker"}}, "workspaceHelperName" => "helper"}})
+custom_worker = find_resource(custom, "Deployment", "coyote-kubernetes-worker")
+custom_pod = custom_worker.dig("spec", "template", "spec")
+abort "worker replica override missing" unless custom_worker.dig("spec", "replicas") == 3
+%w[nodeSelector affinity tolerations].each { |key| abort "#{key} lost" unless custom_pod[key] == scheduling[key] }
+abort "worker resources missing" unless custom_pod.fetch("containers").first["resources"] == scheduling["resources"]
+abort "worker account override missing" unless custom_pod["serviceAccountName"] == "controller"
+abort "worker account annotations missing" unless find_resource(custom, "ServiceAccount", "controller").dig("metadata", "annotations", "example.org/identity") == "worker"
+find_resource(custom, "ServiceAccount", "helper")
+abort "helper verification name differs" unless find_resource(custom, "ConfigMap", "coyote-control-plane", "portable-control").dig("data", "COYOTE_WORKSPACE_HELPER_SERVICE_ACCOUNT") == "helper"
+abort "worker Secret env missing" unless custom_pod.fetch("containers").first.fetch("env").any? { |entry| entry["name"] == "GITHUB_STATUS_TOKEN" && entry.dig("valueFrom", "secretKeyRef") == {"name" => "github", "key" => "token"} }
+external = unified(root, {"worker" => {"replicasManagedExternally" => true}})
+abort "external worker replicas must be omitted" if find_resource(external, "Deployment", "coyote-kubernetes-worker").fetch("spec").key?("replicas")
+renamed = unified(root, {"executionNamespace" => "other-execution"})
+find_resource(renamed, "Deployment", "coyote-kubernetes-worker", "other-execution")
+[
+  [{"images" => {"worker" => "worker:mutable"}}, "images/worker"],
+  [{"worker" => {"replicas" => -1}}, "replicas"],
+  [{"worker" => {"maxInFlightJobs" => 0}}, "maxInFlightJobs"],
+  [{"worker" => {"nodeSelector" => {"pool" => 1}}}, "nodeSelector"],
+  [{"worker" => {"tolerations" => {}}}, "tolerations"],
+  [{"worker" => {"helperImage" => "untrusted:latest"}}, "additional properties"],
+  [{"worker" => {"secrets" => {"existingSecrets" => {"databaseUrl" => {"key" => ""}}}}}, "requires name and key"],
+  [{"worker" => {"secrets" => {"project" => "legacy"}}}, "CSI opt-ins"],
+  [{"worker" => {"extraEnvSecrets" => {"WORKER_KUBERNETES_NAMESPACE" => {"name" => "secret", "key" => "value"}}}}, "must not override"],
+  [{"executionNamespace" => "portable-control"}, "namespaces must differ"],
+  [{"serviceAccounts" => {"worker" => {"name" => "coyote-workspace-helper"}}}, "must be separate"],
+  [{"serviceAccounts" => {"worker" => {"gsaEmail" => "cloud@example.invalid"}}}, "workload identity"],
+  [{"serviceAccounts" => {"worker" => {"annotations" => {"iam.gke.io/gcp-service-account" => "cloud@example.invalid"}}}}, "opt-ins"],
+  [{"worker" => {"name" => "coyote-workspace-helper"}}, "conflicts"],
+  [{"executionNamespace" => "portable-control", "allowSharedExecutionNamespace" => true, "serviceAccounts" => {"workspaceHelperName" => "coyote-server"}}, "must be separate"],
+  [{"executionNamespace" => "portable-control", "allowSharedExecutionNamespace" => true, "serviceAccounts" => {"worker" => {"name" => "coyote-server"}}}, "must be separate"],
+  [{"executionNamespace" => "portable-control", "allowSharedExecutionNamespace" => true, "worker" => {"configMapName" => "coyote-control-plane"}}, "conflicts"],
+  [{"cloudBuild" => {"enabled" => true}}, "requires GCS"],
+  [{"cloudBuild" => {"project" => "implicit"}}, "explicit cloudBuild.enabled"]
+].each { |overrides, failure| unified(root, overrides, failure: failure) }
+puts "Unified worker schema, scheduling, Secret and RBAC tests passed"
+RUBY

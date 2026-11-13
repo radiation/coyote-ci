@@ -223,3 +223,34 @@ abort "offline generator failed: #{output}\n#{error}" unless result.success?
 end
 puts "Offline GKE values generator parity passed"
 RUBY
+
+ruby -ryaml -rjson -ropen3 - "$repo_root" <<'RUBY'
+root = ARGV.fetch(0)
+desired = {"worker" => {"replicas" => 2}, "mcp" => {"enabled" => true, "replicas" => 2}, "images" => {"mcp" => "example.invalid/mcp@sha256:" + "e" * 64}}
+phases = {
+  "migrate" => desired.merge("server" => {"replicas" => 0}, "frontend" => {"replicas" => 0}, "worker" => {"replicas" => 0}, "mcp" => {"enabled" => true, "replicas" => 0}, "migration" => {"render" => true, "runID" => "unified-install"}),
+  "restore" => desired
+}
+renders = phases.transform_values do |overrides|
+  output, error, result = Open3.capture3("helm", "template", "unified", "#{root}/deploy/helm/coyote-ci", "--namespace", "portable-control", "--values", "#{root}/deploy/helm/examples/generic-values.yaml", "--values", "-", stdin_data: JSON.generate(overrides))
+  abort error unless result.success?
+  documents = YAML.load_stream(output).compact
+  abort "automatic migration hooks are not supported" if documents.any? { |doc| doc.dig("metadata", "annotations", "helm.sh/hook") }
+  documents
+end
+migrate = renders.fetch("migrate")
+deployments = migrate.select { |doc| doc["kind"] == "Deployment" }
+abort "manual phase must quiesce all four consumers" unless deployments.length == 4 && deployments.all? { |doc| doc.dig("spec", "replicas") == 0 }
+abort "manual phase must have one explicit migration Job" unless migrate.count { |doc| doc["kind"] == "Job" && doc.dig("metadata", "name") == "coyote-migrate-unified-install" } == 1
+abort "manual phase must not create an unconsumed PVC" if migrate.any? { |doc| doc["kind"] == "PersistentVolumeClaim" }
+restore = renders.fetch("restore")
+abort "restore must remove the migration Job" if restore.any? { |doc| doc["kind"] == "Job" }
+{"coyote-server" => 1, "coyote-frontend" => 1, "coyote-mcp" => 2, "coyote-kubernetes-worker" => 2}.each do |name, replicas|
+  deployment = restore.find { |doc| doc["kind"] == "Deployment" && doc.dig("metadata", "name") == name }
+  abort "#{name} replicas not restored" unless deployment && deployment.dig("spec", "replicas") == replicas
+end
+identity = ->(doc) { [doc["kind"], doc.dig("metadata", "namespace").to_s, doc.dig("metadata", "name")] }
+stable = ->(docs) { docs.reject { |doc| %w[Job PersistentVolumeClaim].include?(doc["kind"]) }.map(&identity).sort }
+abort "resource names changed between phases" unless stable.call(migrate) == stable.call(restore)
+puts "Unified manual migration and replica restoration tests passed"
+RUBY
