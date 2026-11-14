@@ -24,6 +24,7 @@ import (
 )
 
 var validLogicalImageName = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
+var validImageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 type Config struct {
 	ProjectID                  string
@@ -91,7 +92,52 @@ func (c *Client) Get(ctx context.Context, handle domain.ImageBuildHandle) (domai
 	if err != nil {
 		return domain.ImageBuildResult{}, err
 	}
-	return resultFromBuild(build), nil
+	result := resultFromBuild(build)
+	if result.Status == domain.ImageBuildStatusSuccess && build.Substitutions["_COYOTE_PLATFORMS"] != "" {
+		reference := build.Substitutions["_COYOTE_IMAGE"]
+		if immutableErr := c.EnsureImmutableTags(ctx, reference); immutableErr != nil {
+			return domain.ImageBuildResult{}, immutableErr
+		}
+		digest, found, resolveErr := c.ResolvePublishedDigest(ctx, reference)
+		if resolveErr != nil {
+			return domain.ImageBuildResult{}, resolveErr
+		}
+		if !found {
+			return domain.ImageBuildResult{}, errors.New("published image index is not visible in Artifact Registry")
+		}
+		imageName := c.registryRepositoryName + "/dockerImages/" + url.PathEscape(strings.TrimPrefix(digest, c.artifactRegistryRepository+"/"))
+		image, imageErr := c.registry.Projects.Locations.Repositories.DockerImages.Get(imageName).Context(ctx).Do()
+		if imageErr != nil {
+			return domain.ImageBuildResult{}, imageErr
+		}
+		if indexErr := validateImageIndex(image, strings.Split(build.Substitutions["_COYOTE_PLATFORMS"], ",")); indexErr != nil {
+			result.Status = domain.ImageBuildStatusFailed
+			result.FailureDetail = indexErr.Error()
+			return result, nil
+		}
+		result.PublishedImageReference = reference
+		result.PublishedImageDigestReference = digest
+		result.ImageDigest = strings.SplitN(digest, "@", 2)[1]
+	}
+	return result, nil
+}
+
+func validateImageIndex(image *artifactregistry.DockerImage, platforms []string) error {
+	if image.MediaType != "application/vnd.oci.image.index.v1+json" && image.MediaType != "application/vnd.docker.distribution.manifest.list.v2+json" {
+		return errors.New("published artifact is not an image index")
+	}
+	for _, platform := range platforms {
+		found := false
+		for _, manifest := range image.ImageManifests {
+			if manifest != nil && manifest.Os+"/"+manifest.Architecture == platform && validImageDigest.MatchString(manifest.Digest) {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("published image index is missing platform %s", platform)
+		}
+	}
+	return nil
 }
 
 func (c *Client) Cancel(ctx context.Context, handle domain.ImageBuildHandle) error {
@@ -112,6 +158,9 @@ func (c *Client) FindByExecutionJobID(ctx context.Context, executionJobID string
 }
 
 func (c *Client) buildRequest(request domain.ImageBuildRequest) (*googlecloudbuild.Build, error) {
+	if platformErr := domain.ValidateImagePlatforms(request.Spec.Platforms); platformErr != nil {
+		return nil, platformErr
+	}
 	generation, generationErr := strconv.ParseInt(request.Source.Generation, 10, 64)
 	if generationErr != nil || generation <= 0 {
 		return nil, fmt.Errorf("invalid source generation %q", request.Source.Generation)
@@ -132,7 +181,7 @@ func (c *Client) buildRequest(request domain.ImageBuildRequest) (*googlecloudbui
 		args = append(args, "--build-arg="+key+"="+value)
 	}
 	args = append(args, request.Spec.ContextPath)
-	return &googlecloudbuild.Build{
+	build := &googlecloudbuild.Build{
 		Source:         &googlecloudbuild.Source{StorageSource: &googlecloudbuild.StorageSource{Bucket: request.Source.Bucket, Object: request.Source.Object, Generation: generation}},
 		Steps:          []*googlecloudbuild.BuildStep{{Name: "gcr.io/cloud-builders/docker", Args: args, Env: []string{"DOCKER_BUILDKIT=1"}}},
 		Images:         []string{targetImage},
@@ -140,7 +189,25 @@ func (c *Client) buildRequest(request domain.ImageBuildRequest) (*googlecloudbui
 		Timeout:        protobufDurationSeconds(request.Timeout),
 		ServiceAccount: c.serviceAccountResourceName(),
 		Tags:           []string{"coyote-execution-" + request.ExecutionJobID},
-	}, nil
+	}
+	if len(request.Spec.Platforms) > 0 {
+		if !c.ownsPublishedImageReference(targetImage) {
+			return nil, errors.New("multi-platform image must use the configured registry")
+		}
+		if _, tagged := imageTag(targetImage); !tagged {
+			return nil, errors.New("multi-platform image publication requires an immutable version tag")
+		}
+		platforms := strings.Join(request.Spec.Platforms, ",")
+		build.Images = nil
+		build.Options.SubstitutionOption = "ALLOW_LOOSE"
+		build.Substitutions = map[string]string{"_COYOTE_IMAGE": targetImage, "_COYOTE_PLATFORMS": platforms}
+		build.Steps = []*googlecloudbuild.BuildStep{
+			{Name: "docker:28-cli", Args: []string{"run", "--privileged", "--rm", "tonistiigi/binfmt:latest", "--install", "amd64,arm64"}},
+			{Name: "docker:28-cli", Args: []string{"buildx", "create", "--name", "coyote", "--driver", "docker-container", "--use"}, Env: []string{"DOCKER_CONFIG=/builder/home/.docker"}},
+			{Name: "docker:28-cli", Args: append([]string{"buildx", "build", "--builder=coyote", "--platform=" + platforms, "--push", "--provenance=mode=min"}, args[1:]...), Env: []string{"DOCKER_CONFIG=/builder/home/.docker", "DOCKER_BUILDKIT=1"}},
+		}
+	}
+	return build, nil
 }
 
 func protobufDurationSeconds(timeout time.Duration) string {
@@ -212,7 +279,7 @@ func (c *Client) ResolvePublishedDigest(ctx context.Context, publishedImageRefer
 		return "", false, fmt.Errorf("artifact Registry tag %q returned an invalid version reference %q", publishedImageReference, resolvedTag.Version)
 	}
 	digest := resolvedTag.Version[versionIndex+len(versionMarker):]
-	if !strings.HasPrefix(digest, "sha256:") {
+	if !validImageDigest.MatchString(digest) {
 		return "", false, fmt.Errorf("artifact Registry tag %q returned a non-digest version reference %q", publishedImageReference, resolvedTag.Version)
 	}
 	return imageRepository(publishedImageReference) + "@" + digest, true, nil

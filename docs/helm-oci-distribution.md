@@ -1,14 +1,13 @@
 # Helm OCI Chart Distribution
 
 Coyote CI's public chart is `deploy/helm/coyote-ci`: control plane, optional MCP,
-optional Kubernetes worker, scoped RBAC, and manual migration resources in one
+optional Kubernetes worker, scoped RBAC, and automatic Goose migration hooks in one
 release. Workers are direct templates, not a subchart.
 
 `deploy/helm/coyote-ci-worker` remains a temporary bridge for the existing GKE
 two-release installation and recovery. Do not use it for fresh installations.
 The V3 manifest already requires one `coyote-ci` chart and all five component
-images. Completing V3 assembly is separate from chart consolidation; legacy
-product-release workflows remain unchanged. Supply `images.mcp` separately when
+images. The existing Go publisher now produces the complete V3 release. Supply `images.mcp` separately when
 using a legacy image overlay that does not include MCP.
 
 ## Local Validation
@@ -23,67 +22,48 @@ make helm-package-validate
 The package validator checks the chart name and SemVer version, packages only
 `coyote-ci` by default, enforces an archive allowlist, and compares source/package
 renders for portable and GKE unified configurations. It never publishes artifacts.
-`bash scripts/test-helm-publish-oci.sh` tests publication with fake Helm/GCP commands,
-including the existing explicit legacy retry paths.
+`make release-publish-test` tests publication, retries and conflicts with fake
+Helm/cloud responses; it does not contact a registry.
 
 Chart `version` is the immutable package identity. Increment it whenever a
 chart's packaged content changes. The unified chart starts at `0.2.0`.
-`appVersion` is informational. V3 release assembly must stamp chart `version`
-to match the immutable application release; legacy chart packaging remains
-independent until that separate assembly milestone is complete.
+The release pipeline stamps `version` and `appVersion` to match the immutable
+application release; the source chart's development version is not modified.
 
 ## Publishing
 
-Publishing requires an explicit OCI destination and an operator confirmation
-that the target registry enforces immutable tags:
+Use the completed Build's existing Go publication command:
 
 ```sh
-make helm-publish-oci \
-  OCI_REGISTRY=us-central1-docker.pkg.dev/PROJECT/coyote-ci \
-  OCI_IMMUTABLE_TAGS_CONFIRMED=true
+coyote release publish-coyote --build BUILD_ID \
+  --release-source RELEASE_SOURCE \
+  --helm-repository oci://REGISTRY/charts/coyote-ci \
+  --immutable-chart-tags-confirmed
 ```
 
-The default `unified` selection publishes only:
+The command validates the exact build artifact, pushes only an absent version,
+pulls it back and compares archive bytes. Docker Buildx resolves the OCI descriptor
+as JSON, then Helm pulls by digest and the bytes are checked again before that
+digest is recorded. Both Helm and Docker require chart-registry pull credentials.
+An identical version is an idempotent retry; different bytes fail. Only explicit
+`manifest unknown` or Helm 4's exact `<reference>: not found` response permits a
+push. Authentication and ambiguous lookup failures fail closed.
+The flag acknowledges operator-verified immutable-tag policy; it does not configure
+or inspect registry policy. Writer credentials, retention and pull access must
+already be provisioned. No channel is promoted by default.
 
-```text
-oci://us-central1-docker.pkg.dev/PROJECT/coyote-ci/charts/coyote-ci
-```
+See [release guarantees and prerequisites](releases.md) and the
+[retirement inventory](release-planning.md). The standalone publisher and legacy
+worker-only publication selections are removed. Historical packages remain
+available for recovery; local legacy chart validation remains opt-in through
+`HELM_PACKAGE_INCLUDE_LEGACY_WORKER=true`.
 
-For the existing two-release GKE installation only, explicit `all`, `control-plane`,
-and `worker` selections retain their previous behavior. For example, an approved
-legacy worker-only publication retry remains:
+## Historical Manual OCI Installation
 
-```sh
-make helm-publish-oci \
-  OCI_REGISTRY=us-central1-docker.pkg.dev/PROJECT/coyote-ci \
-  OCI_IMMUTABLE_TAGS_CONFIRMED=true \
-  HELM_CHART_SELECTION=worker
-```
-
-The publisher validates locally, rejects existing versions, pushes without
-force/overwrite behavior, captures the OCI digest, then pulls the version,
-compares the pull digest to the push digest, and renders the published chart.
-It treats only Helm's explicit OCI `manifest unknown` response as evidence that
-a chart version is absent; authorization, repository, connectivity, and
-ambiguous lookup errors fail closed. In explicit legacy `all` mode, pushes remain
-independent: repair and retry only the unpublished chart after partial failure.
-Keep historical packages available for recovery. Use
-`HELM_PACKAGE_INCLUDE_LEGACY_WORKER=true bash scripts/helm-package-validate.sh`
-when validating both packages for that temporary bridge. Retire legacy selections
-and chart source once the existing GKE ownership migration resolves their users.
-
-For Artifact Registry, `OCI_REGISTRY` must be exactly
-`<location>-docker.pkg.dev/<project>/<repository>`. The publisher verifies
-that the repository exists and has `DOCKER` format, then uses authenticated,
-read-only Docker image listings before publication. It treats a matching chart
-tag as an existing version and fails closed on listing or authentication
-errors. Other `*.pkg.dev` destinations, including nested paths, are rejected.
-
-Before publishing, operators must verify Artifact Registry writer IAM,
-immutable-tag enforcement, and cleanup/retention rules. Public anonymous pull
-is an explicit policy decision and is not changed by these scripts.
-
-## OCI Installation
+The manual sequence below is retained for the old chart revision used by the
+existing installation. Do not apply it to new V3 releases with automatic hooks;
+use the current [chart runbook](../deploy/helm/README.md) and
+[database migration runbook](../deploy/docs/database-migrations.md) instead.
 
 The unified chart can be pulled and rendered without cloning the repository:
 

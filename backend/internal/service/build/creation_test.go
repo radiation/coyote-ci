@@ -7,7 +7,8 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
 )
 
-func TestPipelineStepsToDomainPreservesImageBuildArtifactInputs(t *testing.T) {
+func TestPipelineStepsToDomainPreservesImageBuildInputs(t *testing.T) {
+	resolvedPlatforms := []string{"linux/amd64", "linux/arm64"}
 	resolvedInputs := []domain.ImageBuildArtifactInput{
 		{Name: "coyote-server", Destination: "dist/coyote-server"},
 		{Name: "coyote-worker", Destination: "dist/coyote-worker"},
@@ -18,6 +19,7 @@ func TestPipelineStepsToDomainPreservesImageBuildArtifactInputs(t *testing.T) {
 			ContextPath:          "backend",
 			DockerfilePath:       "backend/Dockerfile",
 			TargetImageReference: "coyote-ci/backend",
+			Platforms:            resolvedPlatforms,
 			ArtifactInputs:       resolvedInputs,
 		},
 	}})
@@ -32,6 +34,14 @@ func TestPipelineStepsToDomainPreservesImageBuildArtifactInputs(t *testing.T) {
 	steps[0].RemoteImageBuild.ArtifactInputs[0].Name = "changed"
 	if resolvedInputs[0].Name != "coyote-server" {
 		t.Fatalf("source artifact input was mutated: %q", resolvedInputs[0].Name)
+	}
+	platforms := steps[0].RemoteImageBuild.Platforms
+	if len(platforms) != 2 || platforms[0] != "linux/amd64" || platforms[1] != "linux/arm64" {
+		t.Fatalf("platforms = %v", platforms)
+	}
+	platforms[0] = "changed"
+	if resolvedPlatforms[0] != "linux/amd64" {
+		t.Fatalf("source platforms were mutated: %v", resolvedPlatforms)
 	}
 }
 

@@ -61,12 +61,11 @@ func TestLoadAndResolve_RepositoryPipeline(t *testing.T) {
 		"Backend Vet":           {"node-001"},
 		"Backend Test":          {"node-001"},
 		"Frontend Test":         {"node-002"},
-		"Backend Build Server":  {"node-003", "node-004"},
-		"Backend Build Worker":  {"node-003", "node-004"},
-		"Frontend Build":        {"node-005"},
-		"Coyote Server Image":   {"node-000", "node-006", "node-007"},
-		"Coyote Frontend Image": {"node-008"},
-		"Coyote Worker Image":   {"node-000", "node-006", "node-007"},
+		"Coyote Server Image":   {"node-000", "node-003", "node-004"},
+		"Coyote Frontend Image": {"node-005"},
+		"Coyote Worker Image":   {"node-000", "node-003", "node-004"},
+		"Coyote MCP Image":      {"node-000", "node-003", "node-004"},
+		"Coyote Migrate Image":  {"node-000", "node-003", "node-004"},
 	}
 	for name, want := range wantDependencies {
 		step, found := byName[name]
@@ -77,17 +76,38 @@ func TestLoadAndResolve_RepositoryPipeline(t *testing.T) {
 			t.Fatalf("step %q dependencies=%#v, want %#v", name, step.DependsOnNodeIDs, want)
 		}
 	}
-	for _, name := range []string{"Backend Format Check", "Backend Dependencies", "Backend Vet", "Backend Test", "Backend Build Server", "Backend Build Worker"} {
+	for _, name := range []string{"Backend Format Check", "Backend Dependencies", "Backend Vet", "Backend Test"} {
 		if byName[name].Cache == nil || byName[name].Cache.Preset != "go" {
 			t.Fatalf("step %q cache=%#v, want Go preset", name, byName[name].Cache)
 		}
 	}
-	for _, name := range []string{"Frontend Install", "Frontend Test", "Frontend Build"} {
+	for _, name := range []string{"Frontend Install", "Frontend Test"} {
 		if byName[name].Cache == nil || byName[name].Cache.Preset != "node" {
 			t.Fatalf("step %q cache=%#v, want Node preset", name, byName[name].Cache)
 		}
 	}
 	serverImage := byName["Coyote Server Image"]
+	if len(resolved.Release.Images) != 5 || len(resolved.Release.Artifacts) != 11 {
+		t.Fatalf("release outputs: %+v", resolved.Release)
+	}
+	for _, name := range resolved.Release.Images {
+		if strings.Join(byName[name].RemoteImageBuild.Platforms, ",") != "linux/amd64,linux/arm64" {
+			t.Fatalf("missing release platforms for %s", name)
+		}
+	}
+	for _, name := range resolved.Release.Artifacts {
+		producers := 0
+		for _, step := range resolved.Steps {
+			for _, declaration := range step.ArtifactDecls {
+				if declaration.Name == name {
+					producers++
+				}
+			}
+		}
+		if producers != 1 {
+			t.Fatalf("release artifact %s has %d producing steps", name, producers)
+		}
+	}
 	if len(serverImage.RemoteImageBuild.ArtifactInputs) != 0 {
 		t.Fatalf("Coyote Server Image artifact inputs=%#v, want none", serverImage.RemoteImageBuild.ArtifactInputs)
 	}

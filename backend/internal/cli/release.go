@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,13 +93,17 @@ func (a *app) newReleasePromoteChannelCommand() *cobra.Command {
 }
 
 func (a *app) newReleasePublishCoyoteCommand() *cobra.Command {
-	var buildID, sourceLocation, channel string
+	var buildID, sourceLocation, channel, helmRepository string
+	var immutableChartTags bool
 	command := &cobra.Command{
 		Use:   "publish-coyote",
 		Short: "Publish a Coyote product release from a complete generic application release",
 		RunE: func(cmd *cobra.Command, _ []string) (commandErr error) {
-			if strings.TrimSpace(buildID) == "" || strings.TrimSpace(sourceLocation) == "" {
-				return &ExitError{Code: 2, Err: errors.New("--build and --release-source are required")}
+			if strings.TrimSpace(buildID) == "" || strings.TrimSpace(sourceLocation) == "" || strings.TrimSpace(helmRepository) == "" {
+				return &ExitError{Code: 2, Err: errors.New("--build, --release-source and --helm-repository are required")}
+			}
+			if !immutableChartTags {
+				return &ExitError{Code: 2, Err: errors.New("--immutable-chart-tags-confirmed is required after verifying registry policy")}
 			}
 			if channel != "" && channel != "latest" && channel != "stable" {
 				return &ExitError{Code: 2, Err: fmt.Errorf("unsupported release channel %q", channel)}
@@ -129,17 +134,74 @@ func (a *app) newReleasePublishCoyoteCommand() *cobra.Command {
 			if genericRelease.ApplicationVersion != *build.ApplicationVersion {
 				return &ExitError{Code: 1, Err: errors.New("generic release version does not match build application version")}
 			}
+			if build.ID != buildID || genericRelease.BuildID != buildID || build.Status != "success" || genericRelease.Status != "complete" {
+				return &ExitError{Code: 1, Err: errors.New("a successful build and its complete application release are required")}
+			}
+			directory, err := os.MkdirTemp("", "coyote-release-")
+			if err != nil {
+				return err
+			}
+			defer func() { _ = os.RemoveAll(directory) }()
+			listed, err := client.ListBuildArtifacts(cmd.Context(), buildID)
+			if err != nil {
+				return mapCommandError(err)
+			}
+			artifacts := make(map[string]releases.CoyoteArtifact)
 			outputs := make([]releases.CoyoteReleaseOutput, 0, len(genericRelease.Outputs))
 			for _, output := range genericRelease.Outputs {
+				if output.Status != "published" {
+					return &ExitError{Code: 1, Err: fmt.Errorf("output %s is not published", output.Key)}
+				}
+				if output.Kind == "artifact" {
+					name := strings.TrimPrefix(output.Key, "artifact:")
+					if output.ArtifactID == nil || artifacts[name].Path != "" {
+						return &ExitError{Code: 1, Err: errors.New("missing or duplicate release artifact")}
+					}
+					for _, artifact := range listed.Artifacts {
+						if artifact.ID != *output.ArtifactID {
+							continue
+						}
+						if artifact.BuildID != buildID || artifact.ChecksumSHA256 == nil {
+							return &ExitError{Code: 1, Err: errors.New("artifact build identity or checksum missing")}
+						}
+						file, createErr := os.CreateTemp(directory, "artifact-")
+						if createErr != nil {
+							return createErr
+						}
+						downloadErr := client.DownloadBuildArtifact(cmd.Context(), buildID, artifact.ID, file)
+						closeErr := file.Close()
+						if downloadErr != nil || closeErr != nil {
+							return errors.Join(downloadErr, closeErr)
+						}
+						location, locationErr := url.JoinPath(target.ServerURL, "api", "builds", buildID, "artifacts", artifact.ID, "download")
+						if locationErr != nil {
+							return locationErr
+						}
+						artifacts[name] = releases.CoyoteArtifact{Path: file.Name(), URL: location, SHA256: *artifact.ChecksumSHA256, BuildID: artifact.BuildID, Size: artifact.SizeBytes}
+					}
+					continue
+				}
 				outputs = append(outputs, releases.CoyoteReleaseOutput{
 					Key: output.Key, Kind: output.Kind, Status: output.Status,
 					TargetImageReference: output.TargetImageReference, ImmutableReference: output.ImmutableReference,
 				})
 			}
-			manifest, err := releases.CoyoteManifest(releases.CoyoteReleaseInput{
-				Status: genericRelease.Status, ApplicationVersion: *build.ApplicationVersion,
+			input, err := releases.VerifyCoyoteArtifacts(releases.CoyoteReleaseInput{
+				BuildID: buildID,
+				Status:  genericRelease.Status, ApplicationVersion: *build.ApplicationVersion,
 				SourceCommit: *sourceCommit, CreatedAt: build.CreatedAt, Outputs: outputs,
-			})
+			}, artifacts)
+			if err != nil {
+				return &ExitError{Code: 1, Err: err}
+			}
+			if migrationErr := releases.VerifyCoyoteMigrationTarget(cmd.Context(), input); migrationErr != nil {
+				return &ExitError{Code: 1, Err: migrationErr}
+			}
+			input.Helm, err = releases.PublishCoyoteChart(cmd.Context(), artifacts["helm-chart"].Path, helmRepository, input.ApplicationVersion)
+			if err != nil {
+				return &ExitError{Code: 1, Err: err}
+			}
+			manifest, err := releases.CoyoteManifest(input)
 			if err != nil {
 				return &ExitError{Code: 1, Err: err}
 			}
@@ -170,7 +232,9 @@ func (a *app) newReleasePublishCoyoteCommand() *cobra.Command {
 	}
 	command.Flags().StringVar(&buildID, "build", "", "Build ID with a complete generic application release")
 	command.Flags().StringVar(&sourceLocation, "release-source", "", "Release store path, file:// URL, or gs:// location")
-	command.Flags().StringVar(&channel, "channel", "latest", "Optional product channel to promote: latest or stable")
+	command.Flags().StringVar(&helmRepository, "helm-repository", "", "Immutable OCI repository ending in /coyote-ci")
+	command.Flags().BoolVar(&immutableChartTags, "immutable-chart-tags-confirmed", false, "Confirm the chart repository enforces immutable version tags")
+	command.Flags().StringVar(&channel, "channel", "", "Optional product channel to promote: latest or stable")
 	return command
 }
 

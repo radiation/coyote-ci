@@ -223,7 +223,7 @@ func cloneRemoteImageBuildSpec(spec *domain.RemoteImageBuildSpec) *domain.Remote
 	for key, value := range spec.BuildArgs {
 		buildArgs[key] = value
 	}
-	return &domain.RemoteImageBuildSpec{ContextPath: spec.ContextPath, DockerfilePath: spec.DockerfilePath, Target: spec.Target, BuildArgs: buildArgs, TargetImageReference: spec.TargetImageReference}
+	return &domain.RemoteImageBuildSpec{ContextPath: spec.ContextPath, DockerfilePath: spec.DockerfilePath, Target: spec.Target, Platforms: append([]string(nil), spec.Platforms...), BuildArgs: buildArgs, TargetImageReference: spec.TargetImageReference}
 }
 
 func (w *ExecutionWorkerService) prepareQueuedBuilds(ctx context.Context) ([]domain.Build, error) {

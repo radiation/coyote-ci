@@ -3,12 +3,35 @@ package worker
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
+
+func TestCloneRemoteImageBuildSpecPreservesPlatforms(t *testing.T) {
+	if cloned := cloneRemoteImageBuildSpec(nil); cloned != nil {
+		t.Fatalf("nil spec became %+v", cloned)
+	}
+	for _, platforms := range [][]string{nil, {"linux/amd64", "linux/arm64"}} {
+		spec := &domain.RemoteImageBuildSpec{Platforms: platforms}
+		cloned := cloneRemoteImageBuildSpec(spec)
+		if cloned == nil || cloned == spec || !slices.Equal(cloned.Platforms, platforms) {
+			t.Fatalf("clone=%+v, source=%+v", cloned, spec)
+		}
+		if platforms == nil && cloned.Platforms != nil {
+			t.Fatal("omitted platforms must remain nil")
+		}
+		if len(platforms) > 0 {
+			cloned.Platforms[0] = "changed"
+			if platforms[0] != "linux/amd64" {
+				t.Fatalf("source platforms were mutated: %v", platforms)
+			}
+		}
+	}
+}
 
 func TestExecutionWorkerService_EnsureBuildRunning(t *testing.T) {
 	tests := []struct {

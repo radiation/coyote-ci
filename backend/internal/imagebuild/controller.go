@@ -84,6 +84,11 @@ func (c *Controller) ReconcileClaimed(ctx context.Context, step workersvc.Worker
 	if applicationVersion != "" {
 		spec.RemoteImageBuild.BuildArgs = copyBuildArgs(spec.RemoteImageBuild.BuildArgs)
 		spec.RemoteImageBuild.BuildArgs["COYOTE_APPLICATION_VERSION"] = applicationVersion
+		commit := build.SourceSHA
+		if commit != nil {
+			spec.RemoteImageBuild.BuildArgs["COYOTE_COMMIT"] = *commit
+		}
+		spec.RemoteImageBuild.BuildArgs["COYOTE_BUILD_DATE"] = build.CreatedAt.UTC().Format(time.RFC3339)
 	}
 	publishedImageReference, targetErr := c.builder.ResolveTargetImageReference(spec.RemoteImageBuild.TargetImageReference, applicationVersion)
 	if targetErr != nil {

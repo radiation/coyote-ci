@@ -334,6 +334,9 @@ func stepContainerRunArgs(containerName, image, mountBinding, workingDir string,
 		args = append(args, "-e", envEntry)
 	}
 
+	if (request.Command == "sh" || request.Command == "/bin/sh") && len(request.Args) > 0 && request.Args[0] == "-c" {
+		args = append(args, "--entrypoint", "")
+	}
 	args = append(args, image, request.Command)
 	args = append(args, request.Args...)
 	return args

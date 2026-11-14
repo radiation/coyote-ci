@@ -60,6 +60,7 @@ type ImageBuildDef struct {
 	Context    string                       `yaml:"context"`
 	Dockerfile string                       `yaml:"dockerfile"`
 	Target     string                       `yaml:"target,omitempty"`
+	Platforms  []string                     `yaml:"platforms,omitempty"`
 	BuildArgs  map[string]string            `yaml:"build_args,omitempty"`
 	Image      string                       `yaml:"image"`
 	Artifacts  []ImageBuildArtifactInputDef `yaml:"artifacts,omitempty"`
