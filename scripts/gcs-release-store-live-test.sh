@@ -116,23 +116,6 @@ invalid_output="$temp_dir/invalid.json"
 expect_exit 2 "$coyote" release fetch --version '' --release-source "$release_source" --output "$invalid_output"
 [[ ! -e "$invalid_output" ]] || fail 'invalid fetch created output'
 
-RELEASE_PLAN=true \
-RELEASE_SOURCE="$release_source" \
-RELEASE_REGISTRY="$registry" \
-PREVIOUS_RELEASE=0.0.9 VERSION=0.0.10 RELEASE_CHANNEL= \
-COYOTE_RELEASE_CLI="$coyote" \
-COMPONENT_SERVER_ACTION=reuse COMPONENT_SERVER_VERSION="$platform_component_version" \
-COMPONENT_WORKER_ACTION=reuse COMPONENT_WORKER_VERSION="$platform_component_version" \
-COMPONENT_FRONTEND_ACTION=reuse COMPONENT_FRONTEND_VERSION="$platform_component_version" \
-COMPONENT_MIGRATE_ACTION=reuse COMPONENT_MIGRATE_VERSION="$platform_component_version" \
-COMPONENT_MCP_ACTION=reuse COMPONENT_MCP_VERSION="$mcp_component_version" \
-COMPONENT_MCP_IMAGE="$mcp_image" \
-bash "$repo_root/scripts/release-build.sh"
-
-plan_output="$temp_dir/unexpected-0.0.10.json"
-expect_exit 3 "$coyote" release fetch --version 0.0.10 --release-source "$release_source" --output "$plan_output"
-[[ ! -e "$plan_output" ]] || fail 'plan mode published 0.0.10'
-
 write_disposable_manifest() {
   local version="$1" output="$2" created_at="$3"
   jq \

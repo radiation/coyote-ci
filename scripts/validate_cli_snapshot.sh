@@ -10,11 +10,12 @@ if [[ ! -d "$dist_dir" ]]; then
 fi
 
 required_archives=(
-	"coyote_*_darwin_amd64.tar.gz"
-	"coyote_*_darwin_arm64.tar.gz"
-	"coyote_*_linux_amd64.tar.gz"
-	"coyote_*_linux_arm64.tar.gz"
-	"coyote_*_windows_amd64.zip"
+	"coyote_darwin_amd64.tar.gz"
+	"coyote_darwin_arm64.tar.gz"
+	"coyote_linux_amd64.tar.gz"
+	"coyote_linux_arm64.tar.gz"
+	"coyote_windows_amd64.zip"
+	"coyote_windows_arm64.zip"
 )
 
 required_build_dirs=(
@@ -23,6 +24,7 @@ required_build_dirs=(
 	"coyote_linux_amd64_v1"
 	"coyote_linux_arm64_v8.0"
 	"coyote_windows_amd64_v1"
+	"coyote_windows_arm64_v8.0"
 )
 
 for pattern in "${required_archives[@]}"; do
@@ -45,16 +47,19 @@ if [[ ! -f "$dist_dir/checksums.txt" ]]; then
 	exit 1
 fi
 
-windows_archive=("$dist_dir"/coyote_*_windows_amd64.zip)
-if ! unzip -l "${windows_archive[0]}" | grep -q 'coyote.exe$'; then
-	echo "windows amd64 archive does not contain coyote.exe" >&2
-	exit 1
-fi
+for architecture in amd64 arm64; do
+	if ! unzip -l "$dist_dir/coyote_windows_$architecture.zip" | grep -q 'coyote.exe$'; then
+		echo "windows $architecture archive does not contain coyote.exe" >&2
+		exit 1
+	fi
+done
+
+(cd "$dist_dir" && shasum -a 256 -c checksums.txt)
 
 for path in "$dist_dir"/coyote_*; do
 	name="$(basename "$path")"
 	case "$name" in
-		coyote_*_darwin_amd64.tar.gz|coyote_*_darwin_arm64.tar.gz|coyote_*_linux_amd64.tar.gz|coyote_*_linux_arm64.tar.gz|coyote_*_windows_amd64.zip|coyote_*_windows_arm64.zip|checksums.txt)
+				coyote_darwin_amd64.tar.gz|coyote_darwin_arm64.tar.gz|coyote_linux_amd64.tar.gz|coyote_linux_arm64.tar.gz|coyote_windows_amd64.zip|coyote_windows_arm64.zip|checksums.txt)
 			;;
 		coyote_darwin_amd64_v1|coyote_darwin_arm64_v8.0|coyote_linux_amd64_v1|coyote_linux_arm64_v8.0|coyote_windows_amd64_v1|coyote_windows_arm64_v8.0)
 			;;

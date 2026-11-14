@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type ExecutionKind string
 
@@ -41,9 +44,21 @@ type RemoteImageBuildSpec struct {
 	ContextPath          string                    `json:"context_path"`
 	DockerfilePath       string                    `json:"dockerfile_path"`
 	Target               string                    `json:"target,omitempty"`
+	Platforms            []string                  `json:"platforms,omitempty"`
 	BuildArgs            map[string]string         `json:"build_args,omitempty"`
 	TargetImageReference string                    `json:"target_image_reference"`
 	ArtifactInputs       []ImageBuildArtifactInput `json:"artifact_inputs,omitempty"`
+}
+
+func ValidateImagePlatforms(platforms []string) error {
+	seen := make(map[string]bool, len(platforms))
+	for _, platform := range platforms {
+		if (platform != "linux/amd64" && platform != "linux/arm64") || seen[platform] {
+			return fmt.Errorf("image platforms must be unique linux/amd64 or linux/arm64 values: %q", platform)
+		}
+		seen[platform] = true
+	}
+	return nil
 }
 
 // ImageBuildArtifactInput declares a named artifact from an upstream step that

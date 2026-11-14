@@ -46,6 +46,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 - `backend/internal/repository/memory/slack_workspace_integration_repository.go`, `backend/internal/repository/postgres/slack_workspace_integration_repository.go`: instance-level Slack workspace persistence plus linked-identity dependency checks for disconnect/switch safety.
 - `backend/internal/source`: source fetch/materialization, PR/source metadata, and repo writeback helpers.
 - `backend/internal/versioning`: release/version-tag behavior and lineage helpers.
+- `backend/internal/release/coyote_bridge.go`, `backend/internal/release/coyote_artifacts.go`, `backend/internal/cli/release.go`: complete five-component V3 publication from one successful Build, including six verified CLI archives, unified Helm OCI publication and exact-image Goose target checks. `.coyote/pipeline.yml` declares both image platforms; `backend/internal/platform/cloudbuild/client.go` verifies registry index digests/platforms. Publication prerequisites and legacy retirement are in `docs/releases.md` and `docs/release-planning.md`.
 - `backend/internal/auth`: session/auth-mode logic, API-token request context, and authorization helpers.
 - `backend/internal/runner`, `backend/internal/workspace`, `backend/internal/pipeline`: execution support code used by build and worker flows.
 

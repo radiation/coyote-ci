@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	artifactregistry "google.golang.org/api/artifactregistry/v1"
 	googlecloudbuild "google.golang.org/api/cloudbuild/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
@@ -95,6 +96,131 @@ func TestBuildRequestEnablesDockerBuildKit(t *testing.T) {
 	}
 	if !contains(build.Steps[0].Env, "DOCKER_BUILDKIT=1") {
 		t.Fatalf("build step environment=%#v, want DOCKER_BUILDKIT=1", build.Steps[0].Env)
+	}
+}
+
+func TestMultiPlatformBuildRequest(t *testing.T) {
+	client := &Client{artifactRegistryRepository: "registry.example/ci"}
+	request := domain.ImageBuildRequest{Source: domain.ImageBuildSource{Generation: "1"}, PublishedImageReference: "registry.example/ci/server:1.2.3", Spec: domain.RemoteImageBuildSpec{ContextPath: "backend", DockerfilePath: "backend/Dockerfile", Platforms: []string{"linux/amd64", "linux/arm64"}}}
+	build, err := client.buildRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(build.Images) != 0 || len(build.Steps) != 3 || build.Substitutions["_COYOTE_IMAGE"] != request.PublishedImageReference {
+		t.Fatalf("unexpected build: %+v", build)
+	}
+	encoded, marshalErr := json.Marshal(build)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	var payload struct {
+		Options *struct {
+			Logging            string `json:"logging"`
+			SubstitutionOption string `json:"substitutionOption"`
+		} `json:"options"`
+	}
+	if decodeErr := json.Unmarshal(encoded, &payload); decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if payload.Options == nil || payload.Options.Logging != "CLOUD_LOGGING_ONLY" || payload.Options.SubstitutionOption != "ALLOW_LOOSE" {
+		t.Fatalf("missing multi-platform request options: %s", encoded)
+	}
+	args := build.Steps[2].Args
+	for _, argument := range []string{"buildx", "--push", "--platform=linux/amd64,linux/arm64", "--tag=" + request.PublishedImageReference} {
+		if !contains(args, argument) {
+			t.Fatalf("missing %s in %v", argument, args)
+		}
+	}
+	for _, platforms := range [][]string{{"linux/386"}, {"linux/amd64", "linux/amd64"}} {
+		request.Spec.Platforms = platforms
+		if _, buildErr := client.buildRequest(request); buildErr == nil {
+			t.Fatal("invalid platforms accepted")
+		}
+	}
+	request.Spec.Platforms = []string{"linux/amd64"}
+	for _, reference := range []string{"registry.example/ci/server", "other.example/server:1.2.3"} {
+		request.PublishedImageReference = reference
+		if _, buildErr := client.buildRequest(request); buildErr == nil {
+			t.Fatal("invalid target accepted")
+		}
+	}
+}
+
+func TestValidateImageIndex(t *testing.T) {
+	image := &artifactregistry.DockerImage{MediaType: "application/vnd.oci.image.index.v1+json", ImageManifests: []*artifactregistry.ImageManifest{{Os: "linux", Architecture: "amd64", Digest: "sha256:" + strings.Repeat("a", 64)}, {Os: "linux", Architecture: "arm64", Digest: "sha256:" + strings.Repeat("b", 64)}}}
+	platforms := []string{"linux/amd64", "linux/arm64"}
+	if err := validateImageIndex(image, platforms); err != nil {
+		t.Fatal(err)
+	}
+	image.MediaType = "application/vnd.docker.distribution.manifest.list.v2+json"
+	if err := validateImageIndex(image, platforms); err != nil {
+		t.Fatal(err)
+	}
+	image.ImageManifests = image.ImageManifests[:1]
+	if err := validateImageIndex(image, platforms); err == nil {
+		t.Fatal("missing architecture accepted")
+	}
+	image.MediaType = "application/vnd.oci.image.manifest.v1+json"
+	if err := validateImageIndex(image, platforms[:1]); err == nil {
+		t.Fatal("single manifest accepted")
+	}
+}
+
+func TestMultiPlatformPublishedIndexCapture(t *testing.T) {
+	indexDigest := "sha256:" + strings.Repeat("a", 64)
+	childDigest := "sha256:" + strings.Repeat("b", 64)
+	failure := ""
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(request.URL.Path, "/builds/"):
+			if failure == "build" {
+				http.Error(writer, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			_ = json.NewEncoder(writer).Encode(googlecloudbuild.Build{Status: "SUCCESS", Substitutions: map[string]string{"_COYOTE_IMAGE": "us-central1-docker.pkg.dev/project/ci/server:1.2.3", "_COYOTE_PLATFORMS": "linux/amd64,linux/arm64"}, Results: &googlecloudbuild.Results{Images: []*googlecloudbuild.BuiltImage{{Digest: childDigest}}}})
+		case strings.Contains(request.URL.Path, "/tags/"):
+			if failure == "tag" {
+				http.Error(writer, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if failure == "missing" {
+				http.NotFound(writer, request)
+				return
+			}
+			_ = json.NewEncoder(writer).Encode(artifactregistry.Tag{Version: "projects/project/locations/us-central1/repositories/ci/packages/server/versions/" + indexDigest})
+		case strings.Contains(request.URL.Path, "/dockerImages/"):
+			if failure == "index" {
+				http.Error(writer, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if !strings.Contains(request.URL.Path, indexDigest) {
+				t.Errorf("did not query actual index: %s", request.URL.Path)
+			}
+			mediaType := "application/vnd.oci.image.index.v1+json"
+			if failure == "platform" {
+				mediaType = "application/vnd.oci.image.manifest.v1+json"
+			}
+			_ = json.NewEncoder(writer).Encode(artifactregistry.DockerImage{MediaType: mediaType, ImageManifests: []*artifactregistry.ImageManifest{{Os: "linux", Architecture: "amd64", Digest: childDigest}, {Os: "linux", Architecture: "arm64", Digest: childDigest}}})
+		default:
+			_ = json.NewEncoder(writer).Encode(artifactregistry.Repository{DockerConfig: &artifactregistry.DockerRepositoryConfig{ImmutableTags: failure != "immutable"}})
+		}
+	}))
+	defer server.Close()
+	client, err := New(context.Background(), Config{ProjectID: "project", Location: "us-central1", RuntimeServiceAccount: "builder@example.com", ArtifactRegistryRepository: "us-central1-docker.pkg.dev/project/ci"}, option.WithEndpoint(server.URL), option.WithoutAuthentication())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"", "build", "immutable", "tag", "missing", "index", "platform"} {
+		failure = scenario
+		result, getErr := client.Get(context.Background(), domain.ImageBuildHandle{ID: "build-1"})
+		if scenario == "" {
+			if getErr != nil || result.ImageDigest != indexDigest || result.PublishedImageDigestReference != "us-central1-docker.pkg.dev/project/ci/server@"+indexDigest {
+				t.Fatalf("index result=%+v error=%v", result, getErr)
+			}
+		} else if getErr == nil && result.Status != domain.ImageBuildStatusFailed {
+			t.Fatalf("failure %s accepted: %+v", scenario, result)
+		}
 	}
 }
 
@@ -243,7 +369,7 @@ func TestArtifactRegistryInspectorRequiresImmutableTagsAndResolvesDigest(t *test
 		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/repositories/ci"):
 			_, _ = writer.Write([]byte(`{"dockerConfig":{"immutableTags":true}}`))
 		case request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/packages/") && strings.HasSuffix(request.URL.Path, "/tags/1.4.2"):
-			_, _ = writer.Write([]byte(`{"name":"projects/project/locations/us-central1/repositories/ci/packages/acme%2Fapi/tags/1.4.2","version":"projects/project/locations/us-central1/repositories/ci/packages/acme%2Fapi/versions/sha256:abc"}`))
+			_, _ = writer.Write([]byte(`{"name":"projects/project/locations/us-central1/repositories/ci/packages/acme%2Fapi/tags/1.4.2","version":"projects/project/locations/us-central1/repositories/ci/packages/acme%2Fapi/versions/sha256:` + strings.Repeat("a", 64) + `"}`))
 		default:
 			t.Fatalf("unexpected request: %s %s", request.Method, request.URL.String())
 		}
@@ -258,7 +384,7 @@ func TestArtifactRegistryInspectorRequiresImmutableTagsAndResolvesDigest(t *test
 		t.Fatalf("ensure immutable tags: %v", immutableErr)
 	}
 	digest, found, resolveErr := client.ResolvePublishedDigest(context.Background(), reference)
-	if resolveErr != nil || !found || digest != "us-central1-docker.pkg.dev/project/ci/acme/api@sha256:abc" {
+	if resolveErr != nil || !found || digest != "us-central1-docker.pkg.dev/project/ci/acme/api@sha256:"+strings.Repeat("a", 64) {
 		t.Fatalf("digest=%q found=%t err=%v", digest, found, resolveErr)
 	}
 }

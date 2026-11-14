@@ -2,6 +2,9 @@ version: 2
 
 project_name: coyote
 
+snapshot:
+  version_template: '{{ if .Env.COYOTE_APPLICATION_VERSION }}{{ .Env.COYOTE_APPLICATION_VERSION }}{{ else }}{{ .Version }}-next{{ end }}'
+
 builds:
   - id: coyote
     main: ./backend/cmd/coyote
@@ -20,6 +23,7 @@ builds:
 
 archives:
   - formats: [tar.gz]
+    name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}'
     format_overrides:
       - goos: windows
         formats: [zip]

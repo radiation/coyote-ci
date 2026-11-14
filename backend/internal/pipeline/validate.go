@@ -392,6 +392,9 @@ func validateStepDef(step StepDef, prefix string, seen map[string]bool) Validati
 				errs = append(errs, ValidationError{Field: prefix + ".image_build.build_args", Message: fmt.Sprintf("invalid build argument %q", key)})
 			}
 		}
+		if platformErr := domain.ValidateImagePlatforms(step.ImageBuild.Platforms); platformErr != nil {
+			errs = append(errs, ValidationError{Field: prefix + ".image_build.platforms", Message: platformErr.Error()})
+		}
 		seenArtifacts := make(map[string]struct{}, len(step.ImageBuild.Artifacts))
 		for index, input := range step.ImageBuild.Artifacts {
 			inputPrefix := fmt.Sprintf("%s.image_build.artifacts[%d]", prefix, index)

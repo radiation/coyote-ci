@@ -9,6 +9,20 @@ pipeline:
       - Coyote Server Image
       - Coyote Frontend Image
       - Coyote Worker Image
+      - Coyote MCP Image
+      - Coyote Migrate Image
+    artifacts:
+      - cli-darwin-amd64
+      - cli-darwin-arm64
+      - cli-linux-amd64
+      - cli-linux-arm64
+      - cli-windows-amd64
+      - cli-windows-arm64
+      - cli-checksums
+      - cli-metadata
+      - helm-chart
+      - compatibility
+      - schema-target
 steps:
   - name: Backend Format Check
     depends_on: []
@@ -75,74 +89,111 @@ steps:
       preset: node
       policy: pull-push
 
-  - name: Backend Build Server
-    depends_on:
-      - Backend Vet
-      - Backend Test
-    run: go build -o dist/coyote-server ./cmd/server
-    working_dir: backend
-    timeout_seconds: 900
-    cache:
-      preset: go
-      policy: pull
-    artifacts:
-      - name: coyote-server
-        path: dist/coyote-server
-
-  - name: Backend Build Worker
-    depends_on:
-      - Backend Vet
-      - Backend Test
-    run: go build -o dist/coyote-worker ./cmd/worker
-    working_dir: backend
-    timeout_seconds: 900
-    cache:
-      preset: go
-      policy: pull
-    artifacts:
-      - name: coyote-worker
-        path: dist/coyote-worker
-
-  - name: Frontend Build
-    depends_on:
-      - Frontend Test
-    run: npm run build
-    working_dir: frontend
-    image: node@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
-    timeout_seconds: 600
-    cache:
-      preset: node
-      policy: pull-push
-
   - name: Coyote Server Image
     depends_on:
       - Backend Format Check
-      - Backend Build Server
-      - Backend Build Worker
+      - Backend Vet
+      - Backend Test
     image_build:
       context: backend
       dockerfile: backend/Dockerfile
       target: source-runtime
       image: coyote-server
+      platforms: [linux/amd64, linux/arm64]
     timeout_seconds: 600
 
   - name: Coyote Frontend Image
     depends_on:
-      - Frontend Build
+      - Frontend Test
     image_build:
       context: frontend
       dockerfile: frontend/Dockerfile
       image: coyote-frontend
+      platforms: [linux/amd64, linux/arm64]
     timeout_seconds: 600
 
   - name: Coyote Worker Image
     depends_on:
       - Backend Format Check
-      - Backend Build Server
-      - Backend Build Worker
+      - Backend Vet
+      - Backend Test
     image_build:
       context: backend
       dockerfile: backend/Dockerfile
       target: source-runtime
       image: coyote-worker
+      platforms: [linux/amd64, linux/arm64]
     timeout_seconds: 600
+
+  - name: Coyote MCP Image
+    depends_on: [Backend Format Check, Backend Vet, Backend Test]
+    image_build:
+      context: backend
+      dockerfile: backend/Dockerfile
+      target: source-runtime-mcp
+      image: coyote-mcp
+      platforms: [linux/amd64, linux/arm64]
+    timeout_seconds: 900
+
+  - name: Coyote Migrate Image
+    depends_on: [Backend Format Check, Backend Vet, Backend Test]
+    image_build:
+      context: backend
+      dockerfile: backend/Dockerfile
+      target: migrate-runtime
+      image: coyote-migrate
+      platforms: [linux/amd64, linux/arm64]
+    timeout_seconds: 900
+
+  - name: CLI Packages
+    depends_on: [Backend Format Check, Backend Vet, Backend Test]
+    run: go run github.com/goreleaser/goreleaser/v2@v2.12.7 release --config .goreleaser.yml --snapshot --clean --skip=publish
+    timeout_seconds: 1800
+    artifacts:
+      - {name: cli-darwin-amd64, path: dist/coyote_darwin_amd64.tar.gz}
+      - {name: cli-darwin-arm64, path: dist/coyote_darwin_arm64.tar.gz}
+      - {name: cli-linux-amd64, path: dist/coyote_linux_amd64.tar.gz}
+      - {name: cli-linux-arm64, path: dist/coyote_linux_arm64.tar.gz}
+      - {name: cli-windows-amd64, path: dist/coyote_windows_amd64.zip}
+      - {name: cli-windows-arm64, path: dist/coyote_windows_arm64.zip}
+      - {name: cli-checksums, path: dist/checksums.txt}
+      - {name: cli-metadata, path: dist/metadata.json}
+    cache:
+      preset: go
+      policy: pull
+
+  - name: Release Compatibility
+    depends_on: [Backend Test]
+    run: |
+      mkdir -p release/dist
+      go run ./backend/cmd/migrate -dir=backend/db/migrations target > release/dist/schema-target.txt
+      cp release/compatibility.json release/dist/compatibility.json
+    timeout_seconds: 300
+    artifacts:
+      - {name: compatibility, path: release/dist/compatibility.json}
+      - {name: schema-target, path: release/dist/schema-target.txt}
+
+  - name: Helm Package
+    depends_on: [Backend Format Check]
+    image: alpine/helm:3.17.3
+    run: |
+      mkdir -p release/dist
+      helm lint deploy/helm/coyote-ci --values deploy/helm/examples/generic-values.yaml
+      helm package deploy/helm/coyote-ci --version "$COYOTE_APPLICATION_VERSION" --app-version "$COYOTE_APPLICATION_VERSION" --destination release/dist
+      mv "release/dist/coyote-ci-$COYOTE_APPLICATION_VERSION.tgz" release/dist/coyote-ci.tgz
+    timeout_seconds: 300
+    artifacts:
+      - {name: helm-chart, path: release/dist/coyote-ci.tgz}
+
+artifacts:
+  - {name: cli-darwin-amd64, path: dist/coyote_darwin_amd64.tar.gz}
+  - {name: cli-darwin-arm64, path: dist/coyote_darwin_arm64.tar.gz}
+  - {name: cli-linux-amd64, path: dist/coyote_linux_amd64.tar.gz}
+  - {name: cli-linux-arm64, path: dist/coyote_linux_arm64.tar.gz}
+  - {name: cli-windows-amd64, path: dist/coyote_windows_amd64.zip}
+  - {name: cli-windows-arm64, path: dist/coyote_windows_arm64.zip}
+  - {name: cli-checksums, path: dist/checksums.txt}
+  - {name: cli-metadata, path: dist/metadata.json}
+  - {name: helm-chart, path: release/dist/coyote-ci.tgz}
+  - {name: compatibility, path: release/dist/compatibility.json}
+  - {name: schema-target, path: release/dist/schema-target.txt}

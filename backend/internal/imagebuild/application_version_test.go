@@ -22,6 +22,7 @@ func TestControllerApplicationVersionBuildArgument(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			execution := newExecutionFake(t)
 			execution.build.ApplicationVersion = testCase.applicationVersion
+			execution.build.SourceSHA = stringPtr("0123456789012345678901234567890123456789")
 			spec := domain.ExecutionJobSpec{ExecutionKind: domain.ExecutionKindImageBuild, RemoteImageBuild: &domain.RemoteImageBuildSpec{
 				ContextPath: "backend", DockerfilePath: "backend/Dockerfile", TargetImageReference: "acme/foo",
 				BuildArgs: map[string]string{"COYOTE_APPLICATION_VERSION": "9.9.9", "UNRELATED": "preserved"},
@@ -49,6 +50,9 @@ func TestControllerApplicationVersionBuildArgument(t *testing.T) {
 			}
 			if builder.request.Spec.BuildArgs["UNRELATED"] != "preserved" {
 				t.Fatalf("unrelated build args=%v", builder.request.Spec.BuildArgs)
+			}
+			if testCase.applicationVersion != nil && (builder.request.Spec.BuildArgs["COYOTE_COMMIT"] != *execution.build.SourceSHA || builder.request.Spec.BuildArgs["COYOTE_BUILD_DATE"] == "") {
+				t.Fatal("missing persisted build provenance")
 			}
 		})
 	}

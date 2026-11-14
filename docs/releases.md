@@ -13,7 +13,90 @@ deferred to generic Coyote pipeline features, not a release-specific planner,
 change classifier, predecessor resolver, assembly document, or `assemble` command.
 
 `latest` and `stable` are mutable channel pointers; moving one never alters an
-existing manifest. The V3 contract below is not yet a complete V3 publisher.
+existing manifest. The pipeline and existing Go publisher now produce complete V3 releases.
+
+## One Build, One Publication
+
+Run the repository pipeline from a pinned source commit with its Build-owned
+`COYOTE_APPLICATION_VERSION`. It builds all five images for `linux/amd64` and
+`linux/arm64` through Cloud Build's standard Docker Buildx path. No predecessor,
+selective rebuild, reused image, or separate assembly workflow is involved.
+GoReleaser packages six CLI archives (Darwin, Linux, Windows; amd64 and arm64),
+checksums and source/version metadata. Helm packages only the unified chart,
+stamping both `version` and `appVersion` with the application version.
+
+After that build and its generic application release are complete, use the
+existing CLI from an authorized publication environment:
+
+```sh
+coyote release publish-coyote --build BUILD_ID \
+  --release-source ./release-store \
+  --helm-repository oci://REGISTRY/charts/coyote-ci \
+  --immutable-chart-tags-confirmed
+```
+
+This command does not promote a channel by default. `--channel latest` or
+`--channel stable` explicitly opts into the existing post-publication channel
+operation; no promotion is needed to publish a manifest.
+
+Publication guarantees:
+
+- Versioned image submission requires verified Artifact Registry immutable-tag
+  enforcement. Successful multi-platform builds are resolved from the registry
+  tag, checked for OCI-index/manifest-list media type and both architecture
+  children, and persisted with the index digest, not a child image digest.
+- The publisher requires a successful Build, matching completed generic release,
+  all five published image outputs, and all eleven declared package outputs.
+  Archive bytes must match the artifact API size/SHA-256 and GoReleaser checksums;
+  CLI metadata must match the Build's version and source commit.
+- All five component versions equal the application version. Assembly, component
+  and CLI provenance identify that actual Coyote Build and its pinned source.
+  External Cloud Build execution IDs remain in the image-build records.
+- Compatibility comes from `release/compatibility.json`. Its canonical Goose
+  target must match the source-produced target and `target` run against both
+  platforms of the exact digest-pinned migration image. These checks use no
+  database credentials, no container network, and a read-only root filesystem.
+- Chart name/version/appVersion are verified before publication. Helm pulls the
+  published chart and compares its bytes with the build artifact. Docker Buildx
+  resolves its OCI descriptor as JSON; Helm then pulls by that digest and the
+  bytes are verified again before the digest is recorded. No Helm log parsing is
+  required. An identical existing chart is retryable; different bytes conflict.
+  Only `manifest unknown` or Helm 4's exact `<reference>: not found` response
+  permits a push; authentication and ambiguous errors fail.
+- The release manifest is written only after these checks. Existing conditional
+  immutable-store writes, identical retry behavior, and conflicting-byte rejection
+  remain intact. Channels are written only after the manifest succeeds. A failed
+  channel write can be retried without rebuilding or replacing the manifest.
+
+Image/chart uploads are not a cross-registry transaction: a failed publication
+can leave verified images or a chart without a product manifest. It cannot create
+a partial product manifest or advance a product channel before that manifest.
+Retry the same completed Build, not a different Build with the same immutable tag.
+
+### Publication Prerequisites
+
+The running control plane must include this platform-aware image adapter and
+pipeline contract. Cloud Build needs Docker daemon access, Buildx, privileged
+binfmt registration for both architectures, shared Docker authentication, source
+archive access and Artifact Registry writer/reader IAM. These assumptions require
+an approved real-registry end-to-end run; local tests use fake cloud responses.
+
+The publisher needs a Coyote API context/token with build and artifact read
+access, release-store access, authenticated Helm and Docker with Buildx, and a
+Docker host able to execute both Linux architectures. Helm and Docker must both
+have pull access to the chart registry; Helm-only login is insufficient for the
+descriptor lookup. Chart tag immutability and retention
+are operator-enforced prerequisites, explicitly acknowledged by the flag; the
+generic Helm path does not change or inspect registry policy. Keep artifacts,
+images, chart versions and API download URLs available for the release lifetime.
+CLI URLs currently use authenticated Coyote artifact-download endpoints, not a
+new public download service.
+
+`release/compatibility.json` currently declares Goose target 57 and the existing
+0.0.11 maintenance-cutover baseline (`>=0.0.11 <0.0.12`). Review that declaration
+for each supported upgrade; it does not certify online-safe DDL or authorize
+deployment. No infrastructure changes, production publication or promotion are
+part of local validation.
 
 ## V3 application release manifest
 
@@ -81,11 +164,9 @@ and the application-only rollback boundary are documented in the
 
 ## Legacy V1/V2 publication and recovery
 
-The existing shell-based `scripts/release-build.sh` path remains operational
-until a complete V3 publisher replaces it. Its coordinated builder publishes
-temporary build tags, commits the legacy manifest, then promotes semantic
-registry tags to the committed digests. Its predecessor/retry behavior is
-legacy recovery behavior, not a requirement of the V3 contract.
+The predecessor-based shell builder/planner and standalone Helm publisher have
+been removed. See the [retirement inventory](release-planning.md) for retained
+legacy recovery tools and their removal conditions.
 
 V1 and V2 manifests remain accepted as stored. Fetch and import preserve their
 original bytes and digest; resolution does not synthesize V3 assembly,
@@ -101,10 +182,6 @@ The currently supported provider-neutral release source is a filesystem director
 Application Default Credentials or workload identity. It does not require a
 running Coyote server. OCI and mirrored HTTP sources can implement the same
 release-source interface later.
-
-`scripts/release-build.sh` passes `RELEASE_SOURCE` unchanged to the Coyote CLI for
-predecessor and retry manifest reads as well as publication, so the same source
-location works for filesystem and GCS-backed release builds.
 
 GCS release publishers require `storage.objects.get`,
 `storage.objects.create`, and `storage.objects.delete` on the release prefix.
@@ -130,21 +207,16 @@ coyote release resolve --release 2.5.1 --release-source ./release-store \
 Pass the generated file after the operator values file. Kubernetes then receives
 only immutable image digest references.
 
-## Legacy publishing from a Coyote build
-
-Coyote's dogfood pipeline uses `Build.ApplicationVersion` as its canonical
-release version and completes a separate generic application release before a
-product manifest is published. From a trusted environment with API-token and
-release-source access:
+## Local Release Checks
 
 ```sh
-coyote release publish-coyote --build <build-id> \
-  --release-source ./release-store --channel latest
+COYOTE_APPLICATION_VERSION=0.0.41 make cli-snapshot cli-validate-release-matrix
+make release-publish-test backend-architecture
+make helm-package-validate helm-schema-test helm-migration-parity
+bash scripts/test-helm-package-validate.sh
+make pre-push-check
 ```
 
-The command requires a complete generic release with the four Coyote
-server/frontend/worker/migrate digest outputs. It publishes the existing
-immutable product manifest first, then advances product `latest` only when the
-candidate `0.0.<build_number>` release is not older than the current channel.
-Product `stable` remains an operator promotion; generic application channels
-are not used by the Coyote dogfood workflow.
+These checks do not publish to a registry or promote channels. Registry auth,
+Cloud Build execution, index metadata visibility, immutable-tag conflicts and
+Helm push/pull behavior still require an explicitly authorized integration run.
