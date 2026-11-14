@@ -177,6 +177,7 @@ steps:
     depends_on: [Backend Format Check]
     image: alpine/helm:3.17.3
     run: |
+      set -e
       mkdir -p release/dist
       helm lint deploy/helm/coyote-ci --values deploy/helm/examples/generic-values.yaml
       helm package deploy/helm/coyote-ci --version "$COYOTE_APPLICATION_VERSION" --app-version "$COYOTE_APPLICATION_VERSION" --destination release/dist

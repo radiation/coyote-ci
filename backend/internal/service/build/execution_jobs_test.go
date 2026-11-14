@@ -2,12 +2,64 @@ package build
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	memoryrepo "github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
+
+func TestBuildService_CreateBuildFromPipeline_PersistsImageBuildPlatforms(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		platforms string
+		want      []string
+	}{
+		{name: "multi-platform", platforms: "      platforms: [linux/amd64, linux/arm64]\n", want: []string{"linux/amd64", "linux/arm64"}},
+		{name: "legacy omitted platforms"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			buildRepo := memoryrepo.NewBuildRepository()
+			execRepo := memoryrepo.NewExecutionJobRepository()
+			svc := NewBuildService(buildRepo, nil, &fakeLogSink{})
+			svc.SetExecutionJobRepository(execRepo)
+			pipelineYAML := `version: 1
+steps:
+  - name: image
+    image_build:
+      context: .
+      dockerfile: Dockerfile
+      image: acme/api
+` + test.platforms
+			build, createErr := svc.CreateBuildFromPipeline(t.Context(), CreatePipelineBuildInput{ProjectID: "project-1", PipelineYAML: pipelineYAML})
+			if createErr != nil {
+				t.Fatal(createErr)
+			}
+			steps, stepsErr := buildRepo.GetStepsByBuildID(t.Context(), build.ID)
+			if stepsErr != nil || len(steps) != 1 {
+				t.Fatalf("steps=%+v error=%v", steps, stepsErr)
+			}
+			jobs, jobsErr := execRepo.GetJobsByBuildID(t.Context(), build.ID)
+			if jobsErr != nil || len(jobs) != 1 {
+				t.Fatalf("jobs=%+v error=%v", jobs, jobsErr)
+			}
+			var spec domain.ExecutionJobSpec
+			if decodeErr := json.Unmarshal([]byte(jobs[0].ResolvedSpecJSON), &spec); decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			if steps[0].ExecutionKind != domain.ExecutionKindImageBuild || spec.ExecutionKind != domain.ExecutionKindImageBuild {
+				t.Fatal("image build execution kind was lost")
+			}
+			for name, imageSpec := range map[string]*domain.RemoteImageBuildSpec{"build step": steps[0].RemoteImageBuild, "execution job": spec.RemoteImageBuild} {
+				if imageSpec == nil || !slices.Equal(imageSpec.Platforms, test.want) {
+					t.Errorf("%s spec=%+v, want platforms=%v", name, imageSpec, test.want)
+				}
+			}
+		})
+	}
+}
 
 func TestBuildService_CreateBuildFromPipeline_PersistsDurableJobs(t *testing.T) {
 	buildRepo := &fakeBuildRepository{}

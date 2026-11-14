@@ -411,6 +411,45 @@ func TestStepContainerRunArgs_BuildsCorrectArgs(t *testing.T) {
 	}
 }
 
+func TestStepContainerRunArgs_ShellEntrypoint(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		command  string
+		args     []string
+		override bool
+	}{
+		{name: "pipeline shell", command: "sh", args: []string{"-c", "helm version"}, override: true},
+		{name: "absolute shell", command: "/bin/sh", args: []string{"-c", "helm version"}, override: true},
+		{name: "direct command", command: "helm", args: []string{"version"}},
+		{name: "shell without arguments", command: "sh"},
+		{name: "shell script file", command: "sh", args: []string{"script.sh"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			image := "alpine/helm:3.17.3"
+			args := stepContainerRunArgs("helm-step", image, "/tmp/workspace:/workspace", "", false, runner.RunStepRequest{Command: test.command, Args: test.args})
+			entrypointIndex, imageIndex := -1, -1
+			for index, argument := range args {
+				if argument == "--entrypoint" {
+					entrypointIndex = index
+				}
+				if argument == image {
+					imageIndex = index
+				}
+			}
+			if imageIndex < 0 || (entrypointIndex >= 0) != test.override {
+				t.Fatalf("unexpected entrypoint override: %q", args)
+			}
+			if test.override && (entrypointIndex+2 != imageIndex || args[entrypointIndex+1] != "") {
+				t.Fatalf("entrypoint must be cleared before the image: %q", args)
+			}
+			wantCommand := append([]string{test.command}, test.args...)
+			if strings.Join(args[imageIndex+1:], "\x00") != strings.Join(wantCommand, "\x00") {
+				t.Fatalf("command changed: %q", args)
+			}
+		})
+	}
+}
+
 func TestMergeStepEnvironment_DerivesTriggerArtifactVisiblePaths(t *testing.T) {
 	envEntries := mergeStepEnvironment(runner.RunStepRequest{
 		BuildID: "build-1",
