@@ -113,7 +113,7 @@ spec:
   automountServiceAccountToken: false
   containers:
     - name: postgres
-      image: postgres:16-alpine
+      image: postgres:17-alpine
       env:
         - {name: POSTGRES_USER, value: coyote}
         - {name: POSTGRES_DB, value: coyote}
@@ -178,7 +178,29 @@ key = ->(document) { [document["kind"], document.dig("metadata", "name")] }
 abort "bridge changed unrelated resources" unless expected.sort_by(&key) == bridge.sort_by(&key)
 RUBY
 fi
-helm upgrade --install "${control_args[@]}" --wait --timeout 15m
+initial_args=("${control_args[@]}")
+if [[ "${KIND_HELM_LEGACY_BRIDGE:-false}" != true ]]; then
+  initial_args+=(--set-string release.version= --set-string compatibility.upgrade_from=)
+  initial_args+=(--set migration.maintenanceAcknowledged=true --set server.replicas=0,frontend.replicas=0,mcp.replicas=0,worker.replicas=0)
+  kubectl -n "$namespace" apply -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata: {name: storage-bind-fixture}
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  containers:
+    - name: bind
+      image: busybox:1.37
+      command: ["true"]
+      volumeMounts: [{name: data, mountPath: /data}]
+  volumes:
+    - name: data
+      persistentVolumeClaim: {claimName: coyote-data}
+EOF
+fi
+helm upgrade --install "${initial_args[@]}" --wait --timeout 15m
+kubectl -n "$namespace" delete pod storage-bind-fixture --ignore-not-found
 initial_revision="$(helm history portable -n "$namespace" -o json | jq -r 'last.revision')"
 kubectl -n "$namespace" get job "coyote-migrate-portable-$initial_revision" -o json >"$work_dir/initial-migration.json"
 kubectl -n "$namespace" get deployment coyote-server -o json >"$work_dir/initial-server.json"
@@ -191,6 +213,24 @@ else
   jq -e -s '.[0].status.completionTime <= .[1].metadata.creationTimestamp' "$work_dir/initial-migration.json" "$work_dir/initial-server.json" >/dev/null
 fi
 ledger_count="$(kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT count(*) FROM goose_db_version')"
+if [[ "${KIND_HELM_LEGACY_BRIDGE:-false}" != true ]]; then
+  kubectl -n "$namespace" get deployments -o json | jq -e '.items | length == 2 and all(.[]; .spec.replicas == 0)' >/dev/null
+  [[ "$(kubectl -n portable-execution get deployment coyote-kubernetes-worker -o jsonpath='{.spec.replicas}')" == 0 ]]
+  kubectl -n "$namespace" get configmap coyote-control-plane -o json | jq -e '(.metadata.annotations["coyote-ci/release-version"] // "") == ""' >/dev/null
+  [[ "$(kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT max(version_id) FROM goose_db_version WHERE is_applied')" == "$schema_target" ]]
+  kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT row_to_json(history) FROM goose_db_version history ORDER BY id' >"$work_dir/bootstrap-history-before.jsonl"
+  helm upgrade "${control_args[@]}" --set-string release.version= --set-string compatibility.upgrade_from= --wait --timeout 15m
+  bootstrap_revision="$(helm history portable -n "$namespace" -o json | jq -r 'last.revision')"
+  kubectl -n "$namespace" get job "coyote-migrate-portable-$bootstrap_revision" -o json >"$work_dir/bootstrap-migration.json"
+  jq -e 'any(.status.conditions[]; .type == "Complete" and .status == "True") and
+    ([.spec.template.spec.containers[] | select(.name == "migrate") | .env[] | {key: .name, value: .value}] | from_entries |
+    .MIGRATION_GUARD_UPGRADE == "true" and .MIGRATION_ONLINE_APPROVED == "false" and .MIGRATION_MAINTENANCE_ACKNOWLEDGED == "false")' "$work_dir/bootstrap-migration.json" >/dev/null
+  kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT row_to_json(history) FROM goose_db_version history ORDER BY id' >"$work_dir/bootstrap-history-after.jsonl"
+  cmp "$work_dir/bootstrap-history-before.jsonl" "$work_dir/bootstrap-history-after.jsonl"
+  kubectl -n "$namespace" get deployments -o json | jq -e '.items | length == 2 and all(.[]; .spec.replicas == 1 and .status.readyReplicas == 1)' >/dev/null
+  [[ "$(kubectl -n portable-execution get deployment coyote-kubernetes-worker -o jsonpath='{.spec.replicas}:{.status.readyReplicas}')" == 1:1 ]]
+  echo "Bootstrap zero-to-normal replicas passed: no release metadata or compatibility range, approvals false, unchanged Goose history"
+fi
 kubectl -n "$namespace" annotate configmap coyote-control-plane coyote-ci/release-version-
 helm upgrade "${control_args[@]}" --wait --timeout 15m
 kubectl -n "$namespace" get serviceaccount coyote-migrate -o json | jq -e '.metadata.annotations["helm.sh/hook"] == "pre-install,pre-upgrade"' >/dev/null
@@ -258,6 +298,13 @@ for phase in before after; do
     control_args+=(--values "$work_dir/upgrade.json")
     kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -c 'CREATE TABLE helm_retry_gate (id integer)'
     generation="$(kubectl -n "$namespace" get deployment coyote-server -o jsonpath='{.metadata.generation}')"
+    if helm upgrade "${control_args[@]}" --set migration.onlineUpgradeApproved=false --wait --timeout 15m >"$work_dir/pending-guard.log" 2>&1; then
+      echo "Expected unapproved pending migration rejection" >&2
+      exit 1
+    fi
+    guard_revision="$(helm history portable -n "$namespace" -o json | jq -r 'last.revision')"
+    kubectl -n "$namespace" logs "job/coyote-migrate-portable-$guard_revision" -c migrate | grep -q 'pending migrations on an existing database require'
+    [[ "$(kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT count(*) FROM goose_db_version')" == "$ledger_count" ]]
     if helm upgrade "${control_args[@]}" --set worker.replicas=2 --wait --timeout 15m; then
       echo "Expected transactional migration failure" >&2
       exit 1

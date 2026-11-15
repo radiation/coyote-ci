@@ -1,0 +1,67 @@
+namespace: coyote-ci
+executionNamespace: coyote-ci-staging
+
+rbac:
+  tokenReviewNameOverride: coyote-server-tokenreview
+gke:
+  enabled: true
+  secretManagerCSI: {enabled: true}
+  workloadIdentity: {enabled: true}
+
+compatibility:
+  schema_target: "57"
+serviceAccounts:
+  server: {name: coyote-server, gsaEmail: coyote-gke-server@bryanchoate.iam.gserviceaccount.com}
+  migrate: {name: coyote-migrate, gsaEmail: coyote-gke-migrate@bryanchoate.iam.gserviceaccount.com}
+  mcp: {name: coyote-mcp, gsaEmail: coyote-gke-mcp@bryanchoate.iam.gserviceaccount.com}
+  worker: {name: coyote-kubernetes-worker-staging, gsaEmail: coyote-gke-staging-worker@bryanchoate.iam.gserviceaccount.com}
+
+cloudSql:
+  enabled: true
+  connectionName: bryanchoate:us-central1:bryanchoate-postgres
+secrets:
+  project: bryanchoate
+  databaseUrl: coyote-staging-database-url
+  workspaceHelperCapability: coyote-workspace-helper-capability-secret
+  oidcClient: coyote-staging-oidc-client-secret
+  session: coyote-staging-session-secret
+
+storage:
+  provider: gcs
+  project: bryanchoate
+  artifacts: {bucket: bryanchoate-coyote-ci-artifacts, prefix: builds}
+  cache: {bucket: coyote-ci-cache-bryanchoate, prefix: coyote-ci/cache}
+  workspaceRevisions: {bucket: bryanchoate-coyote-ci-artifacts, prefix: workspace-revisions}
+
+auth:
+  bootstrapAdminEmails: bryan.choate@gmail.com
+  oidc:
+    issuerURL: https://accounts.google.com
+    clientID: 103285386186-l6i66iivpnhsa9a7036k8lleodogkncb.apps.googleusercontent.com
+    redirectURL: https://coyote-ci.bryanchoate.com/auth/callback
+  publicURL: https://coyote-ci.bryanchoate.com
+
+worker:
+  enabled: true
+  name: coyote-kubernetes-worker-staging
+  configMapName: coyote-gke-staging-worker
+  databaseSecretProviderClass: coyote-staging-worker-database-secrets
+  maxInFlightJobs: 4
+  secrets: {project: bryanchoate, databaseUrl: coyote-staging-database-url}
+cloudBuild:
+  enabled: true
+  project: bryanchoate
+  location: us-central1
+  runtimeServiceAccount: coyote-cloud-build@bryanchoate.iam.gserviceaccount.com
+  artifactRegistryRepository: us-central1-docker.pkg.dev/bryanchoate/coyote-ci
+  source: {bucket: bryanchoate-coyote-ci-artifacts, prefix: coyote-sources}
+
+mcp:
+  enabled: true
+  auth:
+    omitEmptyAllowedOrigins: true
+gateway:
+  enabled: true
+  hostname: coyote-ci.bryanchoate.com
+  addressName: coyote-staging-gateway-ip
+  certificateMap: coyote-staging-gateway-map
