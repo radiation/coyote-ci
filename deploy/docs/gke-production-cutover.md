@@ -1,5 +1,12 @@
 # GKE Production Cutover Runbook
 
+> Historical VM-to-GKE/new-database procedure. Do not execute it for the existing
+> installation. The current data-preserving procedure is
+> [GKE Bootstrap And Clean Redeployment](gke-clean-redeployment.md), using
+> [live-derived unified values](../helm/gke-values.yaml). This older document is
+> retained only as historical recovery context and is a post-cutover retirement
+> candidate; its database, IAM and release-tool instructions are superseded.
+
 This runbook moves the Coyote CI control plane from the legacy Compute Engine
 VM to GKE without changing live infrastructure as part of repository
 preparation. It uses Cloud SQL instance
