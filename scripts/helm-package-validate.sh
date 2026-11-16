@@ -4,9 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 helm_bin="${HELM_BIN:-helm}"
 control_chart="${CONTROL_CHART_DIR:-$repo_root/deploy/helm/coyote-ci}"
-worker_chart="${WORKER_CHART_DIR:-$repo_root/deploy/helm/coyote-ci-worker}"
 control_values="${CONTROL_VALUES_FILE:-$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml}"
-worker_values="${WORKER_VALUES_FILE:-$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml}"
 package_dir="$(mktemp -d)"
 
 cleanup() {
@@ -79,7 +77,6 @@ require_command tar
 require_command diff
 
 if [[ "${HELM_PACKAGE_SKIP_EXISTING_TESTS:-false}" != "true" ]]; then
-  bash "$repo_root/scripts/helm-render-parity.sh"
   bash "$repo_root/scripts/helm-schema-test.sh"
   bash "$repo_root/scripts/helm-migration-parity.sh"
   bash "$repo_root/scripts/helm-first-install-test.sh"
@@ -106,15 +103,3 @@ for profile in staging production; do
 done
 
 echo "Unified Helm package validation passed: coyote-ci $control_version"
-
-if [[ "${HELM_PACKAGE_INCLUDE_LEGACY_WORKER:-false}" == true ]]; then
-  validate_chart coyote-ci-worker "$worker_chart"
-  "$helm_bin" package "$worker_chart" --destination "$package_dir" >/dev/null
-  worker_version="$(chart_value "$worker_chart" version)"
-  worker_archive="$package_dir/coyote-ci-worker-$worker_version.tgz"
-  [[ -f "$worker_archive" ]] || { echo "legacy worker chart archive was not created" >&2; exit 1; }
-  validate_archive_contents "$worker_archive" coyote-ci-worker
-  render_and_compare coyote-ci-worker "$worker_chart" "$worker_values" "$worker_archive" coyote-ci-staging
-  render_and_compare coyote-ci-worker "$worker_chart" "$repo_root/deploy/helm/examples/generic-worker-values.yaml" "$worker_archive" portable-execution
-  echo "Legacy worker package compatibility passed: coyote-ci-worker $worker_version"
-fi

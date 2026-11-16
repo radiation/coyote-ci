@@ -32,10 +32,12 @@ provide the generic release's immutable output identities.
 
 | Files | Why retained | Removal trigger |
 | --- | --- | --- |
-| `scripts/coyote-release`, `scripts/test-coyote-release-deploy.sh`, `scripts/test-coyote-release-promote.sh`, `deploy/release-targets/` | Existing target-aware V1/V2 assessment/promotion users; plan/publish code has been removed | Successful unified-chart cutover and expiration of legacy recovery needs; remove these files and their Make targets |
-| `deploy/helm/coyote-ci-worker/`, legacy-worker options in `scripts/helm-package-validate.sh` and `scripts/helm-migration-parity.sh` | Historical two-release GKE installation and package/render recovery | Same cutover/recovery sign-off; remove worker chart, legacy options and corresponding test fixtures |
-| `scripts/gke-helm-rollout.sh`, `scripts/gke-helm-adopt.sh`, `scripts/gke-helm-normalize-ownership.sh`, related `scripts/test-gke-helm-*.sh` | Still-running installation and its documented recovery procedure; no runtime behavior changed | Explicit retirement of the old installation/recovery procedure; remove these scripts, tests and Make targets together |
+| `scripts/coyote-release`, `scripts/test-coyote-release-deploy.sh`, `scripts/test-coyote-release-promote.sh`, `deploy/release-targets/` | General-purpose target-aware assessment and promotion tools, with their own regression tests; not GKE rollout machinery | Separate release-tool retirement decision; not part of deployment cleanup |
 | V1/V2 manifest readers, import/fetch/resolve and stored release data | Historical immutable releases must remain readable byte-for-byte | Only after a separately approved archival/retention policy removes all consumers; not part of this cutover |
+
+GKE now uses one unified Helm release. Its historical deployment machinery is
+removed; recovery evidence and chart archives remain outside Git. Normal deployment
+uses the [Helm guide](../deploy/helm/README.md#gke-operations).
 
 The legacy assessor compares against its supported historical chart revision.
 Its hard-coded 0.1.0 test fixture is not a certification of the current unified

@@ -119,8 +119,8 @@ commands, saved configuration, or logs.
 
 For external/managed Postgres runtime configuration and Cloud SQL deployment guidance, see [deploy/docs/gcp-cloud-sql-postgres.md](deploy/docs/gcp-cloud-sql-postgres.md).
 
-For the current pre-Helm GKE/GCP control-plane and isolated staging-worker
-deployment path, see [deploy/docs/gke-gcp-deployment.md](deploy/docs/gke-gcp-deployment.md).
+For portable Kubernetes installation and the unified GKE deployment workflow,
+see [deploy/helm/README.md](deploy/helm/README.md).
 
 ## Identity, sessions, and RBAC V1
 

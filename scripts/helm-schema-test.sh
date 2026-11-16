@@ -29,16 +29,14 @@ expect_template_failure() {
 require_command helm
 
 control_values="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml"
-worker_values="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml"
 production_control_values="$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml"
-production_worker_values="$repo_root/deploy/helm/examples/gke-production-worker-values.yaml"
+production_worker_values="$repo_root/deploy/helm/examples/gke-production-unified-worker-values.yaml"
 
-helm template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci --values "$production_control_values" >/dev/null
-helm template coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" --namespace coyote-ci --values "$production_worker_values" >"$temp_dir/production-worker.yaml"
+helm template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci --values "$production_control_values" --values "$production_worker_values" >"$temp_dir/production-worker.yaml"
 ruby -ryaml - "$temp_dir/production-worker.yaml" <<'RUBY'
 documents = YAML.load_stream(File.read(ARGV.fetch(0))).compact
-names = documents.map { |document| document.dig("metadata", "name") if ["Role", "RoleBinding"].include?(document["kind"]) }.compact
-abort "shared-namespace worker must not render duplicate verifier RBAC" if names.include?("coyote-server-workspace-verifier")
+identities = documents.map { |document| [document["kind"], document.dig("metadata", "namespace"), document.dig("metadata", "name")] }
+abort "shared-namespace worker must not render duplicate resources" unless identities.uniq == identities
 worker = documents.find { |document| document.dig("metadata", "name") == "coyote-kubernetes-worker" && document["kind"] == "Deployment" } or abort "production worker deployment is missing"
 helper_image = worker.dig("spec", "template", "spec", "containers")&.find { |container| container["name"] == "worker" }&.fetch("env")&.find { |env| env["name"] == "WORKER_KUBERNETES_HELPER_IMAGE" }&.fetch("value")
 abort "production helper image must use the worker image by default" unless helper_image == worker.dig("spec", "template", "spec", "containers")&.find { |container| container["name"] == "worker" }&.fetch("image")
@@ -48,12 +46,6 @@ cat >"$temp_dir/shared-namespace-without-opt-in.yaml" <<'EOF'
 executionNamespace: coyote-ci
 EOF
 expect_template_failure coyote-ci "$repo_root/deploy/helm/coyote-ci" coyote-ci "$control_values" "$temp_dir/shared-namespace-without-opt-in.yaml"
-
-cat >"$temp_dir/shared-worker-namespace-without-opt-in.yaml" <<'EOF'
-namespace: coyote-ci
-controlPlaneNamespace: coyote-ci
-EOF
-expect_template_failure coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" coyote-ci "$worker_values" "$temp_dir/shared-worker-namespace-without-opt-in.yaml"
 
 cat >"$temp_dir/missing-namespace.yaml" <<'EOF'
 namespace: mismatched-namespace
@@ -152,18 +144,6 @@ abort "MCP secret provider must only mount the database URL" unless YAML.load(se
 abort "MCP must not render Kubernetes RBAC" if documents.any? { |document| ["Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding"].include?(document["kind"]) && document.dig("metadata", "name")&.include?("mcp") }
 RUBY
 
-cat >"$temp_dir/invalid-concurrency.yaml" <<'EOF'
-worker:
-  maxInFlightJobs: 0
-EOF
-expect_template_failure coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" coyote-ci-staging "$worker_values" "$temp_dir/invalid-concurrency.yaml"
-
-cat >"$temp_dir/mutable-helper-image.yaml" <<'EOF'
-worker:
-  helperImage: example.invalid/coyote-worker:mutable
-EOF
-helm template coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" --namespace coyote-ci-staging --values "$worker_values" --values "$temp_dir/mutable-helper-image.yaml" >/dev/null
-
 cat >"$temp_dir/release-overlay.yaml" <<'EOF'
 release:
   version: 2.5.1
@@ -176,22 +156,14 @@ images:
   migrate: example.invalid/coyote-migrate@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 EOF
 helm template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci --values "$control_values" --values "$temp_dir/release-overlay.yaml" >/dev/null
-helm template coyote-ci-worker "$repo_root/deploy/helm/coyote-ci-worker" --namespace coyote-ci-staging --values "$worker_values" --values "$temp_dir/release-overlay.yaml" >/dev/null
 
 ruby -ryaml -rjson -ropen3 - "$repo_root" <<'RUBY'
 root = ARGV.fetch(0)
 
-def render(root, worker: false, overrides: {}, failure: nil, gke: false)
-  chart = worker ? "coyote-ci-worker" : "coyote-ci"
-  namespace = worker ? "portable-execution" : "portable-control"
-  example = worker ? "worker" : "control-plane"
-  if gke
-    namespace = worker ? "coyote-ci-staging" : "coyote-ci"
-    example = "gke-staging-#{example}"
-  else
-    example = "generic-#{example}"
-  end
-  output, error, result = Open3.capture3("helm", "template", "portable", "#{root}/deploy/helm/#{chart}",
+def render(root, overrides: {}, failure: nil, gke: false)
+  namespace = gke ? "coyote-ci" : "portable-control"
+  example = gke ? "gke-staging-control-plane" : "generic-control-plane"
+  output, error, result = Open3.capture3("helm", "template", "portable", "#{root}/deploy/helm/coyote-ci",
     "--namespace", namespace, "--values", "#{root}/deploy/helm/examples/#{example}-values.yaml",
     "--values", "-", stdin_data: JSON.generate(overrides))
   if failure
@@ -264,19 +236,11 @@ with_consumers = render(root, overrides: {"mcp" => {"enabled" => true}, "images"
   abort "#{name} must receive only the database" unless sources.length == 1 && sources.first.dig("secret", "name") == "coyote-database"
 end
 
-worker = render(root, worker: true)
-worker_pod = resource(worker, "Deployment", "coyote-kubernetes-worker").dig("spec", "template", "spec")
-abort "worker must receive only its database volume" unless worker_pod.fetch("volumes").length == 1 && worker_pod.fetch("volumes").first.dig("secret", "items") == [{"key" => "url", "path" => "database-url"}]
-abort "worker must not receive the artifact PVC" if worker_pod.fetch("volumes").any? { |entry| entry.key?("persistentVolumeClaim") }
-worker_extras = render(root, worker: true, overrides: {"serviceAccounts" => {"worker" => {"annotations" => {"example.org/identity" => "worker"}}}, "worker" => {"extraEnvSecrets" => {"GITHUB_STATUS_TOKEN" => {"name" => "github", "key" => "token"}}}})
-abort "worker annotations missing" unless resource(worker_extras, "ServiceAccount", "coyote-kubernetes-worker-staging").dig("metadata", "annotations", "example.org/identity") == "worker"
-
 %w[databaseUrl workspaceHelperCapability oidcClient session].each do |key|
   %w[name key].each do |field|
     render(root, overrides: {"secrets" => {"existingSecrets" => {key => {field => ""}}}}, failure: "requires name and key")
   end
 end
-render(root, worker: true, overrides: {"secrets" => {"existingSecrets" => {"databaseUrl" => {"name" => ""}}}}, failure: "requires name and key")
 [
   [{"server" => {"replicas" => 2}}, "at most one"],
   [{"server" => {"replicasManagedExternally" => true}}, "at most one"],
@@ -290,16 +254,10 @@ render(root, worker: true, overrides: {"secrets" => {"existingSecrets" => {"data
   [{"secrets" => {"existingSecrets" => {"databaseUrl" => {"value" => "must-not-render"}}}}, "additional properties"],
   [{"server" => {"extraEnvSecrets" => {"DATABASE_URL_FILE" => {"name" => "db", "key" => "url"}}}}, "must not override"]
 ].each { |overrides, failure| render(root, overrides: overrides, failure: failure) }
-render(root, worker: true, overrides: {"cloudBuild" => {"enabled" => true}}, failure: "requires GCS artifact storage")
-render(root, worker: true, overrides: {"worker" => {"extraEnvSecrets" => {"CLOUD_BUILD_PROJECT" => {"name" => "cloud", "key" => "project"}}}}, failure: "must not override")
-
-[false, true].each do |worker_chart|
-  render(root, worker: worker_chart, gke: true, overrides: {"cloudSql" => {"enabled" => false}}, failure: "explicit cloudSql.enabled")
-  render(root, worker: worker_chart, gke: true, overrides: {"gke" => {"workloadIdentity" => {"enabled" => false}}}, failure: "workload identity")
-  render(root, worker: worker_chart, gke: true, overrides: {"gke" => {"secretManagerCSI" => {"enabled" => false}}}, failure: "CSI opt-ins")
-  render(root, worker: worker_chart, gke: true, overrides: {"storage" => {"provider" => "filesystem"}, "server" => {"replicasManagedExternally" => false}}, failure: "explicit storage.provider=gcs")
-end
-render(root, worker: true, gke: true, overrides: {"cloudBuild" => {"enabled" => false}}, failure: "explicit cloudBuild.enabled")
+render(root, gke: true, overrides: {"cloudSql" => {"enabled" => false}}, failure: "explicit cloudSql.enabled")
+render(root, gke: true, overrides: {"gke" => {"workloadIdentity" => {"enabled" => false}}}, failure: "workload identity")
+render(root, gke: true, overrides: {"gke" => {"secretManagerCSI" => {"enabled" => false}}}, failure: "CSI opt-ins")
+render(root, gke: true, overrides: {"storage" => {"provider" => "filesystem"}, "server" => {"replicasManagedExternally" => false}}, failure: "explicit storage.provider=gcs")
 puts "Portable Helm configuration tests passed"
 RUBY
 

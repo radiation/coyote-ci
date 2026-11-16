@@ -4,8 +4,6 @@ Coyote CI's public chart is `deploy/helm/coyote-ci`: control plane, optional MCP
 optional Kubernetes worker, scoped RBAC, and automatic Goose migration hooks in one
 release. Workers are direct templates, not a subchart.
 
-`deploy/helm/coyote-ci-worker` remains a temporary bridge for the existing GKE
-two-release installation and recovery. Do not use it for fresh installations.
 The V3 manifest already requires one `coyote-ci` chart and all five component
 images. The existing Go publisher now produces the complete V3 release. Supply `images.mcp` separately when
 using a legacy image overlay that does not include MCP.
@@ -15,12 +13,12 @@ using a legacy image overlay that does not include MCP.
 Run the existing chart checks plus package validation without cloud credentials:
 
 ```sh
-make helm-render-parity helm-schema-test helm-migration-parity helm-first-install-test
+make helm-schema-test helm-migration-parity helm-first-install-test
 make helm-package-validate
 ```
 
 The package validator checks the chart name and SemVer version, packages only
-`coyote-ci` by default, enforces an archive allowlist, and compares source/package
+`coyote-ci`, enforces an archive allowlist, and compares source/package
 renders for portable and GKE unified configurations. It never publishes artifacts.
 `make release-publish-test` tests publication, retries and conflicts with fake
 Helm/cloud responses; it does not contact a registry.
@@ -54,16 +52,14 @@ already be provisioned. No channel is promoted by default.
 
 See [release guarantees and prerequisites](releases.md) and the
 [retirement inventory](release-planning.md). The standalone publisher and legacy
-worker-only publication selections are removed. Historical packages remain
-available for recovery; local legacy chart validation remains opt-in through
-`HELM_PACKAGE_INCLUDE_LEGACY_WORKER=true`.
+worker-only publication selections are removed. Historical packages and recovery
+evidence are archived outside Git.
 
-## Historical Manual OCI Installation
+## OCI Installation
 
-The manual sequence below is retained for the old chart revision used by the
-existing installation. Do not apply it to new V3 releases with automatic hooks;
-use the current [chart runbook](../deploy/helm/README.md) and
-[database migration runbook](../deploy/docs/database-migrations.md) instead.
+Use the same automatic migration lifecycle as the [source chart](../deploy/helm/README.md)
+and follow the [database migration runbook](../deploy/docs/database-migrations.md)
+for upgrade approvals and failure recovery.
 
 The unified chart can be pulled and rendered without cloning the repository:
 
@@ -87,67 +83,34 @@ Provision the execution namespace and namespace-local Secrets first; the chart
 does not create or delete namespaces. Worker database references live under
 `worker.secrets.existingSecrets.databaseUrl`.
 
-Follow the same manual migration sequence as the source chart. Supply complete
-desired operator values with Helm-managed replicas and the release overlay
-as the final values file. Use a unique DNS-label-compatible migration ID and
-do not use `--atomic`, so a failed Job remains available for diagnosis.
-
-### Phase 1: install at zero replicas and migrate
+Supply complete desired operator values with Helm-managed replicas and the release
+overlay as the final values file. Avoid `--atomic`, `--cleanup-on-fail`, and
+`--no-hooks`; Helm cannot roll back database changes.
 
 ```sh
-INSTALL_MIGRATION_ID="install-20261027-001"
-
 helm upgrade --install coyote-ci \
   oci://REGISTRY/charts/coyote-ci \
   --version CHART_VERSION \
   --namespace "$COYOTE_NAMESPACE" --create-namespace \
   --values operator-values.yaml \
   --values release-overlay.yaml \
-  --set server.replicasManagedExternally=false \
-  --set server.replicas=0 \
-  --set frontend.replicasManagedExternally=false \
-  --set frontend.replicas=0 \
-  --set worker.replicasManagedExternally=false \
-  --set worker.replicas=0 \
-  --set migration.render=true \
-  --set "migration.runID=$INSTALL_MIGRATION_ID" \
-  --wait --wait-for-jobs --timeout 15m
-```
-
-When MCP is enabled, also set its replicas to zero in Phase 1. Do not proceed
-until the migration Job succeeds.
-
-### Phase 2: restore the application
-
-```sh
-helm upgrade coyote-ci \
-  oci://REGISTRY/charts/coyote-ci \
-  --version CHART_VERSION \
-  --namespace "$COYOTE_NAMESPACE" \
-  --values operator-values.yaml \
-  --values release-overlay.yaml \
-  --set migration.render=false \
   --wait --timeout 15m
 ```
 
-The operator values restore the desired server, frontend, optional worker, and
-MCP replicas only after the database is migrated. Filesystem storage supports
-one server replica. There is no separate worker installation phase.
+Blocking hooks complete migrations before application resources are installed or
+updated. Filesystem storage supports one server replica. There is no separate
+worker installation or manual migration phase.
 
 ### Compatible upgrades and retention
 
-For releases requiring no database migration, one `helm upgrade --install` with
-complete desired values and the immutable release overlay upgrades the application.
-Schema-changing upgrades keep the controlled quiesce/migrate/restore workflow.
-Automatic migration hooks are deferred.
+Every install/upgrade runs the automatic hook. Pending schema changes on an existing
+database require explicit online compatibility approval or maintenance acknowledgment
+after quiescing consumers. Setting replicas to zero in the same Helm upgrade does
+not quiesce existing workloads before its pre-upgrade hook.
 
 Drain execution before disabling workers or uninstalling. Native Secrets,
 namespaces, and chart-created PVCs survive uninstall; select retained PVCs with
 `storage.filesystem.existingClaim` on reinstall. Retention is not a backup.
 
-Existing two-release GKE installations must retain their original values and
-`worker.enabled: false` in the control-plane release until a separately approved
-ownership migration. Unified worker overlays are rendering/compatibility examples,
-not an ownership transfer. Changing annotations does not remove resources from
-the old release's stored manifest. This change introduces no migration framework
-and does not perform or rehearse ownership transfer.
+GKE uses this same single-release workflow with maintained environment values;
+see [GKE operations](../deploy/helm/README.md#gke-operations).

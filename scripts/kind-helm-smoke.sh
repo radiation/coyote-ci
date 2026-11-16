@@ -50,10 +50,6 @@ load_image() {
   printf '%s@%s' "$image" "$digest"
 }
 migrate_image="$(load_image migrate "$repo_root/backend" migrate-runtime)"
-bash "$repo_root/scripts/test-helm-hook-transition.sh" "$work_dir" "$migrate_image"
-if [[ "${KIND_HELM_HOOK_TRANSITION_ONLY:-false}" == true ]]; then
-  exit 0
-fi
 frontend_image="$(load_image frontend "$repo_root/frontend" '')"
 schema_target="$(cd "$repo_root/backend" && go run ./cmd/migrate -dir db/migrations target)"
 
@@ -152,37 +148,10 @@ kubectl -n "$namespace" wait --for=condition=Ready pod/postgres pod/oidc --timeo
 jq -n --arg server "$server_image" --arg frontend "$frontend_image" --arg migrate "$migrate_image" --arg issuer "$issuer" --arg target "$schema_target" \
   '{images: {server: $server, worker: $server, frontend: $frontend, migrate: $migrate}, auth: {oidc: {issuerURL: $issuer}}, release: {version: "1.0.0"}, compatibility: {schema_target: $target, upgrade_from: ">=1.0.0 <2.0.0"}}' >"$work_dir/images.json"
 control_args=(portable "$repo_root/deploy/helm/coyote-ci" --namespace "$namespace" --values "$repo_root/deploy/helm/examples/generic-values.yaml" --values "$work_dir/images.json")
-if [[ "${KIND_HELM_LEGACY_BRIDGE:-false}" == true ]]; then
-  previous_chart="$work_dir/hook-transition/previous/deploy/helm/coyote-ci"
-  helm install portable "$previous_chart" --namespace "$namespace" \
-    --values "$repo_root/deploy/helm/examples/generic-values.yaml" --values "$work_dir/images.json" \
-    --set server.replicas=0 --set frontend.replicas=0 --set worker.replicas=0 --set mcp.replicas=0 --set migration.render=false
-  kubectl -n "$namespace" get serviceaccount coyote-migrate -o json | jq -e '.metadata.annotations["meta.helm.sh/release-name"] == "portable" and .metadata.annotations["helm.sh/hook"] == null' >/dev/null
-  bridge_claim_uid="$(kubectl -n "$namespace" get pvc coyote-data -o jsonpath='{.metadata.uid}')"
-  helm get manifest portable -n "$namespace" >"$work_dir/previous-full-manifest.yaml"
-  mkdir -p "$work_dir/bridge/templates"
-  helm show chart "$previous_chart" >"$work_dir/bridge/Chart.yaml"
-  ruby -ryaml - "$work_dir/previous-full-manifest.yaml" "$work_dir/bridge/templates/resources.yaml" <<'RUBY'
-documents = YAML.load_stream(File.read(ARGV[0])).compact
-removed = documents.select { |document| [["ServiceAccount", "coyote-migrate"], ["SecretProviderClass", "coyote-migrate-secrets"]].include?([document["kind"], document.dig("metadata", "name")]) }
-abort "expected the native migration ServiceAccount" unless removed.length == 1
-File.write(ARGV[1], (documents - removed).map(&:to_yaml).join)
-RUBY
-  helm upgrade portable "$work_dir/bridge" --namespace "$namespace"
-  [[ -z "$(kubectl -n "$namespace" get serviceaccount coyote-migrate --ignore-not-found -o name)" ]] || exit 1
-  helm get manifest portable -n "$namespace" >"$work_dir/bridge-full-manifest.yaml"
-  ruby -ryaml - "$work_dir/previous-full-manifest.yaml" "$work_dir/bridge-full-manifest.yaml" <<'RUBY'
-previous, bridge = ARGV.map { |path| YAML.load_stream(File.read(path)).compact }
-expected = previous.reject { |document| document["kind"] == "ServiceAccount" && document.dig("metadata", "name") == "coyote-migrate" }
-key = ->(document) { [document["kind"], document.dig("metadata", "name")] }
-abort "bridge changed unrelated resources" unless expected.sort_by(&key) == bridge.sort_by(&key)
-RUBY
-fi
 initial_args=("${control_args[@]}")
-if [[ "${KIND_HELM_LEGACY_BRIDGE:-false}" != true ]]; then
-  initial_args+=(--set-string release.version= --set-string compatibility.upgrade_from=)
-  initial_args+=(--set migration.maintenanceAcknowledged=true --set server.replicas=0,frontend.replicas=0,mcp.replicas=0,worker.replicas=0)
-  kubectl -n "$namespace" apply -f - <<'EOF'
+initial_args+=(--set-string release.version= --set-string compatibility.upgrade_from=)
+initial_args+=(--set migration.maintenanceAcknowledged=true --set server.replicas=0,frontend.replicas=0,mcp.replicas=0,worker.replicas=0)
+kubectl -n "$namespace" apply -f - <<'EOF'
 apiVersion: v1
 kind: Pod
 metadata: {name: storage-bind-fixture}
@@ -198,39 +167,30 @@ spec:
     - name: data
       persistentVolumeClaim: {claimName: coyote-data}
 EOF
-fi
 helm upgrade --install "${initial_args[@]}" --wait --timeout 15m
 kubectl -n "$namespace" delete pod storage-bind-fixture --ignore-not-found
 initial_revision="$(helm history portable -n "$namespace" -o json | jq -r 'last.revision')"
 kubectl -n "$namespace" get job "coyote-migrate-portable-$initial_revision" -o json >"$work_dir/initial-migration.json"
 kubectl -n "$namespace" get deployment coyote-server -o json >"$work_dir/initial-server.json"
 kubectl -n "$namespace" get serviceaccount coyote-migrate -o json | jq -e '.metadata.annotations["helm.sh/hook"] == "pre-install,pre-upgrade"' >/dev/null
-if [[ "${KIND_HELM_LEGACY_BRIDGE:-false}" == true ]]; then
-  [[ "$(kubectl -n "$namespace" get pvc coyote-data -o jsonpath='{.metadata.uid}')" == "$bridge_claim_uid" ]] || exit 1
-  kubectl -n "$namespace" get pods -l app.kubernetes.io/name=coyote-server -o json >"$work_dir/initial-server-pods.json"
-  jq -e -s '.[0].status.completionTime as $completed | all(.[1].items[]; .metadata.creationTimestamp >= $completed)' "$work_dir/initial-migration.json" "$work_dir/initial-server-pods.json" >/dev/null
-else
-  jq -e -s '.[0].status.completionTime <= .[1].metadata.creationTimestamp' "$work_dir/initial-migration.json" "$work_dir/initial-server.json" >/dev/null
-fi
+jq -e -s '.[0].status.completionTime <= .[1].metadata.creationTimestamp' "$work_dir/initial-migration.json" "$work_dir/initial-server.json" >/dev/null
 ledger_count="$(kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT count(*) FROM goose_db_version')"
-if [[ "${KIND_HELM_LEGACY_BRIDGE:-false}" != true ]]; then
-  kubectl -n "$namespace" get deployments -o json | jq -e '.items | length == 2 and all(.[]; .spec.replicas == 0)' >/dev/null
-  [[ "$(kubectl -n portable-execution get deployment coyote-kubernetes-worker -o jsonpath='{.spec.replicas}')" == 0 ]]
-  kubectl -n "$namespace" get configmap coyote-control-plane -o json | jq -e '(.metadata.annotations["coyote-ci/release-version"] // "") == ""' >/dev/null
-  [[ "$(kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT max(version_id) FROM goose_db_version WHERE is_applied')" == "$schema_target" ]]
-  kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT row_to_json(history) FROM goose_db_version history ORDER BY id' >"$work_dir/bootstrap-history-before.jsonl"
-  helm upgrade "${control_args[@]}" --set-string release.version= --set-string compatibility.upgrade_from= --wait --timeout 15m
-  bootstrap_revision="$(helm history portable -n "$namespace" -o json | jq -r 'last.revision')"
-  kubectl -n "$namespace" get job "coyote-migrate-portable-$bootstrap_revision" -o json >"$work_dir/bootstrap-migration.json"
-  jq -e 'any(.status.conditions[]; .type == "Complete" and .status == "True") and
-    ([.spec.template.spec.containers[] | select(.name == "migrate") | .env[] | {key: .name, value: .value}] | from_entries |
-    .MIGRATION_GUARD_UPGRADE == "true" and .MIGRATION_ONLINE_APPROVED == "false" and .MIGRATION_MAINTENANCE_ACKNOWLEDGED == "false")' "$work_dir/bootstrap-migration.json" >/dev/null
-  kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT row_to_json(history) FROM goose_db_version history ORDER BY id' >"$work_dir/bootstrap-history-after.jsonl"
-  cmp "$work_dir/bootstrap-history-before.jsonl" "$work_dir/bootstrap-history-after.jsonl"
-  kubectl -n "$namespace" get deployments -o json | jq -e '.items | length == 2 and all(.[]; .spec.replicas == 1 and .status.readyReplicas == 1)' >/dev/null
-  [[ "$(kubectl -n portable-execution get deployment coyote-kubernetes-worker -o jsonpath='{.spec.replicas}:{.status.readyReplicas}')" == 1:1 ]]
-  echo "Bootstrap zero-to-normal replicas passed: no release metadata or compatibility range, approvals false, unchanged Goose history"
-fi
+kubectl -n "$namespace" get deployments -o json | jq -e '.items | length == 2 and all(.[]; .spec.replicas == 0)' >/dev/null
+[[ "$(kubectl -n portable-execution get deployment coyote-kubernetes-worker -o jsonpath='{.spec.replicas}')" == 0 ]]
+kubectl -n "$namespace" get configmap coyote-control-plane -o json | jq -e '(.metadata.annotations["coyote-ci/release-version"] // "") == ""' >/dev/null
+[[ "$(kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT max(version_id) FROM goose_db_version WHERE is_applied')" == "$schema_target" ]]
+kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT row_to_json(history) FROM goose_db_version history ORDER BY id' >"$work_dir/bootstrap-history-before.jsonl"
+helm upgrade "${control_args[@]}" --set-string release.version= --set-string compatibility.upgrade_from= --wait --timeout 15m
+bootstrap_revision="$(helm history portable -n "$namespace" -o json | jq -r 'last.revision')"
+kubectl -n "$namespace" get job "coyote-migrate-portable-$bootstrap_revision" -o json >"$work_dir/bootstrap-migration.json"
+jq -e 'any(.status.conditions[]; .type == "Complete" and .status == "True") and
+  ([.spec.template.spec.containers[] | select(.name == "migrate") | .env[] | {key: .name, value: .value}] | from_entries |
+  .MIGRATION_GUARD_UPGRADE == "true" and .MIGRATION_ONLINE_APPROVED == "false" and .MIGRATION_MAINTENANCE_ACKNOWLEDGED == "false")' "$work_dir/bootstrap-migration.json" >/dev/null
+kubectl -n "$namespace" exec postgres -- psql -U coyote -d coyote -Atc 'SELECT row_to_json(history) FROM goose_db_version history ORDER BY id' >"$work_dir/bootstrap-history-after.jsonl"
+cmp "$work_dir/bootstrap-history-before.jsonl" "$work_dir/bootstrap-history-after.jsonl"
+kubectl -n "$namespace" get deployments -o json | jq -e '.items | length == 2 and all(.[]; .spec.replicas == 1 and .status.readyReplicas == 1)' >/dev/null
+[[ "$(kubectl -n portable-execution get deployment coyote-kubernetes-worker -o jsonpath='{.spec.replicas}:{.status.readyReplicas}')" == 1:1 ]]
+echo "Bootstrap zero-to-normal replicas passed: no release metadata or compatibility range, approvals false, unchanged Goose history"
 kubectl -n "$namespace" annotate configmap coyote-control-plane coyote-ci/release-version-
 helm upgrade "${control_args[@]}" --wait --timeout 15m
 kubectl -n "$namespace" get serviceaccount coyote-migrate -o json | jq -e '.metadata.annotations["helm.sh/hook"] == "pre-install,pre-upgrade"' >/dev/null
