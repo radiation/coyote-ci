@@ -212,11 +212,13 @@ only immutable image digest references.
 ```sh
 COYOTE_APPLICATION_VERSION=0.0.41 make cli-snapshot cli-validate-release-matrix
 make release-publish-test backend-architecture
-make helm-package-validate helm-schema-test helm-migration-parity
-bash scripts/test-helm-package-validate.sh
+make helm-package-validate
 make pre-push-check
 ```
 
+The Helm target runs the consolidated structural checks once and includes
+package-integrity self-tests. It requires Helm and Ruby locally; Ruby is not
+required by the Go release CLI or standard Helm deployment.
 These checks do not publish to a registry or promote channels. Registry auth,
 Cloud Build execution, index metadata visibility, immutable-tag conflicts and
 Helm push/pull behavior still require an explicitly authorized integration run.

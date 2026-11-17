@@ -10,16 +10,19 @@ using a legacy image overlay that does not include MCP.
 
 ## Local Validation
 
-Run the existing chart checks plus package validation without cloud credentials:
+Run structural and package-integrity checks once, without cloud credentials:
 
 ```sh
-make helm-schema-test helm-migration-parity helm-first-install-test
 make helm-package-validate
 ```
 
 The package validator checks the chart name and SemVer version, packages only
 `coyote-ci`, enforces an archive allowlist, and compares source/package
 renders for portable and GKE unified configurations. It never publishes artifacts.
+The Make target first runs `helm-schema-test`, then package self-tests including
+invalid versions and secret-like archive paths. Helm and Ruby are required;
+Ruby remains confined to the existing structural YAML assertions. No cluster
+or registry is contacted by these checks.
 `make release-publish-test` tests publication, retries and conflicts with fake
 Helm/cloud responses; it does not contact a registry.
 

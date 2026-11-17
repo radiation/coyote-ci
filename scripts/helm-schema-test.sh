@@ -27,6 +27,7 @@ expect_template_failure() {
 }
 
 require_command helm
+require_command ruby
 
 control_values="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml"
 production_control_values="$repo_root/deploy/helm/examples/gke-production-control-plane-values.yaml"
@@ -160,12 +161,12 @@ helm template coyote-ci "$repo_root/deploy/helm/coyote-ci" --namespace coyote-ci
 ruby -ryaml -rjson -ropen3 - "$repo_root" <<'RUBY'
 root = ARGV.fetch(0)
 
-def render(root, overrides: {}, failure: nil, gke: false)
-  namespace = gke ? "coyote-ci" : "portable-control"
+def render(root, overrides: {}, failure: nil, gke: false, release: "portable", namespace: nil, upgrade: false)
+  namespace ||= gke ? "coyote-ci" : "portable-control"
   example = gke ? "gke-staging-control-plane" : "generic-control-plane"
-  output, error, result = Open3.capture3("helm", "template", "portable", "#{root}/deploy/helm/coyote-ci",
+  output, error, result = Open3.capture3("helm", "template", release, "#{root}/deploy/helm/coyote-ci",
     "--namespace", namespace, "--values", "#{root}/deploy/helm/examples/#{example}-values.yaml",
-    "--values", "-", stdin_data: JSON.generate(overrides))
+    "--values", "-", *(upgrade ? ["--is-upgrade"] : []), stdin_data: JSON.generate({"namespace" => namespace}.merge(overrides)))
   if failure
     abort "expected failure containing #{failure.inspect}: #{error}" if result.success? || !error.include?(failure)
     return
@@ -190,6 +191,47 @@ end
 control = render(root)
 migration = resource(control, "Job", "coyote-migrate-portable-1")
 abort "migration must precede ordinary resources" unless migration.dig("metadata", "annotations", "helm.sh/hook") == "pre-install,pre-upgrade"
+abort "MCP must be disabled by default" if control.any? { |doc| doc["kind"] == "Deployment" && doc.dig("metadata", "name") == "coyote-mcp" }
+gke = render(root, gke: true)
+gke_migration = resource(gke, "Job", "coyote-migrate-portable-1")
+upgrade_migration = resource(render(root, gke: true, upgrade: true), "Job", "coyote-migrate-portable-1")
+abort "install and upgrade migration specifications differ" unless gke_migration["spec"] == upgrade_migration["spec"]
+[[control, migration], [gke, gke_migration]].each do |documents, job|
+  prerequisites = [["ServiceAccount", "coyote-migrate", "-30"], ["Job", job.dig("metadata", "name"), "-10"]]
+  prerequisites << ["SecretProviderClass", "coyote-migrate-secrets", "-20"] if documents == gke
+  prerequisites.each do |kind, name, weight|
+    annotations = resource(documents, kind, name).dig("metadata", "annotations")
+    abort "incorrect migration hook ordering" unless annotations["helm.sh/hook"] == "pre-install,pre-upgrade" && annotations["helm.sh/hook-weight"] == weight
+    abort "hook must retain failure evidence and prerequisites" unless annotations["helm.sh/hook-delete-policy"] == "before-hook-creation"
+  end
+  abort "migration deadline missing" unless job.dig("spec", "activeDeadlineSeconds") == 600
+  abort "automatic retry must be disabled" unless job.dig("spec", "backoffLimit") == 0
+  pod = job.dig("spec", "template", "spec")
+  abort "migrator identity incorrect" unless pod["serviceAccountName"] == "coyote-migrate"
+  container = pod.fetch("containers").find { |entry| entry["name"] == "migrate" }
+  abort "migration image must be digest-pinned" unless container.fetch("image").match?(/@sha256:[a-f0-9]{64}\z/)
+  abort "migration must mount its database URL" unless container.fetch("volumeMounts").any? { |mount| mount["name"] == "database-url" }
+end
+proxy = gke_migration.dig("spec", "template", "spec", "initContainers").find { |entry| entry["name"] == "cloud-sql-proxy" }
+abort "native proxy sidecar/startup gate missing" unless proxy && proxy["restartPolicy"] == "Always" && proxy.dig("startupProbe", "exec", "command").include?("wait") && proxy["args"].include?("--health-check")
+secrets = resource(gke, "SecretProviderClass", "coyote-migrate-secrets")
+abort "migrator CSI must expose only the database URL" unless YAML.load(secrets.dig("spec", "parameters", "secrets")).map { |entry| entry["path"] } == ["database-url"]
+
+long_release = "install-" + "a" * 44
+long_namespace = "namespace-" + "n" * 52
+identities = [["install-one", "install-control"], ["install-two", "install-control"], ["install-one", "another-control"], [long_release + "a", long_namespace + "a"], [long_release + "b", long_namespace + "b"], [long_release + "a", long_namespace + "a"]]
+names = identities.map do |release, namespace|
+  documents = render(root, gke: true, release: release, namespace: namespace, overrides: {"rbac" => {"tokenReviewNameOverride" => ""}})
+  role = documents.find { |doc| doc["kind"] == "ClusterRole" } or abort "TokenReview role missing"
+  name = role.dig("metadata", "name")
+  binding = resource(documents, "ClusterRoleBinding", name)
+  abort "TokenReview roleRef must match the resolved role name" unless binding.dig("roleRef", "name") == name
+  abort "TokenReview name must be a DNS label at most 63 characters" unless name.match?(/\A[a-z0-9]([-a-z0-9]*[a-z0-9])?\z/) && name.length <= 63
+  abort "long TokenReview name must preserve the hash suffix" if release.length > 50 && !name.match?(/-[a-f0-9]{8}-tokenreview\z/)
+  name
+end
+abort "TokenReview identities must remain distinct" unless names.first(5).uniq.length == 5
+abort "long TokenReview name must remain stable" unless names[3] == names[5]
 render(root, overrides: {"compatibility" => {"schema_target" => ""}}, failure: "schema_target")
 render(root, overrides: {"migration" => {"render" => false}}, failure: "render")
 render(root, overrides: {"migration" => {"activeDeadlineSeconds" => 30}}, failure: "activeDeadlineSeconds")
@@ -265,10 +307,10 @@ echo "Helm schema-negative tests passed"
 
 ruby -ryaml -rjson -ropen3 - "$repo_root" <<'RUBY'
 root = ARGV.fetch(0)
-def unified(root, overrides = {}, failure: nil)
+def unified(root, overrides = {}, failure: nil, upgrade: false)
   output, error, result = Open3.capture3("helm", "template", "portable", "#{root}/deploy/helm/coyote-ci",
     "--namespace", "portable-control", "--values", "#{root}/deploy/helm/examples/generic-values.yaml",
-    "--values", "-", stdin_data: JSON.generate(overrides))
+    "--values", "-", *(upgrade ? ["--is-upgrade"] : []), stdin_data: JSON.generate(overrides))
   if failure
     abort "expected #{failure.inspect}: #{error}" if result.success? || !error.include?(failure)
     return
@@ -285,6 +327,20 @@ def find_resource(documents, kind, name, namespace = "portable-execution")
   documents.find { |doc| doc["kind"] == kind && doc.dig("metadata", "name") == name && doc.dig("metadata", "namespace") == namespace } or abort "missing #{namespace}/#{kind}/#{name}"
 end
 documents = unified(root)
+desired = {"worker" => {"replicas" => 2}, "mcp" => {"enabled" => true, "replicas" => 2}, "images" => {"mcp" => "example.invalid/mcp@sha256:" + "e" * 64}}
+renders = [false, true].map { |upgrade| unified(root, desired, upgrade: upgrade) }
+renders.each do |rendered|
+  abort "automatic migration Job missing" unless rendered.count { |doc| doc["kind"] == "Job" && doc.dig("metadata", "annotations", "helm.sh/hook") == "pre-install,pre-upgrade" } == 1
+  abort "filesystem PVC must remain ordinary" if find_resource(rendered, "PersistentVolumeClaim", "coyote-data", "portable-control").dig("metadata", "annotations", "helm.sh/hook")
+  {"coyote-server" => 1, "coyote-frontend" => 1, "coyote-mcp" => 2, "coyote-kubernetes-worker" => 2}.each do |name, replicas|
+    namespace = name == "coyote-kubernetes-worker" ? "portable-execution" : "portable-control"
+    deployment = find_resource(rendered, "Deployment", name, namespace)
+    abort "#{name} desired replicas changed" unless deployment.dig("spec", "replicas") == replicas
+    abort "#{name} must remain ordinary" if deployment.dig("metadata", "annotations", "helm.sh/hook")
+  end
+end
+identities = renders.map { |rendered| rendered.reject { |doc| %w[Job PersistentVolumeClaim].include?(doc["kind"]) }.map { |doc| [doc["kind"], doc.dig("metadata", "namespace").to_s, doc.dig("metadata", "name")] }.sort }
+abort "resource names changed between install and upgrade" unless identities[0] == identities[1]
 worker = find_resource(documents, "Deployment", "coyote-kubernetes-worker")
 abort "worker replicas missing" unless worker.dig("spec", "replicas") == 1
 pod = worker.dig("spec", "template", "spec")
