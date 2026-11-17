@@ -162,80 +162,7 @@ remove obsolete Jobs and unused migration identities only when no attempt runs.
 Serialize deploy operations even across separate Helm releases sharing a database;
 the advisory lock protects SQL, not application rollout ordering.
 
-### One-time ordinary-resource to hook transition
-
-Do not directly upgrade a release whose stored ordinary manifest still contains
-the migrator ServiceAccount or `coyote-migrate-secrets` SecretProviderClass.
-On Helm 4.3.0, the pre-upgrade hooks successfully replace those resources and run
-the Job, but the subsequent ordinary-resource cleanup deletes the replacements:
-their identities are present in the old ordinary manifest and absent from the new
-one. Helm still reports `deployed`. A second hook-enabled upgrade recreates them.
-A first hook failure retains them, but its successful retry still deletes them.
-Do not rely on that transient deletion/recreation as the supported transition.
-
-Use this one-time maintenance bridge for a single existing release. Fresh installs
-do not need it. This is not authorization to migrate ownership between two GKE
-releases or to use legacy GKE rollout wrappers with the new chart.
-
-1. Back up, stop new work, drain builds, and quiesce every database consumer.
-   Using the exact previous chart and complete previous values, create a successful
-   maintenance revision with `migration.render=false`, all consumer replicas zero,
-   and external replica management/autoscalers disabled or separately quiesced.
-   Wait for consumer Pods to stop and all migration attempts to be terminal.
-   Do not combine this step with the hook-enabled upgrade.
-2. Archive that quiesced revision's values, manifest and Job evidence. Construct a
-   temporary static bridge chart from its ordinary manifest, omitting only the
-   migrator ServiceAccount and optional migrator SecretProviderClass. Keep every
-   other resource, namespace, name, image, replica count and PVC unchanged. For
-   example, after setting `RELEASE`, `COYOTE_NAMESPACE`, `PREVIOUS_CHART`, and the
-   verified prerequisite names (the defaults below may have been customized):
-
-   ```sh
-   umask 077
-   BRIDGE="$(mktemp -d /tmp/coyote-hook-bridge.XXXXXX)"
-   mkdir -p "$BRIDGE/templates"
-   MIGRATOR_SA=coyote-migrate
-   MIGRATOR_SPC=coyote-migrate-secrets
-   helm show chart "$PREVIOUS_CHART" >"$BRIDGE/Chart.yaml"
-   helm get manifest "$RELEASE" -n "$COYOTE_NAMESPACE" >"$BRIDGE/previous.yaml"
-   ruby -ryaml - "$BRIDGE/previous.yaml" "$MIGRATOR_SA" "$MIGRATOR_SPC" >"$BRIDGE/resources.yaml" <<'RUBY'
-   documents = YAML.load_stream(File.read(ARGV[0])).compact
-   identities = [["ServiceAccount", ARGV[1]], ["SecretProviderClass", ARGV[2]]]
-   removed, retained = documents.partition do |document|
-     identities.include?([document["kind"], document.dig("metadata", "name")])
-   end
-   abort "expected exactly one migrator ServiceAccount" unless removed.count { |document| document["kind"] == "ServiceAccount" } == 1
-   puts retained.map(&:to_yaml).join
-   RUBY
-   printf '{{ .Files.Get "resources.yaml" }}\n' >"$BRIDGE/templates/resources.yaml"
-   helm template "$RELEASE" "$BRIDGE" -n "$COYOTE_NAMESPACE" >"$BRIDGE/review.yaml"
-   ```
-
-3. Review the rendered bridge against the archived manifest: only those prerequisite
-   resource entries may disappear. Apply it as a separate successful revision of
-   the same release: `helm upgrade "$RELEASE" "$BRIDGE" -n "$COYOTE_NAMESPACE"`.
-   Confirm with `helm get manifest` that neither prerequisite remains an ordinary
-   resource, and confirm their absence from the API. Verify consumers remain
-   stopped and PVC/Secret identities are unchanged. Deleting live resources or
-   changing their annotations alone does not remove the old manifest entries.
-   Do not edit Helm's stored release Secrets.
-4. Upgrade to the hook-enabled chart using complete desired values and the immutable
-   release overlay, `migration.maintenanceAcknowledged=true`, and `--wait --timeout
-   15m`. Do not reuse the bridge's empty values. The prerequisite hooks now have no
-   old ordinary entries for Helm to prune. Confirm successful hook order, retained
-   ServiceAccount/SecretProviderClass, and workload health before ending maintenance.
-   If the hook fails, keep consumers stopped, inspect retained evidence and retry
-   the same immutable target after resolving the cause. Do not roll back across
-   this lifecycle boundary as a recovery shortcut.
-
-The Kind suite verifies direct success/failure/retry, bridge success/failure/retry,
-and a second hook-only upgrade in both native and CSI resource fixtures. Its
-full native test also runs the actual previous chart through the bridge using
-PostgreSQL and the real migrator. CSI coverage uses a local CRD stub and native
-fixture credentials: it verifies rendered identity/Helm lifecycle only, not the
-GKE driver, Secret Manager, Workload Identity, IAM or Cloud SQL runtime.
-
-### Rollback and established GKE deployments
+### Rollback
 
 There is no automatic database rollback. Helm rollback restores application
 resources only; use it only for binaries certified compatible with the current
@@ -243,8 +170,5 @@ schema. Otherwise prefer a forward fix or a separately planned consistent restor
 Manual `make db-migrate-down-one` is an explicit operator action, never a deployment
 recovery default. Back up database and artifact state together.
 
-Legacy GKE rollout/adoption scripts use manual `migration.render/runID` controls
-and must remain on their historical chart revision. This chart rejects those
-controls. Moving an established two-release deployment to automatic hooks/unified
-ownership needs a separately approved maintenance plan; no ownership changes or
-production operations are part of this implementation.
+The supported Helm lifecycle is the unified chart's automatic hook. Historical
+deployment recovery evidence and chart packages are archived outside Git.

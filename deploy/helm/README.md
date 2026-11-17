@@ -7,10 +7,9 @@ provision a database, identity provider, cloud infrastructure, or credentials.
 - `coyote-ci` owns the control plane, optional MCP, automatic migration hooks,
   and optional Kubernetes worker in one release. Worker resources live in
   `executionNamespace`; release metadata stays in the control-plane namespace.
-- `coyote-ci-worker` remains only for the existing two-release GKE deployment
-  and recovery. Do not install it for new installations or enable unified worker
-  ownership over an existing worker release. Ownership migration remains a
-  separate milestone.
+- GKE uses the same chart and one `coyote-ci` release. The maintained environment
+  settings are in [`gke-values.yaml`](gke-values.yaml); images come from a resolved
+  release overlay. Recovery evidence and historical packages are archived outside Git.
 
 ## Portable installation
 
@@ -146,16 +145,6 @@ instead of duplicating the execution suite. The fixture is not an OIDC login
 test; only the test server image includes its local CA. PostgreSQL
 uses plaintext transport only inside this isolated test cluster.
 
-The same harness runs ordinary-to-hook lifecycle fixtures from previous chart
-revision `9b116a23` and the working chart, including native Secrets and a local
-SecretProviderClass CRD stub. That commit must be available locally; an explicit
-`KIND_HELM_PREVIOUS_REVISION` can select another compatible pre-hook revision.
-Use `KIND_HELM_HOOK_TRANSITION_ONLY=true bash scripts/kind-helm-smoke.sh` for the
-focused lifecycle cases. Use `KIND_HELM_LEGACY_BRIDGE=true bash
-scripts/kind-helm-smoke.sh` to run the full native/PostgreSQL suite starting from
-the actual previous chart through a quiesced maintenance bridge. CSI fixtures
-test render/ownership/order only; they do not contact GKE or exercise its driver.
-
 The smoke script deletes its cluster by default and keeps logs and short-lived
 test credentials in its reported `/tmp/coyote-helm-smoke.*` directory. Delete
 that directory after inspecting results. Set `KIND_HELM_KEEP_CLUSTER=true` only
@@ -175,21 +164,20 @@ helm lint --strict deploy/helm/coyote-ci \
   --namespace coyote-ci \
   --values deploy/helm/examples/gke-production-control-plane-values.yaml \
   --values deploy/helm/examples/gke-production-unified-worker-values.yaml
-scripts/helm-render-parity.sh
 scripts/helm-schema-test.sh
+scripts/helm-package-validate.sh
 ```
 
-The unified worker overlays preserve GKE resource identities and replica
-management for render comparison. They do not migrate ownership. Never apply
-them over an active legacy worker release. Production's shared namespace is a
-legacy exception; new installations should use isolation.
+The examples cover isolated and shared execution namespaces. They are render
+fixtures, not the current installation's values. New installations should use
+isolated execution namespaces and Helm-managed replicas.
 
 ## First installation
 
-For GKE integrations, provision the external dependencies described in
-[`../docs/gke-gcp-deployment.md`](../docs/gke-gcp-deployment.md): Cloud SQL,
-Secret Manager secrets, Workload Identity and IAM bindings, GCS buckets, OIDC,
-and optional Gateway address, certificate, and DNS resources. The migration
+For GKE integrations, provision external Cloud SQL, Secret Manager secrets,
+Workload Identity and IAM bindings, GCS buckets, OIDC, and optional Gateway
+address, certificate, and DNS resources. See the [Cloud SQL](../docs/gcp-cloud-sql-postgres.md)
+and [GCS](../docs/gcp-gcs-artifacts.md) guides for prerequisites. The migration
 ServiceAccount needs Cloud SQL Client plus read access only to the database URL
 secret. The migration Job mounts that secret through `coyote-migrate-secrets`
 and reaches Cloud SQL through its local Cloud SQL Auth Proxy sidecar.
@@ -205,8 +193,7 @@ coyote release resolve \
 ```
 
 Use the generated overlay as the final values file. It supplies the
-digest-pinned server, frontend, worker, and migration images. MCP remains a
-separate environment-specific image setting.
+digest-pinned server, frontend, worker, migration, and MCP images for V3 releases.
 
 Use Helm-managed replicas for a fresh installation. For example,
 `customer-values.yaml` can contain (filesystem storage requires server replicas 1):
@@ -239,9 +226,8 @@ mcp:
       - https://mcp.example.invalid
 ```
 
-The MCP image remains required; a GSA is required only with GKE Workload Identity. Fresh
-installations must not copy `replicasManagedExternally: true` from the
-established GKE integration deployment. External replica management is
+The MCP image remains required; a GSA is required only with GKE Workload Identity.
+Use Helm-managed replicas unless an external controller manages scaling. External replica management is
 reserved for workflows that explicitly manage the Deployment scale
 subresource.
 
@@ -309,13 +295,6 @@ a deliberate drain/reconfiguration, not an ordinary upgrade.
 
 ### Upgrades
 
-**Previous ordinary migration prerequisites require a one-time maintenance
-bridge.** A direct old-chart-to-hook-chart upgrade can report success and then
-delete the newly created migrator ServiceAccount and SecretProviderClass during
-ordinary-resource cleanup. Follow the [transition procedure](../docs/database-migrations.md#one-time-ordinary-resource-to-hook-transition)
-before the first hook-enabled upgrade. Fresh installs and subsequent hook-only
-upgrades do not need the bridge. This does not migrate ownership between releases.
-
 Every install/upgrade runs the hook, including same-schema upgrades. Goose state
 is authoritative; application history comes from the control-plane ConfigMap's
 release annotations, or the operator's verified `migration.sourceVersion` when
@@ -343,65 +322,27 @@ Helm rollback changes application resources only: it never runs Goose `down`.
 Only roll back binaries certified compatible with the resulting schema; otherwise
 use a forward fix or a separately planned database-and-artifact restore.
 
-### Existing GKE installations
+### GKE operations
 
-Keep the historical chart revision, existing two-release workflow and original values files with
-`worker.enabled: false` on the control-plane release (the default). Standalone
-worker source, values generation, rollout, adoption, and normalization tooling
-remain unchanged. They are a temporary bridge, not a second public install model.
-Do not use unified worker overlays until a separately approved ownership migration
-is complete. Changing live Helm annotations alone is unsafe: the old release's
-stored manifest can still delete resources. This change neither implements nor
-rehearses that migration. The legacy rollout/adoption scripts still expect manual
-`migration.render/runID` controls and must not be used with this hook-enabled
-chart. Those controls are now rejected. Transitioning an established deployment
-requires a separately approved maintenance and ownership plan.
+Use the maintained environment values and the resolved immutable image overlay:
 
-Before upgrading from cloud-enabled chart defaults, explicitly add the following
-to **both** operator values files (and preserve all existing cloud references):
-
-```yaml
-gke:
-  enabled: true
-  secretManagerCSI: {enabled: true}
-  workloadIdentity: {enabled: true}
-cloudSql:
-  enabled: true
-storage:
-  provider: gcs
+```sh
+helm lint --strict deploy/helm/coyote-ci --namespace coyote-ci \
+  --values deploy/helm/gke-values.yaml --values coyote-release-images.yaml
+helm template coyote-ci deploy/helm/coyote-ci --namespace coyote-ci \
+  --values deploy/helm/gke-values.yaml --values coyote-release-images.yaml
+helm upgrade --install coyote-ci deploy/helm/coyote-ci --namespace coyote-ci \
+  --values deploy/helm/gke-values.yaml --values coyote-release-images.yaml \
+  --wait --timeout 15m
+helm status coyote-ci --namespace coyote-ci
+helm history coyote-ci --namespace coyote-ci
 ```
 
-Also set `cloudBuild.enabled: true` on workers that use the existing managed-image
-integration. The checked-in GKE examples and staging-values generator emit these
-opt-ins. The generator must still only be run by an authorized operator; no live
-resource changes are part of this chart update.
-
-Cloud SQL connection names, Secret Manager references, Google service-account
-identities, GCS settings and Cloud Build configuration left behind without the
-matching opt-ins fail rendering. Do not use `--reuse-values` as a substitute for
-reviewing the complete desired values. Run `helm template` with the operator
-values and immutable image overlay before upgrading. Intentionally disabling
-an integration requires removing its old settings and supplying the replacement
-native Secret/storage configuration. Disabling GCS does not copy existing blobs.
-
-These integration opt-ins preserve cloud resource references but do not make
-the legacy rollout scripts compatible with automatic hooks. No Helm ownership
-migration is performed by this change.
-
-New releases generate the cluster-scoped TokenReview RBAC name from the Helm
-release and namespace. Existing installations that already use
-`coyote-server-tokenreview` must explicitly set:
-
-```yaml
-rbac:
-  tokenReviewNameOverride: coyote-server-tokenreview
-```
-
-Verify the live ClusterRole and ClusterRoleBinding name before upgrading. Do
-not rely on a chart default to preserve a historical name. The checked-in GKE
-examples do not establish the actual operator-local configuration: inspect the
-local values used by the existing deployment and preserve its verified live
-name before upgrading. Do not modify operator-local values automatically.
+Review migration compatibility and approvals as described above before an upgrade.
+Use complete desired values, not `--reuse-values`. GKE prerequisites are managed
+outside Helm; disabling an integration does not migrate its data or cloud resources.
+The checked-in resource names, including the TokenReview override and execution
+namespace, are current identities and must not be casually renamed.
 
 ## Optional MCP deployment
 
@@ -415,10 +356,7 @@ make gke-control-plane-image-build
 
 Set `mcp.enabled: true`, `images.mcp: <COYOTE_MCP_IMAGE>`, and a dedicated
 `serviceAccounts.mcp.gsaEmail` in the environment-specific control-plane
-values. When using `gke-helm-rollout.sh`, also set
-`mcp.replicasManagedExternally: true` so the wrapper can scale MCP to zero
-before migrations and restore the configured `mcp.replicas` afterward. The MCP
-GSA needs Cloud SQL Client and read access only to the
+values. Keep replicas Helm-managed. The MCP GSA needs Cloud SQL Client and read access only to the
 database-url secret. It does not need worker, artifact-storage, or Kubernetes
 API permissions. Its service-account token is mounted only because the Cloud
 SQL Auth Proxy requires it for GKE Workload Identity; the MCP KSA receives no
@@ -438,199 +376,4 @@ helm template coyote-ci deploy/helm/coyote-ci \
   --values deploy/helm/examples/gke-staging-control-plane-values.yaml \
   --show-only templates/migration-job.yaml
 ```
-
-The legacy wrapper's quiesce/manual-Job/restore procedure and the adoption
-instructions below apply only to historical chart revisions, not this chart.
-They remain reference material for a separately authorized GKE transition.
-
-## Staging ownership adoption
-
-The existing staging resources were created by raw manifests. Before the
-normal rollout wrapper can be used, adopt exactly those steady-state resources
-without recreating them:
-
-First generate Git-ignored, environment-specific values from the currently
-running staging resources. This reads Deployments, ServiceAccounts, ConfigMaps,
-SecretProviderClass resource references, and Gateway metadata; it never reads
-Kubernetes Secrets or Secret Manager payloads. The migration Job is not a
-steady-state resource, so its digest-pinned image must come from the existing
-operator deployment input:
-
-```sh
-COYOTE_MIGRATE_IMAGE=us-central1-docker.pkg.dev/<project>/coyote-ci/coyote-migrate@sha256:<digest> \
-  make gke-helm-staging-values
-```
-
-This writes the Git-ignored local files:
-
-```text
-.local/helm/gke-staging-control-plane-values.yaml
-.local/helm/gke-staging-worker-values.yaml
-```
-
-It refuses to overwrite them unless
-`GKE_HELM_VALUES_OVERWRITE=true` is supplied. Use that explicit refresh after
-a reviewed staging deployment change. The adoption and rollout scripts use
-these local paths by default; CI and render-parity checks continue to use the
-tracked examples.
-
-Then lint the exact local values and run the non-mutating preflight:
-
-```sh
-helm lint --strict deploy/helm/coyote-ci \
-  --namespace coyote-ci \
-  --values .local/helm/gke-staging-control-plane-values.yaml
-helm lint --strict deploy/helm/coyote-ci-worker \
-  --namespace coyote-ci-staging \
-  --values .local/helm/gke-staging-worker-values.yaml
-make gke-helm-adopt-dry-run
-```
-
-Only a zero-drift dry-run can proceed to reviewed ownership adoption:
-
-```sh
-make gke-helm-adopt
-```
-
-The default is non-mutating. It renders both charts, verifies every rendered
-object exists live, compares its desired structure to the live object while
-ignoring only server-populated fields, rejects partial or conflicting Helm
-ownership, and lists the exact resources that would be adopted. Review this
-output before continuing.
-
-After a reviewed dry-run, the explicit mutation command adds only Helm's
-standard metadata (`app.kubernetes.io/managed-by=Helm`,
-`meta.helm.sh/release-name`, and `meta.helm.sh/release-namespace`) and then
-establishes `coyote-ci` in `coyote-ci` and `coyote-ci-worker` in
-`coyote-ci-staging`:
-
-```sh
-make gke-helm-adopt
-```
-
-The Namespace and migration Job are intentionally excluded. The script writes
-separate control-plane and worker metadata snapshots under
-`.gke-helm-adoption-state/`. Each release is transactional: a worker failure
-restores only worker metadata and leaves an established control-plane release
-untouched. If patching or release establishment fails, it restores only the
-metadata changed by that release attempt and never runs `helm uninstall` or
-deletes workloads. To explicitly restore a retained snapshot, use:
-
-```sh
-GKE_HELM_ADOPT_ROLLBACK_STATE=.gke-helm-adoption-state/<timestamp> \
-  scripts/gke-helm-adopt.sh
-```
-
-### Failed adoption inspection and recovery
-
-Do not retry adoption, run `helm uninstall`, delete release storage, or remove
-ownership metadata until the failed attempt has been inspected:
-
-```sh
-helm status coyote-ci -n coyote-ci
-helm status coyote-ci-worker -n coyote-ci-staging
-helm list -n coyote-ci
-helm list -n coyote-ci-staging
-kubectl -n coyote-ci get secret,configmap -l owner=helm,name=coyote-ci -o name
-kubectl -n coyote-ci get httproute coyote-temporary-public \
-  -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}{"\t"}{.metadata.annotations.meta\.helm\.sh/release-name}{"\n"}'
-find .gke-helm-adoption-state -maxdepth 2 -type f -print
-```
-
-After a reviewed inspection, a retained snapshot can restore only the three
-Helm ownership metadata keys; it does not delete or recreate workloads:
-
-```sh
-GKE_HELM_ADOPT_ROLLBACK_STATE=.gke-helm-adoption-state/<timestamp> \
-  scripts/gke-helm-adopt.sh
-```
-
-Rollback is resumable. For each retained snapshot, the script restores metadata
-only when the live resource still has that adoption attempt's exact Helm
-ownership metadata. If an interrupted rollback has already restored a resource,
-the script reports it as already restored and makes no patch. If a snapshot is
-missing, it proceeds only when all three ownership fields are already absent;
-remaining adoption metadata with no snapshot fails closed because the original
-metadata cannot be reconstructed safely.
-
-Snapshot paths are canonicalized beneath the snapshot's `original/` directory.
-Traversal, sibling-prefix paths, and symlink escapes are rejected.
-
-If a failed Helm release record remains after metadata restoration, do not use
-`helm uninstall`: it can delete adopted resources. Instead, inspect the
-Helm-storage Secret or ConfigMap shown above and, only after review, remove
-that release-storage object directly. This removes Helm's failed history
-record, not the live application resources.
-
-Helm 4 establishes adopted releases with server-side apply. The adoption
-script uses `--server-side=true --force-conflicts` only for the one-time
-release establishment after structural parity, exact inventory, and ownership
-checks pass. It never uses `--force-replace`, `--force`, or
-`--take-ownership`; manual metadata snapshots retain deterministic preflight
-and metadata-only rollback. Normal rollout upgrades intentionally do not use
-the conflict-transfer flag.
-
-### One-time replica ownership normalization
-
-Historical `kubectl scale` operations can retain `.spec.replicas` ownership
-after adoption. GKE staging instead treats replicas as operational state:
-`replicasManagedExternally: true` omits `spec.replicas` from the server,
-frontend, and worker Deployment manifests. The desired steady-state values
-remain in the staging values files and
-[`gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh) manages the scale
-subresource with ordinary merge patches under the `coyote-rollout` field
-manager. Normal Helm upgrades therefore do not modify replicas or use
-`--force-conflicts`.
-
-After both releases are deployed and verified, first inspect the reviewed
-one-time normalization without mutating the cluster:
-
-```sh
-make gke-helm-normalize-ownership-dry-run
-```
-
-The normalization verifies that both releases are deployed and that strict
-render/live adoption parity holds. It reads the configured desired counts,
-patches the server, frontend, and worker `/scale` subresources with
-`coyote-rollout`, then performs ordinary Helm upgrades whose rendered
-Deployments omit `spec.replicas`. This makes Helm relinquish the field without
-deleting or replacing any Deployment. It verifies that Helm does not own
-replicas on the main Deployment resource and that all three live replica
-counts match their configured desired values before checking Deployment health.
-Historical scale-subresource field managers are informational only: ordinary
-merge patches do not use SSA conflict semantics, so their presence does not
-block normalization.
-
-Run the mutating command only after reviewing a successful dry run:
-
-```sh
-make gke-helm-normalize-ownership
-```
-
-This is a one-time migration operation, not a normal rollout. The normal
-[`gke-helm-rollout.sh`](../../scripts/gke-helm-rollout.sh) sequence uses
-`coyote-rollout` merge patches on the `/scale` subresource to scale all
-database consumers to zero, waits for each Deployment to finish scaling down,
-runs the migration Job, then restores the configured counts. Its Helm upgrades
-omit `spec.replicas`; it does not use Helm replica overrides or
-`--force-conflicts`.
-
-Verify a completed adoption without mutation:
-
-```sh
-GKE_HELM_ADOPT_VERIFY_ONLY=true scripts/gke-helm-adopt.sh
-helm status coyote-ci -n coyote-ci
-helm status coyote-ci-worker -n coyote-ci-staging
-helm get manifest coyote-ci -n coyote-ci
-helm get manifest coyote-ci-worker -n coyote-ci-staging
-GKE_HELM_DRY_RUN=true scripts/gke-helm-rollout.sh
-```
-
-Adoption establishes release ownership only. A normal rollout is a separate,
-intentional operation: it scales consumers down and runs the migration Job, so
-it must not be used as part of ownership adoption.
-
-The charts preserve GKE Workload Identity, Secret Manager CSI, Gateway API,
-and GKE HealthCheckPolicy integration behind values switches. Disabling those
-switches only omits their Kubernetes resources; it does not make a portable
-deployment profile bootable.
+See the [migration runbook](../docs/database-migrations.md) for failure and retry handling.

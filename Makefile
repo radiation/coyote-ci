@@ -1,4 +1,4 @@
-.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix release-publish-test release-promote-test release-deploy-test release-resolve kind-up kind-load kind-smoke kind-workspace-smoke kind-reliability-smoke kind-down gke-image-build gke-deploy gke-smoke gke-control-plane-image-build gke-control-plane-image-build-test gke-control-plane-deploy gke-control-plane-deploy-test gke-control-plane-smoke gke-gateway-deploy gke-staging-worker-deploy gke-public-e2e-smoke helm-render-parity helm-schema-test helm-migration-parity helm-first-install-test helm-package-validate gke-helm-rollout gke-helm-rollout-test gke-migration-evidence-test gke-helm-adopt-dry-run gke-helm-adopt gke-helm-adopt-test gke-helm-staging-values gke-helm-normalize-ownership gke-helm-normalize-ownership-dry-run gke-helm-normalize-ownership-test
+.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix release-publish-test release-promote-test release-deploy-test release-resolve kind-up kind-load kind-smoke kind-workspace-smoke kind-reliability-smoke kind-down gke-image-build gke-control-plane-image-build gke-control-plane-image-build-test gke-public-e2e-smoke helm-schema-test helm-migration-parity helm-first-install-test helm-package-validate
 
 CLI_VERSION ?= dev
 CLI_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -90,38 +90,14 @@ kind-down:
 gke-image-build:
 	bash ./scripts/gke-image-build.sh
 
-gke-deploy:
-	bash ./scripts/gke-deploy.sh
-
-gke-smoke:
-	bash ./scripts/gke-smoke.sh
-
 gke-control-plane-image-build:
 	bash ./scripts/gke-control-plane-image-build.sh
 
 gke-control-plane-image-build-test:
 	bash ./scripts/test-gke-control-plane-image-build.sh
 
-gke-control-plane-deploy:
-	bash ./scripts/gke-control-plane-deploy.sh
-
-gke-control-plane-deploy-test:
-	bash ./scripts/test-gke-control-plane-deploy.sh
-
-gke-control-plane-smoke:
-	bash ./scripts/gke-control-plane-smoke.sh
-
-gke-gateway-deploy:
-	bash ./scripts/gke-gateway-deploy.sh
-
-gke-staging-worker-deploy:
-	bash ./scripts/gke-staging-worker-deploy.sh
-
 gke-public-e2e-smoke:
 	bash ./scripts/gke-public-e2e-smoke.sh
-
-helm-render-parity:
-	bash ./scripts/helm-render-parity.sh
 
 helm-schema-test:
 	bash ./scripts/helm-schema-test.sh
@@ -134,36 +110,6 @@ helm-first-install-test:
 
 helm-package-validate:
 	bash ./scripts/helm-package-validate.sh
-
-gke-helm-rollout:
-	bash ./scripts/gke-helm-rollout.sh
-
-gke-helm-rollout-test:
-	bash ./scripts/test-gke-helm-rollout.sh
-
-gke-migration-evidence-test:
-	bash ./scripts/test-gke-migration-evidence.sh
-
-gke-helm-adopt-dry-run:
-	GKE_HELM_ADOPT_DRY_RUN=true bash ./scripts/gke-helm-adopt.sh
-
-gke-helm-adopt:
-	GKE_HELM_ADOPT_DRY_RUN=false GKE_HELM_ADOPT_APPLY=true bash ./scripts/gke-helm-adopt.sh
-
-gke-helm-adopt-test:
-	bash ./scripts/test-gke-helm-adopt.sh
-
-gke-helm-staging-values:
-	bash ./scripts/gke-helm-staging-values.sh
-
-gke-helm-normalize-ownership:
-	GKE_HELM_NORMALIZE_APPLY=true bash ./scripts/gke-helm-normalize-ownership.sh
-
-gke-helm-normalize-ownership-dry-run:
-	bash ./scripts/gke-helm-normalize-ownership.sh
-
-gke-helm-normalize-ownership-test:
-	bash ./scripts/test-gke-helm-normalize-ownership.sh
 
 cli-validate-release-matrix:
 	bash ./scripts/validate_cli_snapshot.sh .

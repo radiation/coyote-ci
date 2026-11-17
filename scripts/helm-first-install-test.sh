@@ -9,9 +9,7 @@ command -v helm >/dev/null 2>&1 || { echo "helm is required" >&2; exit 1; }
 command -v ruby >/dev/null 2>&1 || { echo "ruby is required" >&2; exit 1; }
 
 control_chart="$repo_root/deploy/helm/coyote-ci"
-worker_chart="$repo_root/deploy/helm/coyote-ci-worker"
 control_values="$repo_root/deploy/helm/examples/gke-staging-control-plane-values.yaml"
-worker_values="$repo_root/deploy/helm/examples/gke-staging-worker-values.yaml"
 
 cat >"$temp_dir/fresh-install-values.yaml" <<'EOF'
 namespace: install-control
@@ -42,10 +40,6 @@ helm template install-one "$control_chart" --namespace install-control \
   --values "$control_values" --values "$temp_dir/fresh-install-values.yaml" >"$temp_dir/phase-one-render.yaml"
 helm template install-one "$control_chart" --namespace install-control \
   --values "$control_values" --values "$temp_dir/fresh-install-values.yaml" --is-upgrade >"$temp_dir/phase-two-render.yaml"
-helm template install-one "$worker_chart" --namespace install-execution \
-  --values "$worker_values" \
-  --set namespace=install-execution \
-  --set controlPlaneNamespace=install-control >"$temp_dir/worker-render.yaml"
 helm template install-two "$control_chart" --namespace install-control \
   --values "$control_values" --values "$temp_dir/fresh-install-values.yaml" >"$temp_dir/install-two-render.yaml"
 helm template install-one "$control_chart" --namespace another-control \
@@ -97,7 +91,6 @@ end
 
 phase_one = index(documents(root, "phase-one-render.yaml"))
 phase_two = index(documents(root, "phase-two-render.yaml"))
-worker = index(documents(root, "worker-render.yaml"))
 legacy = index(documents(root, "legacy-render.yaml"))
 install_two = index(documents(root, "install-two-render.yaml"))
 another_namespace = index(documents(root, "another-namespace-render.yaml"))
@@ -124,9 +117,6 @@ abort "upgrade must include the migration Job" unless phase_two.keys.any? { |kin
   abort "#{name} did not restore its configured replicas" unless phase_two.fetch(["Deployment", name]).dig("spec", "replicas") == replicas
 end
 
-abort "worker chart must remain independently installable" unless worker.key?(["Deployment", "coyote-kubernetes-worker-staging"])
-worker_image = container(worker.fetch(["Deployment", "coyote-kubernetes-worker-staging"]), "worker").fetch("image")
-abort "worker image must be digest-pinned" unless worker_image.match?(/@sha256:[a-f0-9]{64}\z/)
 abort "MCP must be disabled by default" if legacy.key?(["Deployment", "coyote-mcp"])
 
 legacy_name = legacy.fetch(["ClusterRole", "coyote-server-tokenreview"]).dig("metadata", "name")
