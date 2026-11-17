@@ -15,7 +15,7 @@ func TestDockerfileArtifactRuntimePrecedesSourceBuildStages(t *testing.T) {
 	dockerfile := string(contents)
 	runtimeBase := strings.Index(dockerfile, "FROM debian:bookworm-slim AS runtime-base")
 	artifactRuntime := strings.Index(dockerfile, "FROM runtime-base AS artifact-runtime")
-	base := strings.Index(dockerfile, "FROM golang:${GO_VERSION} AS base")
+	base := strings.Index(dockerfile, "FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS base")
 	source := strings.Index(dockerfile, "FROM base AS source\n")
 	sourceBuilder := strings.Index(dockerfile, "FROM base AS source-builder")
 	sourceRuntime := strings.Index(dockerfile, "FROM runtime-base AS source-runtime\n")
@@ -27,6 +27,35 @@ func TestDockerfileArtifactRuntimePrecedesSourceBuildStages(t *testing.T) {
 	}
 	if strings.LastIndex(dockerfile, "FROM ") != sourceRuntime {
 		t.Fatal("source-runtime must remain the final default stage")
+	}
+}
+
+func TestDockerfileCrossCompilesWithNativeGoToolchain(t *testing.T) {
+	contents, readErr := os.ReadFile("Dockerfile")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	dockerfile := string(contents)
+	if !strings.Contains(dockerfile, "FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS base") {
+		t.Fatal("Go toolchain must run on the build platform, not under target emulation")
+	}
+	for _, target := range []struct {
+		stage string
+		count int
+	}{
+		{stage: "source-builder", count: 2},
+		{stage: "mcp-builder", count: 1},
+		{stage: "migration-builder", count: 1},
+	} {
+		_, stage, found := strings.Cut(dockerfile, "FROM source AS "+target.stage+"\n")
+		if !found {
+			t.Fatalf("missing builder %s", target.stage)
+		}
+		stage, _, _ = strings.Cut(stage, "\nFROM ")
+		if !strings.Contains(stage, "ARG TARGETOS\nARG TARGETARCH\n") ||
+			strings.Count(stage, "RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build") != target.count {
+			t.Fatalf("%s must cross-compile every binary for the requested target", target.stage)
+		}
 	}
 }
 
