@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,6 +114,88 @@ func TestLoadAndResolve_RepositoryPipeline(t *testing.T) {
 	}
 	if _, found := byName["List Image Artifacts"]; found {
 		t.Fatal("repository pipeline retains redundant List Image Artifacts step")
+	}
+}
+
+func TestRepositorySchemaTargetPackaging(t *testing.T) {
+	data, readErr := os.ReadFile(filepath.Join("..", "..", "..", ".coyote", "pipeline.yml"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	parsed, parseErr := Parse(data)
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	var packaging StepDef
+	for _, step := range parsed.Steps {
+		if step.Name == "Release Compatibility" {
+			packaging = step
+		}
+	}
+	if packaging.Run == "" {
+		t.Fatal("missing schema target packaging command")
+	}
+	for _, test := range []struct {
+		name   string
+		output string
+		exit   string
+		valid  bool
+	}{
+		{name: "valid", output: "57\n", exit: "0", valid: true},
+		{name: "go failure", output: "57\n", exit: "1"},
+		{name: "empty", exit: "0"},
+		{name: "invalid", output: "not a target\n", exit: "0"},
+		{name: "zero", output: "0\n", exit: "0"},
+		{name: "noncanonical", output: "057\n", exit: "0"},
+		{name: "multiple lines", output: "57\n58\n", exit: "0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, pathErr := filepath.EvalSymlinks(t.TempDir())
+			if pathErr != nil {
+				t.Fatal(pathErr)
+			}
+			for _, dir := range []string{"backend", "release", "bin"} {
+				if mkdirErr := os.Mkdir(filepath.Join(root, dir), 0o755); mkdirErr != nil {
+					t.Fatal(mkdirErr)
+				}
+			}
+			compatibility := []byte(`{"source_schema_min":0,"source_schema_max":57}`)
+			if writeErr := os.WriteFile(filepath.Join(root, "release", "compatibility.json"), compatibility, 0o600); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+			fakeGo := "#!/bin/sh\n" +
+				"test \"$PWD\" = \"$PACKAGING_ROOT/backend\" || exit 2\n" +
+				"test \"$*\" = 'run ./cmd/migrate -dir=db/migrations target' || exit 2\n" +
+				"printf '%s' \"$TARGET_OUTPUT\"\nexit \"$TARGET_EXIT\"\n"
+			if writeErr := os.WriteFile(filepath.Join(root, "bin", "go"), []byte(fakeGo), 0o700); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+			command := exec.Command("sh", "-c", packaging.Run)
+			command.Dir = filepath.Join(root, packaging.WorkingDir)
+			command.Env = append(os.Environ(), "PATH="+filepath.Join(root, "bin")+":"+os.Getenv("PATH"),
+				"PACKAGING_ROOT="+root, "TARGET_OUTPUT="+test.output, "TARGET_EXIT="+test.exit, "GOWORK=off")
+			output, runErr := command.CombinedOutput()
+			if !test.valid {
+				if runErr == nil {
+					t.Fatalf("invalid target succeeded: %s", output)
+				}
+				for _, name := range []string{"schema-target.txt", "compatibility.json"} {
+					if _, statErr := os.Stat(filepath.Join(root, "release", "dist", name)); !os.IsNotExist(statErr) {
+						t.Fatalf("failed packaging produced %s: %v", name, statErr)
+					}
+				}
+				return
+			}
+			if runErr != nil {
+				t.Fatalf("packaging failed: %v\n%s", runErr, output)
+			}
+			for name, want := range map[string]string{"schema-target.txt": test.output, "compatibility.json": string(compatibility)} {
+				got, artifactErr := os.ReadFile(filepath.Join(root, "release", "dist", name))
+				if artifactErr != nil || string(got) != want {
+					t.Fatalf("%s = %q, error %v; want %q", name, got, artifactErr, want)
+				}
+			}
+		})
 	}
 }
 

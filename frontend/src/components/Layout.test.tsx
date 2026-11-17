@@ -9,6 +9,8 @@ import { ThemeProvider } from "../theme";
 import { installMockLocalStorage } from "../test/browserMocks";
 import { THEME_STORAGE_KEY } from "../theme-context";
 
+declare const __COYOTE_VERSION__: string;
+
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
   return {
@@ -100,7 +102,7 @@ describe("Layout", () => {
         "is-active",
       );
       expect(screen.getByLabelText("Application version")).toHaveTextContent(
-        "Coyote CI 0.0.11",
+        `Coyote CI ${__COYOTE_VERSION__}`,
       );
       expect(screen.getByRole("link", { name: "Profile" })).toBeTruthy();
       expect(

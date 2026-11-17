@@ -165,8 +165,13 @@ steps:
   - name: Release Compatibility
     depends_on: [Backend Test]
     run: |
+      set -eu
+      target=$(cd backend && go run ./cmd/migrate -dir=db/migrations target)
+      case "$target" in
+        ''|0*|*[!0-9]*) echo "Invalid schema target: $target" >&2; exit 1 ;;
+      esac
       mkdir -p release/dist
-      go run ./backend/cmd/migrate -dir=backend/db/migrations target > release/dist/schema-target.txt
+      printf '%s\n' "$target" > release/dist/schema-target.txt
       cp release/compatibility.json release/dist/compatibility.json
     timeout_seconds: 300
     artifacts:

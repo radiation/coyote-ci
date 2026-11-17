@@ -19,7 +19,7 @@ EXPOSE 8080
 
 ENTRYPOINT ["/app/server"]
 
-FROM golang:${GO_VERSION} AS base
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS base
 
 WORKDIR /app
 
@@ -32,24 +32,30 @@ COPY . .
 
 FROM source AS source-builder
 
+ARG TARGETOS
+ARG TARGETARCH
 ARG COYOTE_APPLICATION_VERSION=dev
 ARG COYOTE_SERVER_VERSION=
 ARG COYOTE_WORKER_VERSION=
 ARG COYOTE_COMMIT=unknown
 ARG COYOTE_BUILD_DATE=
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_SERVER_VERSION:-$COYOTE_APPLICATION_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o server ./cmd/server
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_WORKER_VERSION:-$COYOTE_APPLICATION_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o worker ./cmd/worker
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_SERVER_VERSION:-$COYOTE_APPLICATION_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_WORKER_VERSION:-$COYOTE_APPLICATION_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o worker ./cmd/worker
 
 FROM source AS mcp-builder
 
+ARG TARGETOS
+ARG TARGETARCH
 ARG COYOTE_APPLICATION_VERSION=dev
 ARG COYOTE_COMMIT=unknown
 ARG COYOTE_BUILD_DATE=
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_APPLICATION_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o mcp ./cmd/mcp
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags "-X github.com/radiation/coyote-ci/backend/internal/versioninfo.Version=${COYOTE_APPLICATION_VERSION} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.Commit=${COYOTE_COMMIT} -X github.com/radiation/coyote-ci/backend/internal/versioninfo.BuildDate=${COYOTE_BUILD_DATE}" -o mcp ./cmd/mcp
 
 FROM source AS migration-builder
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o migrate ./cmd/migrate
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o migrate ./cmd/migrate
 
 FROM runtime-base AS migrate-runtime
 

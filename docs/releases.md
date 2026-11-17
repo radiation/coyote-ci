@@ -21,9 +21,16 @@ Run the repository pipeline from a pinned source commit with its Build-owned
 `COYOTE_APPLICATION_VERSION`. It builds all five images for `linux/amd64` and
 `linux/arm64` through Cloud Build's standard Docker Buildx path. No predecessor,
 selective rebuild, reused image, or separate assembly workflow is involved.
-GoReleaser packages six CLI archives (Darwin, Linux, Windows; amd64 and arm64),
+GoReleaser runs from the repository root with its build directory set to the
+`backend` module; no local `go.work` is required. It packages six CLI archives (Darwin, Linux, Windows; amd64 and arm64),
 checksums and source/version metadata. Helm packages only the unified chart,
 stamping both `version` and `appVersion` with the application version.
+
+Go image builders run the compiler on Buildx's native `BUILDPLATFORM` and
+cross-compile for `TARGETOS`/`TARGETARCH`. Runtime package installation still uses
+the target platform and may need emulation. Cloud Build uses the pipeline step's
+timeout; measure an explicitly approved cold build before changing deadlines or
+machine sizes. Local compilation does not establish a Cloud Build time budget.
 
 After that build and its generic application release are complete, use the
 existing CLI from an authorized publication environment:
@@ -210,7 +217,7 @@ only immutable image digest references.
 ## Local Release Checks
 
 ```sh
-COYOTE_APPLICATION_VERSION=0.0.41 make cli-snapshot cli-validate-release-matrix
+GOWORK=off COYOTE_APPLICATION_VERSION=0.0.41 make cli-snapshot cli-validate-release-matrix
 make release-publish-test backend-architecture
 make helm-package-validate
 make pre-push-check
@@ -222,3 +229,12 @@ required by the Go release CLI or standard Helm deployment.
 These checks do not publish to a registry or promote channels. Registry auth,
 Cloud Build execution, index metadata visibility, immutable-tag conflicts and
 Helm push/pull behavior still require an explicitly authorized integration run.
+
+Before retrying a failed release, use a commit containing the fixes and check
+version reservations and existing immutable outputs; a failed Build's captured
+pipeline is not updated by editing the repository. Verify public API access and
+load-balancer backend health, not just Pod readiness. For a public HTTP 503,
+correlate Gateway/NEG events and load-balancer `statusDetails` with Pod eviction
+and application logs. Node scale-down and backend convergence can interrupt a
+single-replica API even after its replacement Pod becomes ready. Infrastructure
+changes or workload restarts require separate approval.
