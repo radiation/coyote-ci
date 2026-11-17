@@ -122,6 +122,14 @@ For external/managed Postgres runtime configuration and Cloud SQL deployment gui
 For portable Kubernetes installation and the unified GKE deployment workflow,
 see [deploy/helm/README.md](deploy/helm/README.md).
 
+Releases use the Go CLI: `coyote release publish-coyote` publishes the five-image
+V3 release and six CLI archives, `coyote release resolve` generates immutable
+Helm overlays, and `coyote release promote-channel` explicitly updates a channel.
+See [docs/releases.md](docs/releases.md) for the release workflow.
+Run `make helm-package-validate release-publish-test` for offline Helm structure,
+package integrity and Go release regression checks. The Helm checks require
+Helm and Ruby; Ruby is used only for structural test assertions, not deployment.
+
 ## Identity, sessions, and RBAC V1
 
 Coyote CI has an internal user and project membership model for OIDC/SAML/directory integrations over time. The current implementation supports local development identity, trusted-header identity, native OIDC login, and a code-owned RBAC V1 capability model. It intentionally does not add password login, SAML, directory group sync, API tokens, service accounts, a dynamic policy engine, permissions UI, or per-artifact ACLs.

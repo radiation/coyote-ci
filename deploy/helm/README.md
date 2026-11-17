@@ -134,8 +134,12 @@ default. Optional MCP needs a digest-pinned image, not a Google identity in
 generic mode. Arbitrary service-account annotations can be configured through
 `serviceAccounts.<name>.annotations` without assigning Kubernetes permissions.
 
-Run `make helm-schema-test helm-package-validate` for provider-neutral renders
-and source/package equivalence. `bash scripts/kind-helm-smoke.sh` creates a
+Run `make helm-package-validate` for the consolidated structural checks and
+package-integrity self-tests, including source/package equivalence and rejection
+of secret-like archive paths. Helm and Ruby are required for these local checks;
+Ruby parses rendered YAML only in `scripts/helm-schema-test.sh`. Use
+`make helm-schema-test` for a focused structural check.
+`bash scripts/kind-helm-smoke.sh` creates a
 disposable Kind cluster, builds local OCI test images without pushing them,
 installs PostgreSQL/native Secrets and an HTTPS OIDC discovery fixture, and checks
 automatic installation, no-op upgrade, failed migration/retry, rollout ordering, worker
@@ -164,8 +168,7 @@ helm lint --strict deploy/helm/coyote-ci \
   --namespace coyote-ci \
   --values deploy/helm/examples/gke-production-control-plane-values.yaml \
   --values deploy/helm/examples/gke-production-unified-worker-values.yaml
-scripts/helm-schema-test.sh
-scripts/helm-package-validate.sh
+make helm-package-validate
 ```
 
 The examples cover isolated and shared execution namespaces. They are render

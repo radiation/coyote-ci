@@ -1,4 +1,4 @@
-.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix release-publish-test release-promote-test release-deploy-test release-resolve kind-up kind-load kind-smoke kind-workspace-smoke kind-reliability-smoke kind-down gke-image-build gke-control-plane-image-build gke-control-plane-image-build-test gke-public-e2e-smoke helm-schema-test helm-migration-parity helm-first-install-test helm-package-validate
+.PHONY: swagger swagger-check backend-format-check backend-vet backend-lint backend-architecture backend-unit-test backend-test frontend-lint frontend-test frontend-build pre-push-check check-go-version install-hooks db-migrate-create db-migrate-up db-migrate-down-one db-migrate-status cli-build cli-snapshot cli-validate-release-matrix release-publish-test release-resolve kind-up kind-load kind-smoke kind-workspace-smoke kind-reliability-smoke kind-down gke-image-build gke-control-plane-image-build gke-control-plane-image-build-test gke-public-e2e-smoke helm-schema-test helm-package-validate
 
 CLI_VERSION ?= dev
 CLI_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -57,12 +57,6 @@ cli-build:
 release-publish-test:
 	cd backend && go test ./internal/release ./internal/cli -count=1
 
-release-promote-test:
-	bash ./scripts/test-coyote-release-promote.sh
-
-release-deploy-test:
-	bash ./scripts/test-coyote-release-deploy.sh
-
 release-resolve:
 	cd backend && go run ./cmd/coyote release resolve $(if $(VERSION),--release "$(VERSION)",--channel "$(CHANNEL)") --release-source "$(RELEASE_SOURCE)" --output "$(OUTPUT)"
 
@@ -102,14 +96,8 @@ gke-public-e2e-smoke:
 helm-schema-test:
 	bash ./scripts/helm-schema-test.sh
 
-helm-migration-parity:
-	bash ./scripts/helm-migration-parity.sh
-
-helm-first-install-test:
-	bash ./scripts/helm-first-install-test.sh
-
-helm-package-validate:
-	bash ./scripts/helm-package-validate.sh
+helm-package-validate: helm-schema-test
+	bash ./scripts/test-helm-package-validate.sh
 
 cli-validate-release-matrix:
 	bash ./scripts/validate_cli_snapshot.sh .

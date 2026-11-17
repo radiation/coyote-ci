@@ -1258,17 +1258,14 @@ describe("NotificationsPage", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save Rule" }));
 
-    await waitFor(() => {
-      expect(mockedCreateNotificationSubscription).toHaveBeenCalled();
-    });
-
-    expect(mockedDeleteNotificationSubscription).not.toHaveBeenCalled();
-    expect(mockedUpdateNotificationSubscription).not.toHaveBeenCalled();
     expect(
-      screen.getByText(
+      await screen.findByText(
         /Skipped update and delete phases to preserve existing subscriptions/,
       ),
     ).toBeTruthy();
+    expect(mockedCreateNotificationSubscription).toHaveBeenCalled();
+    expect(mockedDeleteNotificationSubscription).not.toHaveBeenCalled();
+    expect(mockedUpdateNotificationSubscription).not.toHaveBeenCalled();
   });
 
   it("does not delete existing rows when adding an event fails", async () => {
@@ -1302,23 +1299,20 @@ describe("NotificationsPage", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Save Rule" }));
 
-    await waitFor(() => {
-      expect(mockedCreateNotificationSubscription).toHaveBeenCalledWith({
-        target_id: "target-1",
-        event_type: "build_succeeded",
-        project_id: "project-1",
-        job_id: undefined,
-        enabled: true,
-      });
-    });
-
-    expect(mockedDeleteNotificationSubscription).not.toHaveBeenCalled();
-    expect(mockedUpdateNotificationSubscription).not.toHaveBeenCalled();
     expect(
-      screen.getByText(
+      await screen.findByText(
         /Skipped update and delete phases to preserve existing subscriptions/,
       ),
     ).toBeTruthy();
+    expect(mockedCreateNotificationSubscription).toHaveBeenCalledWith({
+      target_id: "target-1",
+      event_type: "build_succeeded",
+      project_id: "project-1",
+      job_id: undefined,
+      enabled: true,
+    });
+    expect(mockedDeleteNotificationSubscription).not.toHaveBeenCalled();
+    expect(mockedUpdateNotificationSubscription).not.toHaveBeenCalled();
   });
 
   it("does not delete obsolete rows when kept-row update fails", async () => {

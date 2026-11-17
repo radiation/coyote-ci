@@ -76,12 +76,6 @@ require_command "$helm_bin"
 require_command tar
 require_command diff
 
-if [[ "${HELM_PACKAGE_SKIP_EXISTING_TESTS:-false}" != "true" ]]; then
-  bash "$repo_root/scripts/helm-schema-test.sh"
-  bash "$repo_root/scripts/helm-migration-parity.sh"
-  bash "$repo_root/scripts/helm-first-install-test.sh"
-fi
-
 validate_chart coyote-ci "$control_chart"
 
 "$helm_bin" package "$control_chart" --destination "$package_dir" >/dev/null
