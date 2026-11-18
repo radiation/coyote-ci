@@ -27,10 +27,35 @@ checksums and source/version metadata. Helm packages only the unified chart,
 stamping both `version` and `appVersion` with the application version.
 
 Go image builders run the compiler on Buildx's native `BUILDPLATFORM` and
-cross-compile for `TARGETOS`/`TARGETARCH`. Runtime package installation still uses
-the target platform and may need emulation. Cloud Build uses the pipeline step's
-timeout; measure an explicitly approved cold build before changing deadlines or
-machine sizes. Local compilation does not establish a Cloud Build time budget.
+cross-compile for `TARGETOS`/`TARGETARCH`. Frontend dependency installation and
+static compilation also run on `BUILDPLATFORM`: Rolldown, Lightning CSS, and
+TypeScript's native tooling are build-time dependencies, not runtime binaries.
+Only `dist` is copied into target-platform Nginx; the frontend Docker context
+excludes host dependencies and generated output.
+
+Backend CA bundle generation runs in a native Debian stage. Only its generated,
+architecture-independent certificate bundle crosses into the runtime. Git is
+still required for source operations; Git and its libraries, MCP's curl, and
+runtime account setup remain target-platform operations and may need emulation.
+Cloud Build uses the unchanged pipeline step timeouts; measure an explicitly
+approved cold build before changing deadlines or machine sizes. Local compilation
+does not establish a Cloud Build time budget.
+
+The CLI packaging step downloads GoReleaser v2.12.7's official Linux binary for
+the execution host, verifies its checked-in SHA-256 before extraction, and removes
+temporary tool files on exit. Updating that version requires updating both host
+architecture checksums. This avoids compiling GoReleaser's own large dependency
+graph inside the execution Pod. `--parallelism 1` bounds simultaneous cross-build
+temporary files. Only this step disables shared cache restore/save; the Go cache
+mounts remain available for reuse within the six-target run. Other pipeline cache
+policies, output declarations, version stamping, and publication checks are unchanged.
+
+No Kubernetes resource requests or limits are raised. The current pipeline schema
+has no per-step resource override. A cold local packaging run with 2 CPUs and
+4 GiB memory produced all six archives in 2m37s, with approximately 3.9 GiB of final
+workspace/module/build-cache data. This is not a live Pod peak measurement: helper
+volumes, temporary compilation files, and workspace publication overhead still
+need headroom within the admitted Pod storage budget.
 
 After that build and its generic application release are complete, use the
 existing CLI from an authorized publication environment:

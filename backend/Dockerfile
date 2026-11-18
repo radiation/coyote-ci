@@ -1,14 +1,21 @@
 ARG GO_VERSION=1.27.4
 
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS certificates
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
 FROM debian:bookworm-slim AS runtime-base
 
 WORKDIR /app
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    ca-certificates \
     git \
   && rm -rf /var/lib/apt/lists/*
+
+COPY --from=certificates /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 FROM runtime-base AS artifact-runtime
 

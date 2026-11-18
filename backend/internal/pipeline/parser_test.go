@@ -117,6 +117,105 @@ func TestLoadAndResolve_RepositoryPipeline(t *testing.T) {
 	}
 }
 
+func TestRepositoryCLIPackaging(t *testing.T) {
+	data, readErr := os.ReadFile(filepath.Join("..", "..", "..", ".coyote", "pipeline.yml"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	parsed, parseErr := Parse(data)
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	var packaging StepDef
+	for _, step := range parsed.Steps {
+		if step.Name == "CLI Packages" {
+			packaging = step
+		}
+	}
+	if packaging.Run == "" || len(packaging.Artifacts.Declarations) != 8 || packaging.TimeoutSeconds == nil || *packaging.TimeoutSeconds != 1800 {
+		t.Fatal("CLI packaging must retain its eight outputs and timeout")
+	}
+	if packaging.Cache == nil || packaging.Cache.Preset != "go" || packaging.Cache.Policy != "off" {
+		t.Fatal("CLI packaging must retain cache mounts without restoring or saving unrelated build objects")
+	}
+	for _, test := range []struct {
+		name string
+		arch string
+		fail string
+	}{
+		{name: "amd64", arch: "x86_64"},
+		{name: "arm64", arch: "aarch64"},
+		{name: "arm64 alias", arch: "arm64"},
+		{name: "unsupported", arch: "s390x", fail: "architecture"},
+		{name: "download failure", arch: "x86_64", fail: "download"},
+		{name: "checksum failure", arch: "x86_64", fail: "checksum"},
+		{name: "extraction failure", arch: "x86_64", fail: "extract"},
+		{name: "build failure", arch: "x86_64", fail: "build"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, dir := range []string{"bin", "tmp"} {
+				if mkdirErr := os.Mkdir(filepath.Join(root, dir), 0o755); mkdirErr != nil {
+					t.Fatal(mkdirErr)
+				}
+			}
+			for name, script := range map[string]string{
+				"uname": `printf '%s\n' "$HOST_ARCH"`,
+				"curl": `test "$6" = "https://github.com/goreleaser/goreleaser/releases/download/v2.12.7/goreleaser_Linux_${EXPECTED_ARCH}.tar.gz"
+test "$FAIL_AT" != download
+printf archive > "$5"`,
+				"sha256sum": `test "$*" = '-c -'
+read -r checksum archive
+test "$checksum" = "$EXPECTED_SHA"
+test -s "$archive"
+test "$FAIL_AT" != checksum`,
+				"tar": `test "$FAIL_AT" != extract
+test "$1" = '-xzf'
+test "$3" = '-C'
+test "$5" = goreleaser
+cp "$PACKAGING_ROOT/tool" "$4/goreleaser"`,
+			} {
+				if writeErr := os.WriteFile(filepath.Join(root, "bin", name), []byte("#!/bin/sh\nset -eu\n"+script+"\n"), 0o700); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}
+			tool := `#!/bin/sh
+set -eu
+test "$*" = 'release --config .goreleaser.yml --snapshot --clean --skip=publish --parallelism 1'
+touch "$PACKAGING_ROOT/invoked"
+test "$FAIL_AT" != build
+`
+			if writeErr := os.WriteFile(filepath.Join(root, "tool"), []byte(tool), 0o700); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+			expectedArch := "x86_64"
+			expectedSHA := "de95c5d1e728e18753c3ddcf02974d63d6432f0a7355a5afa6813971a95a01b8"
+			if test.arch == "arm64" || test.arch == "aarch64" {
+				expectedArch = "arm64"
+				expectedSHA = "7948d8ce09cce3d3a2fff9202eae47d2223958e508f849b340345583bb2c0e1f"
+			}
+			command := exec.Command("sh", "-c", packaging.Run)
+			command.Dir = root
+			command.Env = append(os.Environ(), "PATH="+filepath.Join(root, "bin")+":"+os.Getenv("PATH"),
+				"PACKAGING_ROOT="+root, "TMPDIR="+filepath.Join(root, "tmp"), "HOST_ARCH="+test.arch,
+				"EXPECTED_ARCH="+expectedArch, "EXPECTED_SHA="+expectedSHA, "FAIL_AT="+test.fail)
+			output, runErr := command.CombinedOutput()
+			if (runErr == nil) != (test.fail == "") {
+				t.Fatalf("packaging error=%v, output=%s", runErr, output)
+			}
+			_, statErr := os.Stat(filepath.Join(root, "invoked"))
+			wantInvoked := test.fail == "" || test.fail == "build"
+			if (statErr == nil) != wantInvoked {
+				t.Fatalf("tool invocation=%v, want %v", statErr == nil, wantInvoked)
+			}
+			entries, entriesErr := os.ReadDir(filepath.Join(root, "tmp"))
+			if entriesErr != nil || len(entries) != 0 {
+				t.Fatalf("temporary tool files were not cleaned: %v, %v", entries, entriesErr)
+			}
+		})
+	}
+}
+
 func TestRepositorySchemaTargetPackaging(t *testing.T) {
 	data, readErr := os.ReadFile(filepath.Join("..", "..", "..", ".coyote", "pipeline.yml"))
 	if readErr != nil {
