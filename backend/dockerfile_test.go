@@ -30,6 +30,26 @@ func TestDockerfileArtifactRuntimePrecedesSourceBuildStages(t *testing.T) {
 	}
 }
 
+func TestDockerfileGeneratesCertificatesNatively(t *testing.T) {
+	contents, readErr := os.ReadFile("Dockerfile")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	certificates, runtime, found := strings.Cut(string(contents), "FROM debian:bookworm-slim AS runtime-base\n")
+	if !found || !strings.Contains(certificates, "FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS certificates\n") ||
+		!strings.Contains(certificates, "apt-get install -y --no-install-recommends ca-certificates") {
+		t.Fatal("CA bundle generation must run on the native build platform")
+	}
+	runtime, _, _ = strings.Cut(runtime, "\nFROM ")
+	if !strings.Contains(runtime, "    git \\\n") || strings.Contains(runtime, "install -y --no-install-recommends ca-certificates") ||
+		strings.Contains(runtime, "    ca-certificates \\\n") {
+		t.Fatal("runtime must install target-platform Git without regenerating certificates under emulation")
+	}
+	if !strings.Contains(runtime, "COPY --from=certificates /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\n") {
+		t.Fatal("runtime must retain the generated CA bundle for HTTPS")
+	}
+}
+
 func TestDockerfileCrossCompilesWithNativeGoToolchain(t *testing.T) {
 	contents, readErr := os.ReadFile("Dockerfile")
 	if readErr != nil {
@@ -81,6 +101,32 @@ func TestDockerfileMCPRuntimeTarget(t *testing.T) {
 	}
 	if strings.Contains(dockerfile[strings.Index(dockerfile, "FROM source AS source-builder"):strings.Index(dockerfile, "FROM source AS mcp-builder")], "./cmd/mcp") {
 		t.Fatal("regular source builder must not compile the MCP executable")
+	}
+}
+
+func TestFrontendDockerfileKeepsNativeDependenciesOutOfRuntime(t *testing.T) {
+	contents, readErr := os.ReadFile(filepath.Join("..", "frontend", "Dockerfile"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	build, runtime, found := strings.Cut(string(contents), "\nFROM nginx:alpine\n")
+	if !found || !strings.HasPrefix(build, "FROM --platform=$BUILDPLATFORM node:22-alpine AS build\n") {
+		t.Fatal("frontend must build natively and retain a target-platform Nginx runtime")
+	}
+	if !strings.Contains(build, "RUN npm ci\n") || !strings.Contains(build, "npm run build") {
+		t.Fatal("native dependencies must be installed and used in the same build stage")
+	}
+	if strings.Count(runtime, "COPY --from=") != 1 || !strings.Contains(runtime, "COPY --from=build /app/dist /usr/share/nginx/html\n") {
+		t.Fatal("only static dist assets may cross from the native builder into the runtime")
+	}
+	ignore, ignoreErr := os.ReadFile(filepath.Join("..", "frontend", ".dockerignore"))
+	if ignoreErr != nil {
+		t.Fatal(ignoreErr)
+	}
+	for _, excluded := range []string{"node_modules", "dist", "coverage", "*.tsbuildinfo"} {
+		if !strings.Contains("\n"+strings.TrimSpace(string(ignore))+"\n", "\n"+excluded+"\n") {
+			t.Fatalf("frontend build context must exclude %s", excluded)
+		}
 	}
 }
 
