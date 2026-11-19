@@ -102,7 +102,7 @@ func TestBuildRequestEnablesDockerBuildKit(t *testing.T) {
 func TestMultiPlatformBuildRequest(t *testing.T) {
 	client := &Client{artifactRegistryRepository: "registry.example/ci"}
 	request := domain.ImageBuildRequest{Source: domain.ImageBuildSource{Generation: "1"}, PublishedImageReference: "registry.example/ci/server:1.2.3", Spec: domain.RemoteImageBuildSpec{ContextPath: "backend", DockerfilePath: "backend/Dockerfile", Platforms: []string{"linux/amd64", "linux/arm64"}}}
-	for _, timeout := range []time.Duration{10 * time.Minute, 15 * time.Minute} {
+	for _, timeout := range []time.Duration{10 * time.Minute, 15 * time.Minute, 20 * time.Minute} {
 		request.Timeout = timeout
 		timedBuild, timeoutErr := client.buildRequest(request)
 		if timeoutErr != nil {
