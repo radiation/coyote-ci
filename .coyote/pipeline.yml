@@ -100,7 +100,7 @@ steps:
       target: source-runtime
       image: coyote-server
       platforms: [linux/amd64, linux/arm64]
-    timeout_seconds: 600
+    timeout_seconds: 1200
 
   - name: Coyote Frontend Image
     depends_on:
@@ -123,7 +123,7 @@ steps:
       target: source-runtime
       image: coyote-worker
       platforms: [linux/amd64, linux/arm64]
-    timeout_seconds: 600
+    timeout_seconds: 1200
 
   - name: Coyote MCP Image
     depends_on: [Backend Format Check, Backend Vet, Backend Test]

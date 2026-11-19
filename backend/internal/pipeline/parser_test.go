@@ -77,6 +77,18 @@ func TestLoadAndResolve_RepositoryPipeline(t *testing.T) {
 			t.Fatalf("step %q dependencies=%#v, want %#v", name, step.DependsOnNodeIDs, want)
 		}
 	}
+	wantImageTimeouts := map[string]int{
+		"Coyote Server Image":   1200,
+		"Coyote Frontend Image": 600,
+		"Coyote Worker Image":   1200,
+		"Coyote MCP Image":      900,
+		"Coyote Migrate Image":  900,
+	}
+	for name, want := range wantImageTimeouts {
+		if got := byName[name].TimeoutSeconds; got != want {
+			t.Fatalf("step %q timeout=%d, want %d", name, got, want)
+		}
+	}
 	for _, name := range []string{"Backend Format Check", "Backend Dependencies", "Backend Vet", "Backend Test"} {
 		if byName[name].Cache == nil || byName[name].Cache.Preset != "go" {
 			t.Fatalf("step %q cache=%#v, want Go preset", name, byName[name].Cache)
