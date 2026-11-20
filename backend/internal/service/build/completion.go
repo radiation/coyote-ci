@@ -11,10 +11,10 @@ import (
 )
 
 func (s *BuildService) HandleStepResult(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult) (StepCompletionReport, error) {
-	return s.handleStepResult(ctx, request, result, false)
+	return s.handleStepResult(ctx, request, result, false, false)
 }
 
-func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult, skipLegacyLogWrite bool) (StepCompletionReport, error) {
+func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult, skipLegacyLogWrite bool, deferArtifactTagging bool) (StepCompletionReport, error) {
 	stepStatus := domain.BuildStepStatusSuccess
 	if result.Status == runner.RunStepStatusFailed {
 		stepStatus = domain.BuildStepStatusFailed
@@ -69,8 +69,8 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 		if completeErr != nil {
 			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, mapRepoErr(completeErr)
 		}
-		report := StepCompletionReport{Step: completed.Step, CompletionOutcome: outcome}
-		report.SideEffectErr = s.postTerminalBuildByID(ctx, request.BuildID, outcome == repository.StepCompletionCompleted && completed.BuildBecameSuccessful)
+		report := StepCompletionReport{Step: completed.Step, CompletionOutcome: outcome, BuildBecameSuccessful: outcome == repository.StepCompletionCompleted && completed.BuildBecameSuccessful}
+		report.SideEffectErr = s.postTerminalBuildByID(ctx, request.BuildID, report.BuildBecameSuccessful, deferArtifactTagging)
 		if skipLegacyLogWrite {
 			return report, nil
 		}
@@ -103,7 +103,7 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, mapRepoErr(completeErr)
 		}
 		report := StepCompletionReport{Step: completed.Step, CompletionOutcome: outcome}
-		report.SideEffectErr = s.postTerminalBuildByID(ctx, request.BuildID, false)
+		report.SideEffectErr = s.postTerminalBuildByID(ctx, request.BuildID, false, deferArtifactTagging)
 		if skipLegacyLogWrite {
 			return report, nil
 		}
@@ -132,7 +132,7 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 		return StepCompletionReport{Step: completionResult.Step, CompletionOutcome: completionResult.Outcome}, nil
 	}
 
-	report := StepCompletionReport{Step: completionResult.Step, CompletionOutcome: repository.StepCompletionCompleted}
+	report := StepCompletionReport{Step: completionResult.Step, CompletionOutcome: repository.StepCompletionCompleted, BuildBecameSuccessful: completionResult.BuildBecameSuccessful}
 	if s.executionJobRepo != nil && strings.TrimSpace(request.JobID) != "" {
 		var jobErr error
 		if stepStatus == domain.BuildStepStatusSuccess {
@@ -150,7 +150,7 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 		}
 	}
 
-	report.SideEffectErr = errors.Join(report.SideEffectErr, s.postTerminalBuildByID(ctx, request.BuildID, completionResult.BuildBecameSuccessful))
+	report.SideEffectErr = errors.Join(report.SideEffectErr, s.postTerminalBuildByID(ctx, request.BuildID, report.BuildBecameSuccessful, deferArtifactTagging))
 
 	if skipLegacyLogWrite {
 		return report, nil

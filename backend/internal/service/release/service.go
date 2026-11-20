@@ -88,14 +88,15 @@ func (s *Service) EnsureSnapshot(ctx context.Context, build domain.Build) error 
 
 func (s *Service) Reconcile(ctx context.Context, releaseID string) (domain.ApplicationRelease, error) {
 	if s.artifactVersioner != nil {
-		release, err := s.releases.GetByID(ctx, releaseID)
+		release, err := s.releases.Reconcile(ctx, releaseID)
 		if err != nil {
 			return domain.ApplicationRelease{}, err
 		}
-		if release.Status == domain.ApplicationReleaseStatusPending {
-			if versionErr := s.artifactVersioner.ReconcileArtifactVersions(ctx, release.BuildID); versionErr != nil {
-				return domain.ApplicationRelease{}, fmt.Errorf("reconcile artifact versions for build %s: %w", release.BuildID, versionErr)
-			}
+		if release.Status != domain.ApplicationReleaseStatusPending {
+			return release, nil
+		}
+		if versionErr := s.artifactVersioner.ReconcileArtifactVersions(ctx, release.BuildID); versionErr != nil {
+			return domain.ApplicationRelease{}, fmt.Errorf("reconcile artifact versions for build %s: %w", release.BuildID, versionErr)
 		}
 	}
 	return s.releases.Reconcile(ctx, releaseID)

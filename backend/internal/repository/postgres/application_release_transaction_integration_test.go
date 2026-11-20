@@ -237,6 +237,54 @@ func TestApplicationReleaseRepository_Outputs_Postgres(t *testing.T) {
 		}
 		assertReleaseNoChannels(t, db, release)
 	})
+	t.Run("recovery rejects ambiguity before assigning immutable ownership", func(t *testing.T) {
+		release := createApplicationReleaseIntegrationFixture(t, db, "")
+		addReleaseArtifactFixture(t, db, release, false, "other", "dist/other.tgz")
+		addReleaseArtifactOutput(t, db, release, "other", "dist/other.tgz")
+		first := addReleaseArtifactFixture(t, db, release, false, "bundle", "dist/bundle.tgz")
+		second := addReleaseArtifactFixture(t, db, release, true, "bundle", "dist/bundle.tgz")
+		if first.PackageID != second.PackageID {
+			t.Fatal("ambiguous artifacts must share the same immutable version namespace")
+		}
+		addReleaseArtifactOutput(t, db, release, "bundle", "dist/bundle.tgz")
+		pipelineYAML := "version: 1\nsteps:\n  - name: package\n    run: true\n    artifacts:\n      - name: bundle\n        path: dist/bundle.tgz\nartifacts:\n  - name: other\n    path: dist/other.tgz\n  - name: bundle\n    path: dist/bundle.tgz\n"
+		if _, updateErr := db.ExecContext(ctx, `UPDATE builds SET application_version='1.2.3', pipeline_config_yaml=$2 WHERE id=$1`, release.BuildID, pipelineYAML); updateErr != nil {
+			t.Fatal(updateErr)
+		}
+		if _, updateErr := db.ExecContext(ctx, `UPDATE build_steps SET step_index=0 WHERE id=$1`, *second.StepID); updateErr != nil {
+			t.Fatal(updateErr)
+		}
+		recovery := releasesvc.NewService(repo).WithArtifactVersioner(newReleaseIntegrationBuildService(db))
+		_, recoveryErr := recovery.Reconcile(ctx, release.ID)
+		var versions int
+		if countErr := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM artifact_versions v JOIN build_artifacts a ON a.id=v.artifact_id WHERE a.build_id=$1`, release.BuildID).Scan(&versions); countErr != nil {
+			t.Fatal(countErr)
+		}
+		if versions != 0 {
+			t.Fatalf("ambiguous recovery committed %d immutable versions before failing: %v", versions, recoveryErr)
+		}
+		if !errors.Is(recoveryErr, repository.ErrApplicationReleaseConflict) {
+			t.Fatalf("expected ambiguous release rejection, got %v", recoveryErr)
+		}
+		pending, getErr := repo.GetByID(ctx, release.ID)
+		if getErr != nil || pending.Status != domain.ApplicationReleaseStatusPending {
+			t.Fatalf("ambiguous release changed state: %+v %v", pending, getErr)
+		}
+		for _, output := range pending.Outputs {
+			if output.Status != domain.ApplicationReleaseOutputPending || output.ArtifactVersionID != nil {
+				t.Fatalf("ambiguous recovery published output: %+v", output)
+			}
+		}
+		assertReleaseNoChannels(t, db, release)
+		if _, deleteErr := db.ExecContext(ctx, `DELETE FROM build_artifacts WHERE id=$1`, second.ID); deleteErr != nil {
+			t.Fatal(deleteErr)
+		}
+		complete, retryErr := recovery.Reconcile(ctx, release.ID)
+		if retryErr != nil || complete.Status != domain.ApplicationReleaseStatusComplete {
+			t.Fatalf("unambiguous retry failed: %+v %v", complete, retryErr)
+		}
+		assertReleaseNoChannels(t, db, release)
+	})
 	for _, mismatch := range []string{"name", "path", "version", "build", "package", "step"} {
 		t.Run("reject unrelated "+mismatch, func(t *testing.T) {
 			release := createApplicationReleaseIntegrationFixture(t, db, "")

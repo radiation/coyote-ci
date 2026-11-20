@@ -16,6 +16,7 @@ type releaseRepositoryFake struct {
 	promoteErr    error
 	pending       []domain.ApplicationRelease
 	reconcileErr  error
+	reconciled    domain.ApplicationRelease
 	reconcileErrs map[string]error
 	reconciledIDs []string
 	failErr       error
@@ -46,7 +47,7 @@ func (f *releaseRepositoryFake) Reconcile(_ context.Context, id string) (domain.
 	if err, found := f.reconcileErrs[id]; found {
 		return domain.ApplicationRelease{}, err
 	}
-	return domain.ApplicationRelease{}, f.reconcileErr
+	return f.reconciled, f.reconcileErr
 }
 func (f *releaseRepositoryFake) FailBuildRelease(_ context.Context, buildID string, reason string) (domain.ApplicationRelease, error) {
 	f.failedBuildID, f.failedReason = buildID, reason

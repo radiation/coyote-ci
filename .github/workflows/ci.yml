@@ -49,6 +49,7 @@ jobs:
         image: postgres:17-alpine
         env:
           POSTGRES_PASSWORD: coyote-test
+          POSTGRES_DB: coyote_release_test
         ports:
           - 5432:5432
         options: >-
@@ -102,23 +103,38 @@ jobs:
           fi
           go test -covermode=atomic -coverprofile=coverage.out "${packages[@]}"
 
-      - name: Verify coverage file
+      - name: Run release PostgreSQL tests with coverage
+        env:
+          COYOTE_TEST_DATABASE_URL: postgres://postgres:coyote-test@localhost:5432/coyote_release_test?sslmode=disable
+        run: |
+          DATABASE_URL="$COYOTE_TEST_DATABASE_URL" go run ./cmd/migrate -dir db/migrations up
+          go test -count=1 -v -race -covermode=atomic \
+            -coverpkg=./internal/repository/postgres,./internal/service/build,./internal/service/release \
+            -coverprofile=release-integration-coverage.out \
+            ./internal/repository/postgres \
+            -run '^(TestApplicationReleaseRepository_.*_Postgres|TestArtifactLabelRepository_ImmutableVersions_Postgres)$'
+
+      - name: Verify coverage files
         working-directory: backend
         run: |
           test -s coverage.out
-          ls -l coverage.out
-          head -n 5 coverage.out
+          test -s release-integration-coverage.out
+          ls -l coverage.out release-integration-coverage.out
 
       - name: Coverage summary
-        run: go tool cover -func=coverage.out
+        run: |
+          go tool cover -func=coverage.out
+          go tool cover -func=release-integration-coverage.out
 
       - name: Build coverage HTML
-        run: go tool cover -html=coverage.out -o coverage.html
+        run: |
+          go tool cover -html=coverage.out -o coverage.html
+          go tool cover -html=release-integration-coverage.out -o release-integration-coverage.html
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         with:
-          files: ./backend/coverage.out
+          files: ./backend/coverage.out,./backend/release-integration-coverage.out
           flags: backend
           name: backend
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -133,6 +149,8 @@ jobs:
           path: |
             backend/coverage.out
             backend/coverage.html
+            backend/release-integration-coverage.out
+            backend/release-integration-coverage.html
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
