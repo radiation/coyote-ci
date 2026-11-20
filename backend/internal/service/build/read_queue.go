@@ -389,6 +389,21 @@ func (s *BuildService) FailBuild(ctx context.Context, id string) (domain.Build, 
 }
 
 func (s *BuildService) autoTagBuildOutputs(ctx context.Context, build domain.Build) error {
+	return s.tagBuildOutputs(ctx, build, true)
+}
+
+func (s *BuildService) ReconcileArtifactVersions(ctx context.Context, buildID string) error {
+	build, err := s.buildRepo.GetByID(ctx, buildID)
+	if err != nil {
+		return err
+	}
+	if build.Status != domain.BuildStatusSuccess {
+		return nil
+	}
+	return s.tagBuildOutputs(ctx, build, false)
+}
+
+func (s *BuildService) tagBuildOutputs(ctx context.Context, build domain.Build, moveChannels bool) error {
 	if s.versionTagger == nil || build.JobID == nil || strings.TrimSpace(*build.JobID) == "" {
 		return nil
 	}
@@ -402,7 +417,7 @@ func (s *BuildService) autoTagBuildOutputs(ctx context.Context, build domain.Bui
 			return artifactErr
 		}
 	}
-	return s.autoTagDeclaredArtifactOutputs(ctx, build, jobID, artifacts)
+	return s.autoTagDeclaredArtifactOutputs(ctx, build, jobID, artifacts, moveChannels)
 }
 
 type artifactVersionTagPlan struct {
@@ -415,7 +430,7 @@ type artifactVersionTagPlan struct {
 	Channel      string
 }
 
-func (s *BuildService) autoTagDeclaredArtifactOutputs(ctx context.Context, build domain.Build, jobID string, artifacts []domain.BuildArtifact) error {
+func (s *BuildService) autoTagDeclaredArtifactOutputs(ctx context.Context, build domain.Build, jobID string, artifacts []domain.BuildArtifact, moveChannels bool) error {
 	plans, err := s.plannedArtifactVersionTags(ctx, build, artifacts)
 	if err != nil {
 		return err
@@ -436,7 +451,7 @@ func (s *BuildService) autoTagDeclaredArtifactOutputs(ctx context.Context, build
 		}); createErr != nil {
 			return fmt.Errorf("generated version tagging failed for artifact path=%q name=%q declaration=%q resolved_version=%q channel=%q: %w", plan.LogicalPath, plan.ArtifactName, plan.Pattern, version, plan.Channel, createErr)
 		}
-		if strings.TrimSpace(plan.Channel) == "" {
+		if !moveChannels || strings.TrimSpace(plan.Channel) == "" {
 			continue
 		}
 		if _, createErr := s.versionTagger.CreateVersionTags(ctx, jobID, versiontagsvc.CreateVersionTagsInput{

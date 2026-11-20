@@ -470,14 +470,15 @@ func (r *ExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx context.Contex
 	if updateErr != nil {
 		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, updateErr
 	}
-	if advanceErr := advanceBuildAfterStepCompletionTx(ctx, tx, request.StepRequest.BuildID, request.StepRequest.StepIndex, domain.BuildStepStatusSuccess, nil); advanceErr != nil {
+	buildBecameSuccessful, advanceErr := advanceBuildAfterStepCompletionTx(ctx, tx, request.StepRequest.BuildID, request.StepRequest.StepIndex, domain.BuildStepStatusSuccess, nil)
+	if advanceErr != nil {
 		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, advanceErr
 	}
 	if commitErr := tx.Commit(); commitErr != nil {
 		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, commitErr
 	}
 	rollback = false
-	return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionCompleted}, updatedJob, repository.StepCompletionCompleted, nil
+	return repository.CompleteStepResult{Step: step, Outcome: repository.StepCompletionCompleted, BuildBecameSuccessful: buildBecameSuccessful}, updatedJob, repository.StepCompletionCompleted, nil
 }
 
 func (r *ExecutionJobRepository) CompleteFailedStepAndJob(ctx context.Context, request repository.CompleteFailedStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
@@ -538,7 +539,7 @@ func (r *ExecutionJobRepository) CompleteFailedStepAndJob(ctx context.Context, r
 	if updateErr != nil {
 		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, updateErr
 	}
-	if advanceErr := advanceBuildAfterStepCompletionTx(ctx, tx, request.StepRequest.BuildID, request.StepRequest.StepIndex, domain.BuildStepStatusFailed, nil); advanceErr != nil {
+	if _, advanceErr := advanceBuildAfterStepCompletionTx(ctx, tx, request.StepRequest.BuildID, request.StepRequest.StepIndex, domain.BuildStepStatusFailed, nil); advanceErr != nil {
 		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, advanceErr
 	}
 	if commitErr := tx.Commit(); commitErr != nil {

@@ -158,13 +158,16 @@ func (r *ApplicationReleaseRepository) Reconcile(ctx context.Context, releaseID 
 	if err = rows.Close(); err != nil {
 		return domain.ApplicationRelease{}, err
 	}
+	if err = rows.Err(); err != nil {
+		return domain.ApplicationRelease{}, err
+	}
 	for _, output := range outputs {
 		if output.Status == domain.ApplicationReleaseOutputPublished {
 			continue
 		}
 		switch output.Kind {
 		case domain.ApplicationReleaseOutputArtifact:
-			_, err = tx.ExecContext(ctx, `UPDATE application_release_outputs o SET status='published', artifact_id=a.id, artifact_version_id=v.id, immutable_reference=v.version_text || ':' || a.id::text, published_at=NOW(), updated_at=NOW() FROM build_artifacts a JOIN artifact_versions v ON v.artifact_id=a.id WHERE o.id=$1 AND a.build_id=$2 AND a.step_id IS NULL AND a.logical_path=(o.definition_json->>'path') AND a.artifact_name=(o.definition_json->>'name') AND v.version_text=$3 AND v.artifact_id=a.id`, output.ID, release.BuildID, release.ApplicationVersion)
+			err = r.reconcileArtifactOutput(ctx, tx, release, output)
 		case domain.ApplicationReleaseOutputImage:
 			err = r.reconcileImageOutput(ctx, tx, release, output)
 		}
@@ -194,12 +197,40 @@ func (r *ApplicationReleaseRepository) Reconcile(ctx context.Context, releaseID 
 	return r.GetByID(ctx, releaseID)
 }
 
+func (r *ApplicationReleaseRepository) reconcileArtifactOutput(ctx context.Context, tx *sql.Tx, release domain.ApplicationRelease, output domain.ApplicationReleaseOutput) error {
+	var artifactID string
+	var versionID sql.NullString
+	var matches int
+	err := tx.QueryRowContext(ctx, `
+		SELECT a.id, v.id, COUNT(*) OVER ()
+		FROM build_artifacts a
+		LEFT JOIN artifact_versions v ON v.artifact_id=a.id AND v.package_id=a.package_id AND v.version_text=$3
+		WHERE a.build_id=$1 AND a.logical_path=(($2::jsonb)->>'path') AND a.artifact_name=(($2::jsonb)->>'name')
+		AND (a.step_id IS NULL OR EXISTS (SELECT 1 FROM build_steps s WHERE s.id=a.step_id AND s.build_id=a.build_id))
+		LIMIT 1`, release.BuildID, output.DefinitionJSON, release.ApplicationVersion).Scan(&artifactID, &versionID, &matches)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if matches != 1 {
+		return repository.ErrApplicationReleaseConflict
+	}
+	if !versionID.Valid {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE application_release_outputs SET status='published', artifact_id=$2, artifact_version_id=$3, immutable_reference=$4, published_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='pending'`, output.ID, artifactID, versionID.String, release.ApplicationVersion+":"+artifactID)
+	return err
+}
+
 func (r *ApplicationReleaseRepository) reconcileImageOutput(ctx context.Context, tx *sql.Tx, release domain.ApplicationRelease, output domain.ApplicationReleaseOutput) error {
 	rows, err := tx.QueryContext(ctx, `SELECT j.id, e.target_image_reference, e.published_image_reference, e.published_image_digest_reference FROM build_jobs j JOIN build_steps s ON s.id=j.step_id JOIN external_image_builds e ON e.execution_job_id=j.id WHERE j.build_id=$1 AND s.node_id=(($2::jsonb)->>'node_id') AND e.terminal_result='success'`, release.BuildID, output.DefinitionJSON)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = rows.Close() }()
+	var matchedJobID, matchedDigest string
 	for rows.Next() {
 		var jobID, logicalTarget, publishedReference, digestReference string
 		if scanErr := rows.Scan(&jobID, &logicalTarget, &publishedReference, &digestReference); scanErr != nil {
@@ -208,10 +239,22 @@ func (r *ApplicationReleaseRepository) reconcileImageOutput(ctx context.Context,
 		if !imagePublicationMatches(output.DefinitionJSON, release.ApplicationVersion, logicalTarget, publishedReference, digestReference) {
 			continue
 		}
-		_, updateErr := tx.ExecContext(ctx, `UPDATE application_release_outputs SET status='published', execution_job_id=$2, immutable_reference=$3, published_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='pending'`, output.ID, jobID, digestReference)
-		return updateErr
+		if matchedJobID != "" {
+			return repository.ErrApplicationReleaseConflict
+		}
+		matchedJobID, matchedDigest = jobID, digestReference
 	}
-	return rows.Err()
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if matchedJobID == "" {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE application_release_outputs SET status='published', execution_job_id=$2, immutable_reference=$3, published_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='pending'`, output.ID, matchedJobID, matchedDigest)
+	return err
 }
 
 func imagePublicationMatches(definitionJSON string, version string, logicalTarget string, publishedReference string, digestReference string) bool {

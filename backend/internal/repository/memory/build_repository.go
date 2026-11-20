@@ -937,7 +937,7 @@ func (r *BuildRepository) completeStepLocked(request repository.CompleteStepRequ
 
 		r.storeBuildLocked(build)
 		r.buildSteps[request.BuildID] = steps
-		return repository.CompleteStepResult{Step: cloneStep(steps[idx]), Outcome: repository.StepCompletionCompleted}, nil
+		return repository.CompleteStepResult{Step: cloneStep(steps[idx]), Outcome: repository.StepCompletionCompleted, BuildBecameSuccessful: build.Status == domain.BuildStatusSuccess}, nil
 	}
 
 	return repository.CompleteStepResult{Outcome: repository.StepCompletionInvalidTransition}, repository.ErrBuildNotFound

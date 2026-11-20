@@ -52,8 +52,9 @@ type CompleteStepRequest struct {
 
 // CompleteStepResult reports the persisted step and classification of the request.
 type CompleteStepResult struct {
-	Step    domain.BuildStep
-	Outcome StepCompletionOutcome
+	Step                  domain.BuildStep
+	Outcome               StepCompletionOutcome
+	BuildBecameSuccessful bool
 }
 
 // ListParams controls pagination for list queries. Zero-value fields mean "use

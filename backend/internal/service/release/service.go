@@ -19,11 +19,21 @@ import (
 // snapshot before execution, but only this service's repository transaction
 // decides completion and moves generic application channels.
 type Service struct {
-	releases repository.ApplicationReleaseRepository
+	releases          repository.ApplicationReleaseRepository
+	artifactVersioner interface {
+		ReconcileArtifactVersions(context.Context, string) error
+	}
 }
 
 func NewService(releases repository.ApplicationReleaseRepository) *Service {
 	return &Service{releases: releases}
+}
+
+func (s *Service) WithArtifactVersioner(versioner interface {
+	ReconcileArtifactVersions(context.Context, string) error
+}) *Service {
+	s.artifactVersioner = versioner
+	return s
 }
 
 func (s *Service) CreateSnapshot(ctx context.Context, build domain.Build) (domain.ApplicationRelease, error) {
@@ -77,6 +87,18 @@ func (s *Service) EnsureSnapshot(ctx context.Context, build domain.Build) error 
 }
 
 func (s *Service) Reconcile(ctx context.Context, releaseID string) (domain.ApplicationRelease, error) {
+	if s.artifactVersioner != nil {
+		release, err := s.releases.Reconcile(ctx, releaseID)
+		if err != nil {
+			return domain.ApplicationRelease{}, err
+		}
+		if release.Status != domain.ApplicationReleaseStatusPending {
+			return release, nil
+		}
+		if versionErr := s.artifactVersioner.ReconcileArtifactVersions(ctx, release.BuildID); versionErr != nil {
+			return domain.ApplicationRelease{}, fmt.Errorf("reconcile artifact versions for build %s: %w", release.BuildID, versionErr)
+		}
+	}
 	return s.releases.Reconcile(ctx, releaseID)
 }
 

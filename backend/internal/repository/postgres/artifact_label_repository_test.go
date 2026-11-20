@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"regexp"
@@ -39,10 +40,11 @@ func TestArtifactLabelRepository_CreateForArtifacts_VersionIdempotentForSameArti
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		INSERT INTO artifact_versions (id, package_id, artifact_id, version_text, created_at)
 		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (package_id, version_text) DO NOTHING
 		RETURNING id, artifact_id, created_at
 	`)).
 		WithArgs(sqlmock.AnyArg(), "package-1", "artifact-1", "1.2.3").
-		WillReturnError(errors.New("duplicate key value violates unique constraint artifact_versions_package_id_version_text_key"))
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, artifact_id, created_at
 		FROM artifact_versions
@@ -101,10 +103,11 @@ func TestArtifactLabelRepository_CreateForArtifacts_VersionConflictsAcrossArtifa
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		INSERT INTO artifact_versions (id, package_id, artifact_id, version_text, created_at)
 		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (package_id, version_text) DO NOTHING
 		RETURNING id, artifact_id, created_at
 	`)).
 		WithArgs(sqlmock.AnyArg(), "package-1", "artifact-2", "1.2.3").
-		WillReturnError(errors.New("duplicate key value violates unique constraint artifact_versions_package_id_version_text_key"))
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, artifact_id, created_at
 		FROM artifact_versions
@@ -482,6 +485,7 @@ func TestArtifactLabelRepository_CreateForArtifacts_VersionUsesLatestArtifactPer
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		INSERT INTO artifact_versions (id, package_id, artifact_id, version_text, created_at)
 		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (package_id, version_text) DO NOTHING
 		RETURNING id, artifact_id, created_at
 	`)).
 		WithArgs(sqlmock.AnyArg(), "package-1", "artifact-newer", "1.2.3").

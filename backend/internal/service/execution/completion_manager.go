@@ -14,14 +14,15 @@ import (
 // CompletionOutcome reflects only persisted lifecycle handling.
 // SideEffectErr is set only when persistence completed and a non-lifecycle side effect failed.
 type StepCompletionReport struct {
-	Step              domain.BuildStep
-	CompletionOutcome repository.StepCompletionOutcome
-	SideEffectErr     error
+	Step                  domain.BuildStep
+	CompletionOutcome     repository.StepCompletionOutcome
+	BuildBecameSuccessful bool
+	SideEffectErr         error
 }
 
 type StepCompletionManagerDeps struct {
 	HandleStepResult             func(context.Context, runner.RunStepRequest, runner.RunStepResult, bool) (StepCompletionReport, error)
-	RunPostCompletionSideEffects func(context.Context, runner.RunStepRequest, logs.StepLogChunkAppender) error
+	RunPostCompletionSideEffects func(context.Context, runner.RunStepRequest, logs.StepLogChunkAppender, bool) error
 }
 
 type StepCompletionManager struct {
@@ -53,7 +54,7 @@ func (m *StepCompletionManager) complete(
 		return report, completionErr
 	}
 
-	if sideEffectErr := m.deps.RunPostCompletionSideEffects(ctx, executionContext.ExecutionRequest, sideEffectAppender); sideEffectErr != nil {
+	if sideEffectErr := m.deps.RunPostCompletionSideEffects(ctx, executionContext.ExecutionRequest, sideEffectAppender, report.CompletionOutcome == repository.StepCompletionCompleted && report.BuildBecameSuccessful); sideEffectErr != nil {
 		report.SideEffectErr = joinSideEffectErrors(report.SideEffectErr, sideEffectErr)
 	}
 	logManager.ApplyBufferedErrors(&report)

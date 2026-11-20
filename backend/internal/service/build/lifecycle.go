@@ -45,13 +45,18 @@ func (s *BuildService) postTerminalBuild(ctx context.Context, build domain.Build
 	}
 }
 
-func (s *BuildService) postTerminalBuildByID(ctx context.Context, buildID string) {
+func (s *BuildService) postTerminalBuildByID(ctx context.Context, buildID string, moveChannels bool, deferArtifactTagging bool) error {
 	build, err := s.buildRepo.GetByID(ctx, buildID)
 	if err != nil {
 		log.Printf("WARNING: terminal build side effects skipped: build_id=%s reason=build_lookup_failed err=%v", buildID, err)
-		return
+		return err
+	}
+	var tagErr error
+	if build.Status == domain.BuildStatusSuccess && !deferArtifactTagging {
+		tagErr = s.tagBuildOutputs(ctx, build, moveChannels)
 	}
 	s.postTerminalBuild(ctx, build)
+	return tagErr
 }
 
 func (s *BuildService) notifySCMBuildStatus(ctx context.Context, build domain.Build) {

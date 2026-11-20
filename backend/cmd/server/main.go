@@ -235,6 +235,7 @@ func main() {
 		DefaultImage:          cfg.ExecutionDefaultImage,
 		ReleaseSnapshotter:    applicationReleaseService,
 	})
+	applicationReleaseService.WithArtifactVersioner(buildService)
 	projectService := service.NewProjectService(projectRepo)
 	userService := service.NewUserService(userRepo)
 	apiTokenService := service.NewAPITokenService(apiTokenRepo, userRepo)

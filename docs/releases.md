@@ -130,6 +130,68 @@ for each supported upgrade; it does not certify online-safe DDL or authorize
 deployment. No infrastructure changes, production publication or promotion are
 part of local validation.
 
+## Recovering the existing 0.0.15 Build
+
+Build #13 (`1ce1f16d-ccb8-467c-81ab-eb16a5bd21d4`) succeeded at source
+`9494d7c1cfa36f6f17735c6d33ad13b1554c8448`. Its generic release is
+`ff89ef4a-c0e9-4ce7-aa92-138b85b69e7c`, version `0.0.15`, with eleven
+artifact outputs and five image outputs. Do not rebuild, rerun, or reuse this
+version for a different Build.
+
+The reconciliation fix closes and checks pgx query rows before reusing a
+transaction. Artifact outputs may be build-scoped or step-scoped, but must match
+exactly one artifact in the same Build with the expected name/path and a version
+owned by that artifact's package. Missing versions leave outputs pending;
+ambiguous candidates fail reconciliation without partially committing changes.
+
+Kubernetes terminal completion now invokes the existing declaration-based
+artifact versioning lifecycle through the build service. The existing server
+pending-release loop also retries version creation for successful Builds using
+their persisted pipeline snapshot. Recovery and duplicate terminal reports
+create immutable versions only; they do not replay artifact channel movements.
+Only the step completion transaction that changes the build to success may
+honor explicitly configured artifact channels; delayed callbacks for other steps
+remain version-only. Generic `latest` remains opt-in and transactional; `stable` and Coyote
+product publication remain separate explicit operations.
+
+Recovery procedure (not performed as part of this fix):
+
+1. Before authorizing any rollout, use an authenticated read-only API context to
+  inspect `GET /api/builds/1ce1f16d-ccb8-467c-81ab-eb16a5bd21d4`,
+  `GET /api/builds/1ce1f16d-ccb8-467c-81ab-eb16a5bd21d4/artifacts`, and
+  `GET /api/builds/1ce1f16d-ccb8-467c-81ab-eb16a5bd21d4/application-release`.
+  Confirm success, the source/version above, the same release ID, all sixteen
+  expected output definitions, and no automatic generic channel. Re-download
+  the eleven artifacts and verify size/SHA-256 against persisted metadata and
+  the investigation evidence. Recheck the five registry publications against
+  the recorded immutable digest references. Stop on any mismatch.
+2. Inspect `GET /api/artifacts/{artifactID}/version-tags` for each of those eleven
+  IDs and `GET /api/jobs/{jobID}/version-tags?version=0.0.15` using the Build's
+  job ID. Existing versions are acceptable only when they belong to the exact
+  expected artifact/package; never delete, reassign, or overwrite a conflict.
+  Record existing artifact, generic application, and product channel pointers.
+3. In a separately approved operational change, make the fixed control plane
+  available. **Its existing recovery loop runs immediately at startup and then
+  every ten seconds for pending releases**, not only Build #13. Enabling it
+  authorizes version backfill and generic reconciliation; it is not a read-only
+  rollout. No manual database edits, new Build, repair job, or recovery endpoint
+  are needed. A version conflict or database failure keeps the release pending
+  and is logged; correct the underlying issue and allow the same loop to retry.
+4. Read the same Build/release endpoints again. Require the original Build to
+  remain successful, the same release to become `complete`, and all sixteen
+  outputs to be `published`. Each artifact output must point to its original
+  artifact and a `0.0.15` immutable version; each image must retain its verified
+  digest reference. Repeat the version-tag reads to confirm exactly those
+  eleven version identities. Confirm all channel pointers remain unchanged.
+5. Stop after generic release recovery. This does **not** publish Helm OCI
+  `0.0.15`, create the Coyote product manifest, promote a product channel, or
+  deploy the recovered release. Those remain separate approvals and operations.
+
+The durable catch-up scan is limited to pending generic releases. Builds without
+`pipeline.release` use terminal versioning but are not covered by that scan.
+Artifact channel failures are not replayed by recovery. No schema change or new
+background service is introduced.
+
 ## V3 application release manifest
 
 Schema version 3 is an immutable application-release contract. `release` is the

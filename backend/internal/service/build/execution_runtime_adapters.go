@@ -58,7 +58,9 @@ func NewWorkspacePreparer(service *BuildService) *WorkspacePreparer {
 
 func NewStepCompletionManager(service *BuildService) *StepCompletionManager {
 	return execution.NewStepCompletionManager(execution.StepCompletionManagerDeps{
-		HandleStepResult:             service.handleStepResult,
+		HandleStepResult: func(ctx context.Context, request runner.RunStepRequest, result runner.RunStepResult, skipLegacyLogWrite bool) (StepCompletionReport, error) {
+			return service.handleStepResult(ctx, request, result, skipLegacyLogWrite, true)
+		},
 		RunPostCompletionSideEffects: service.runPostCompletionSideEffects,
 	})
 }

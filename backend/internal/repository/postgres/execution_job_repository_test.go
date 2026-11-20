@@ -436,6 +436,9 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_CommitsStepAndJobSu
 	if outcome != repository.StepCompletionCompleted || result.Step.Status != domain.BuildStepStatusSuccess || job.Status != domain.ExecutionJobStatusSuccess {
 		t.Fatalf("expected committed step/job success, result=%#v job=%#v outcome=%q", result, job, outcome)
 	}
+	if result.BuildBecameSuccessful {
+		t.Fatal("nonfinal step must not own the build success transition")
+	}
 
 	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
 		t.Fatalf("unmet sql expectations: %v", expectationsErr)
@@ -718,9 +721,12 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_DuplicateTerminalAn
 		mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, time.Time{}, "success", ""))
 		mock.ExpectCommit()
 
-		_, job, outcome, completeErr := NewExecutionJobRepository(db).CompleteSuccessfulStepAndJob(context.Background(), atomicCompletionRequest("claim-1", now, 0))
+		result, job, outcome, completeErr := NewExecutionJobRepository(db).CompleteSuccessfulStepAndJob(context.Background(), atomicCompletionRequest("claim-1", now, 0))
 		if completeErr != nil || outcome != repository.StepCompletionDuplicateTerminal || job.Status != domain.ExecutionJobStatusSuccess {
 			t.Fatalf("expected duplicate terminal success, job=%#v outcome=%q err=%v", job, outcome, completeErr)
+		}
+		if result.BuildBecameSuccessful {
+			t.Fatal("duplicate must not own the build success transition")
 		}
 		if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
 			t.Fatalf("unmet sql expectations: %v", expectationsErr)

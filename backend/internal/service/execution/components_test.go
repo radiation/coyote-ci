@@ -228,7 +228,7 @@ func TestStepCompletionManager_JoinsSideEffectAndBufferedLogErrors(t *testing.T)
 		HandleStepResult: func(context.Context, runner.RunStepRequest, runner.RunStepResult, bool) (StepCompletionReport, error) {
 			return StepCompletionReport{Step: domain.BuildStep{ID: "step-1"}}, nil
 		},
-		RunPostCompletionSideEffects: func(context.Context, runner.RunStepRequest, logs.StepLogChunkAppender) error {
+		RunPostCompletionSideEffects: func(context.Context, runner.RunStepRequest, logs.StepLogChunkAppender, bool) error {
 			return postCompletionErr
 		},
 	})

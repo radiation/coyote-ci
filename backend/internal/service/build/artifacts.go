@@ -18,7 +18,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/runner"
 )
 
-func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender) error {
+func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender, moveChannels bool) error {
 	build, err := s.buildRepo.GetByID(ctx, request.BuildID)
 	if err != nil {
 		return fmt.Errorf("fetching build for post-completion side effects: %w", err)
@@ -48,7 +48,7 @@ func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, request
 		if emitErr := s.writeSystemExecutionLogLine(ctx, request, appender, "Assigning version tags"); emitErr != nil {
 			return emitErr
 		}
-		tagErr = s.autoTagBuildOutputs(ctx, build)
+		tagErr = s.tagBuildOutputs(ctx, build, moveChannels)
 		if tagErr != nil {
 			_ = s.writeSystemExecutionLogLine(ctx, request, appender, "Automatic version tagging failed")
 			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine("automatic version tagging failed"))
