@@ -51,7 +51,7 @@ func (r *BuildRepository) CompleteStep(ctx context.Context, request repository.C
 		return repository.CompleteStepResult{Step: existingStep, Outcome: outcome}, nil
 	}
 
-	outcome, finalizeErr := advanceBuildAndCommitTx(ctx, tx, request.BuildID, request.StepIndex, request.Update.Status, step.ErrorMessage)
+	outcome, buildBecameSuccessful, finalizeErr := advanceBuildAndCommitTx(ctx, tx, request.BuildID, request.StepIndex, request.Update.Status, step.ErrorMessage)
 	if finalizeErr != nil {
 		return repository.CompleteStepResult{}, finalizeErr
 	}
@@ -59,7 +59,7 @@ func (r *BuildRepository) CompleteStep(ctx context.Context, request repository.C
 		return repository.CompleteStepResult{Outcome: outcome}, nil
 	}
 	rollback = false
-	return repository.CompleteStepResult{Step: step, Outcome: outcome}, nil
+	return repository.CompleteStepResult{Step: step, Outcome: outcome, BuildBecameSuccessful: buildBecameSuccessful}, nil
 }
 
 func resolveAndCommitConflictTx(ctx context.Context, tx *sql.Tx, buildID string, stepIndex int, claimRequired bool, allowStale bool) (domain.BuildStep, repository.StepCompletionOutcome, bool, error) {
@@ -78,19 +78,20 @@ func resolveAndCommitConflictTx(ctx context.Context, tx *sql.Tx, buildID string,
 	return domain.BuildStep{}, repository.StepCompletionInvalidTransition, false, nil
 }
 
-func advanceBuildAndCommitTx(ctx context.Context, tx *sql.Tx, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, errorMessage *string) (repository.StepCompletionOutcome, error) {
-	if err := advanceBuildAfterStepCompletionTx(ctx, tx, buildID, stepIndex, stepStatus, errorMessage); err != nil {
+func advanceBuildAndCommitTx(ctx context.Context, tx *sql.Tx, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, errorMessage *string) (repository.StepCompletionOutcome, bool, error) {
+	buildBecameSuccessful, err := advanceBuildAfterStepCompletionTx(ctx, tx, buildID, stepIndex, stepStatus, errorMessage)
+	if err != nil {
 		if errors.Is(err, errGuardedBuildUpdateNoop) {
-			return repository.StepCompletionInvalidTransition, nil
+			return repository.StepCompletionInvalidTransition, false, nil
 		}
-		return repository.StepCompletionInvalidTransition, err
+		return repository.StepCompletionInvalidTransition, false, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return repository.StepCompletionInvalidTransition, err
+	if commitErr := tx.Commit(); commitErr != nil {
+		return repository.StepCompletionInvalidTransition, false, commitErr
 	}
 
-	return repository.StepCompletionCompleted, nil
+	return repository.StepCompletionCompleted, buildBecameSuccessful, nil
 }
 
 func applyStepCompletionUpdateTx(ctx context.Context, tx *sql.Tx, buildID string, stepIndex int, claimToken *string, update repository.StepUpdate) (domain.BuildStep, bool, error) {
@@ -163,51 +164,52 @@ func resolveCompletionConflictTx(ctx context.Context, tx *sql.Tx, buildID string
 	return domain.BuildStep{}, outcome, nil
 }
 
-func advanceBuildAfterStepCompletionTx(ctx context.Context, tx *sql.Tx, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, errorMessage *string) error {
+func advanceBuildAfterStepCompletionTx(ctx context.Context, tx *sql.Tx, buildID string, stepIndex int, stepStatus domain.BuildStepStatus, errorMessage *string) (bool, error) {
 	if stepStatus == domain.BuildStepStatusSuccess {
 		nextIndex := stepIndex + 1
 		if err := advanceBuildCurrentStepTx(ctx, tx, buildID, nextIndex); err != nil && !errors.Is(err, errGuardedBuildUpdateNoop) {
-			return err
+			return false, err
 		}
 	}
 
 	stats, err := loadBuildStepProgressTx(ctx, tx, buildID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if stats.totalCount > 0 && stats.successCount == stats.totalCount {
 		if !domain.CanTransitionBuild(domain.BuildStatusRunning, domain.BuildStatusSuccess) {
-			return nil
+			return false, nil
 		}
-		return updateBuildSuccessTx(ctx, tx, buildID, stepIndex+1)
+		updateErr := updateBuildSuccessTx(ctx, tx, buildID, stepIndex+1)
+		return updateErr == nil, updateErr
 	}
 
 	if stats.runningCount > 0 {
-		return nil
+		return false, nil
 	}
 
 	runnableExists, err := hasRunnablePendingStepTx(ctx, tx, buildID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if runnableExists {
-		return nil
+		return false, nil
 	}
 
 	if stats.failedCount > 0 || stats.pendingCount > 0 {
 		if !domain.CanTransitionBuild(domain.BuildStatusRunning, domain.BuildStatusFailed) {
-			return nil
+			return false, nil
 		}
 		message := errorMessage
 		if message == nil {
 			defaultMessage := "build cannot make further progress toward success"
 			message = &defaultMessage
 		}
-		return updateBuildFailedTx(ctx, tx, buildID, message)
+		return false, updateBuildFailedTx(ctx, tx, buildID, message)
 	}
 
-	return nil
+	return false, nil
 }
 
 type buildStepProgressStats struct {

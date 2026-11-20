@@ -263,6 +263,13 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_ValidAndStaleClaims
 	if completeErr != nil || outcome != repository.StepCompletionCompleted || result.Step.Status != domain.BuildStepStatusSuccess || job.Status != domain.ExecutionJobStatusSuccess {
 		t.Fatalf("expected atomic success semantics, result=%#v job=%#v outcome=%q err=%v", result, job, outcome, completeErr)
 	}
+	if !result.BuildBecameSuccessful {
+		t.Fatal("finalizing completion must own the build success transition")
+	}
+	duplicate, _, duplicateOutcome, duplicateErr := repo.CompleteSuccessfulStepAndJob(context.Background(), request)
+	if duplicateErr != nil || duplicateOutcome != repository.StepCompletionDuplicateTerminal || duplicate.BuildBecameSuccessful {
+		t.Fatalf("duplicate must not own build success: %+v outcome=%s err=%v", duplicate, duplicateOutcome, duplicateErr)
+	}
 }
 
 func TestExecutionJobRepository_CompleteFailedStepAndJob(t *testing.T) {

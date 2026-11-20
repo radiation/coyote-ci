@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -290,6 +291,9 @@ func (r *ArtifactLabelRepository) resolveTargets(ctx context.Context, tx *sql.Tx
 	for _, target := range selectedByPackage {
 		selected = append(selected, target)
 	}
+	sort.Slice(selected, func(first, second int) bool {
+		return selected[first].PackageID < selected[second].PackageID
+	})
 	return selected, nil
 }
 
@@ -297,6 +301,7 @@ func (r *ArtifactLabelRepository) insertArtifactVersion(ctx context.Context, tx 
 	const query = `
 		INSERT INTO artifact_versions (id, package_id, artifact_id, version_text, created_at)
 		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (package_id, version_text) DO NOTHING
 		RETURNING id, artifact_id, created_at
 	`
 	var createdID string
@@ -304,7 +309,7 @@ func (r *ArtifactLabelRepository) insertArtifactVersion(ctx context.Context, tx 
 	var createdAt time.Time
 	err := tx.QueryRowContext(ctx, query, uuid.NewString(), target.PackageID, target.ArtifactID, value).Scan(&createdID, &artifactID, &createdAt)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if errors.Is(err, sql.ErrNoRows) {
 			existingID, existingArtifactID, existingCreatedAt, loadErr := r.loadArtifactVersion(ctx, tx, target.PackageID, value)
 			if loadErr != nil {
 				return domain.VersionTag{}, loadErr

@@ -70,16 +70,16 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, mapRepoErr(completeErr)
 		}
 		report := StepCompletionReport{Step: completed.Step, CompletionOutcome: outcome}
-		s.postTerminalBuildByID(ctx, request.BuildID)
+		report.SideEffectErr = s.postTerminalBuildByID(ctx, request.BuildID, outcome == repository.StepCompletionCompleted && completed.BuildBecameSuccessful)
 		if skipLegacyLogWrite {
 			return report, nil
 		}
 		if writeErr := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); writeErr != nil {
-			report.SideEffectErr = writeErr
+			report.SideEffectErr = errors.Join(report.SideEffectErr, writeErr)
 			return report, nil
 		}
 		if writeErr := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stderr); writeErr != nil {
-			report.SideEffectErr = writeErr
+			report.SideEffectErr = errors.Join(report.SideEffectErr, writeErr)
 		}
 		return report, nil
 	}
@@ -103,16 +103,16 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, mapRepoErr(completeErr)
 		}
 		report := StepCompletionReport{Step: completed.Step, CompletionOutcome: outcome}
-		s.postTerminalBuildByID(ctx, request.BuildID)
+		report.SideEffectErr = s.postTerminalBuildByID(ctx, request.BuildID, false)
 		if skipLegacyLogWrite {
 			return report, nil
 		}
 		if writeErr := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); writeErr != nil {
-			report.SideEffectErr = writeErr
+			report.SideEffectErr = errors.Join(report.SideEffectErr, writeErr)
 			return report, nil
 		}
 		if writeErr := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stderr); writeErr != nil {
-			report.SideEffectErr = writeErr
+			report.SideEffectErr = errors.Join(report.SideEffectErr, writeErr)
 		}
 		return report, nil
 	}
@@ -150,17 +150,17 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 		}
 	}
 
-	s.postTerminalBuildByID(ctx, request.BuildID)
+	report.SideEffectErr = errors.Join(report.SideEffectErr, s.postTerminalBuildByID(ctx, request.BuildID, completionResult.BuildBecameSuccessful))
 
 	if skipLegacyLogWrite {
 		return report, nil
 	}
 	if err := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stdout); err != nil {
-		report.SideEffectErr = err
+		report.SideEffectErr = errors.Join(report.SideEffectErr, err)
 		return report, nil
 	}
 	if err := writeExecutionOutputLogs(ctx, s.logSink, request.BuildID, request.StepName, result.Stderr); err != nil {
-		report.SideEffectErr = err
+		report.SideEffectErr = errors.Join(report.SideEffectErr, err)
 		return report, nil
 	}
 
