@@ -87,6 +87,7 @@ type SCMStatusDeliveryMarkSupersededInput struct {
 }
 
 type SCMStatusDeliveryRepository interface {
+	GetBuildContext(ctx context.Context, buildID, connectionID, providerRepositoryID, commitSHA string) (string, error)
 	AcquireForDelivery(ctx context.Context, input SCMStatusDeliveryClaimInput) (SCMStatusDeliveryClaimResult, error)
 	ListRecoverable(ctx context.Context, input SCMStatusDeliveryRecoverableScanInput) ([]domain.SCMStatusDelivery, error)
 	MarkSent(ctx context.Context, input SCMStatusDeliveryMarkSentInput) (SCMStatusDeliveryUpdateResult, error)

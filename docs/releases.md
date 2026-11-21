@@ -124,7 +124,7 @@ images, chart versions and API download URLs available for the release lifetime.
 CLI URLs currently use authenticated Coyote artifact-download endpoints, not a
 new public download service.
 
-`release/compatibility.json` currently declares Goose target 57 and the existing
+`release/compatibility.json` currently declares Goose target 58 and the existing
 0.0.11 maintenance-cutover baseline (`>=0.0.11 <0.0.12`). Review that declaration
 for each supported upgrade; it does not certify online-safe DDL or authorize
 deployment. No infrastructure changes, production publication or promotion are

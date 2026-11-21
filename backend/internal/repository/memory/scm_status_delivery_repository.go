@@ -214,6 +214,27 @@ func (r *SCMStatusDeliveryRepository) MarkSuperseded(ctx context.Context, input 
 	return repository.SCMStatusDeliveryUpdateResult{Delivery: current, Outcome: repository.SCMStatusDeliveryUpdateOutcomeUpdated}, nil
 }
 
+func (r *SCMStatusDeliveryRepository) GetBuildContext(ctx context.Context, buildID, connectionID, providerRepositoryID, commitSHA string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var first domain.SCMStatusDelivery
+	for _, delivery := range r.deliveries {
+		if delivery.BuildID != strings.TrimSpace(buildID) || delivery.CommitSHA != strings.TrimSpace(commitSHA) || delivery.SCMConnectionID == nil || *delivery.SCMConnectionID != strings.TrimSpace(connectionID) || delivery.ProviderRepositoryID == nil || *delivery.ProviderRepositoryID != strings.TrimSpace(providerRepositoryID) {
+			continue
+		}
+		if first.ID == "" || delivery.CreatedAt.Before(first.CreatedAt) || (delivery.CreatedAt.Equal(first.CreatedAt) && delivery.ID < first.ID) {
+			first = delivery
+		}
+	}
+	if first.ID == "" {
+		return "", repository.ErrSCMStatusDeliveryNotFound
+	}
+	return first.Context, nil
+}
+
 func (r *SCMStatusDeliveryRepository) GetByKey(ctx context.Context, provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.SCMStatusDelivery{}, err

@@ -598,7 +598,7 @@ func configureSCMStatusRuntime(cfg config.Config, buildRepo scmStatusBuildStore,
 		Connections:   connectionRepo,
 		Registrations: registrationRepo,
 		Secrets:       platformsecret.NewEnvResolver(),
-		GitHubApps:    platformgithubapp.NewClient(nil),
+		GitHubApps:    platformgithubapp.NewClient(&nethttp.Client{Timeout: 30 * time.Second}),
 	})
 	if err != nil {
 		return scmStatusRuntime{}, err

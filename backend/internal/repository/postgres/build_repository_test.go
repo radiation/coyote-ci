@@ -27,6 +27,45 @@ func buildColumnPosition(columns []string, want string) int {
 	return -1
 }
 
+func TestBuildRepository_ListSCMTerminalBuilds(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	repo := NewBuildRepository(db)
+	before := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	since := before.Add(-7 * 24 * time.Hour)
+	expectPage := func() *sqlmock.ExpectedQuery {
+		return mock.ExpectQuery(`ORDER BY finished_at DESC, id DESC LIMIT \$4`).WithArgs(since, before, "cursor", 2)
+	}
+	page := func() ([]domain.Build, error) {
+		return repo.ListSCMTerminalBuilds(context.Background(), since, before, "cursor", 2)
+	}
+	build := domain.Build{ID: "build", Status: domain.BuildStatusCanceled, CreatedAt: since, FinishedAt: &before}
+	expectPage().WillReturnRows(buildCancelMockRows(build)).RowsWillBeClosed()
+	builds, err := page()
+	if err != nil || len(builds) != 1 || builds[0].ID != build.ID || builds[0].Status != build.Status || builds[0].FinishedAt == nil || !builds[0].FinishedAt.Equal(before) {
+		t.Fatalf("terminal page: %+v, %v", builds, err)
+	}
+	failure := errors.New("database unavailable")
+	expectPage().WillReturnError(failure)
+	if _, queryErr := page(); !errors.Is(queryErr, failure) {
+		t.Fatalf("query error: %v", queryErr)
+	}
+	expectPage().WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("invalid").CloseError(failure)).RowsWillBeClosed()
+	if _, scanErr := page(); scanErr == nil || errors.Is(scanErr, failure) {
+		t.Fatalf("expected scan error to take precedence over close error, got %v", scanErr)
+	}
+	expectPage().WillReturnRows(buildCancelMockRows(build).RowError(0, failure)).RowsWillBeClosed()
+	if _, iterErr := page(); !errors.Is(iterErr, failure) {
+		t.Fatalf("iteration error: %v", iterErr)
+	}
+	if checkErr := mock.ExpectationsWereMet(); checkErr != nil {
+		t.Fatal(checkErr)
+	}
+}
+
 func TestNewBuildRepository(t *testing.T) {
 	repo := NewBuildRepository(&sql.DB{})
 	if repo == nil {

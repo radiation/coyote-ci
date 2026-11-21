@@ -43,6 +43,7 @@ type scmStatusProjectRepository interface {
 }
 
 type scmStatusDeliveryRepository interface {
+	GetBuildContext(ctx context.Context, buildID, connectionID, providerRepositoryID, commitSHA string) (string, error)
 	AcquireForDelivery(ctx context.Context, input repository.SCMStatusDeliveryClaimInput) (repository.SCMStatusDeliveryClaimResult, error)
 	ListRecoverable(ctx context.Context, input repository.SCMStatusDeliveryRecoverableScanInput) ([]domain.SCMStatusDelivery, error)
 	MarkSent(ctx context.Context, input repository.SCMStatusDeliveryMarkSentInput) (repository.SCMStatusDeliveryUpdateResult, error)
@@ -194,11 +195,18 @@ func (r *SCMStatusReporter) planDelivery(ctx context.Context, build domain.Build
 		return domain.SCMStatusDelivery{}, false, nil
 	}
 	commitSHA := scmStatusCommitSHA(build)
-	if commitSHA == "" {
+	if commitSHA == "" || build.JobID == nil || strings.TrimSpace(*build.JobID) == "" {
 		return domain.SCMStatusDelivery{}, false, nil
 	}
-	contextName, ok, err := r.buildContextName(ctx, build)
-	if err != nil || !ok {
+	contextName, err := r.deliveryRepo.GetBuildContext(ctx, build.ID, *build.SCMConnectionID, *build.ProviderRepositoryID, commitSHA)
+	if errors.Is(err, repository.ErrSCMStatusDeliveryNotFound) {
+		var ok bool
+		contextName, ok, err = r.buildContextName(ctx, build)
+		if !ok {
+			return domain.SCMStatusDelivery{}, false, err
+		}
+	}
+	if err != nil {
 		return domain.SCMStatusDelivery{}, false, err
 	}
 	state, description, ok := scmStatusStateForBuild(build)

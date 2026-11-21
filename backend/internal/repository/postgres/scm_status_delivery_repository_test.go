@@ -16,6 +16,38 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
+func TestSCMStatusDeliveryBuildContext(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	repo := NewSCMStatusDeliveryRepository(db)
+	query := `SELECT context_name FROM scm_status_deliveries WHERE build_id = \$1 AND scm_connection_id = \$2 AND provider_repository_id = \$3 AND commit_sha = \$4 ORDER BY created_at, id LIMIT 1`
+	lookup := func() (string, error) {
+		return repo.GetBuildContext(context.Background(), "build", "connection", "repo", "sha")
+	}
+	expect := func() *sqlmock.ExpectedQuery {
+		return mock.ExpectQuery(query).WithArgs("build", "connection", "repo", "sha")
+	}
+	expect().WillReturnRows(sqlmock.NewRows([]string{"context_name"}).AddRow("original"))
+	if name, lookupErr := lookup(); lookupErr != nil || name != "original" {
+		t.Fatalf("context = %q, err = %v", name, lookupErr)
+	}
+	expect().WillReturnRows(sqlmock.NewRows([]string{"context_name"}))
+	if _, lookupErr := lookup(); !errors.Is(lookupErr, repository.ErrSCMStatusDeliveryNotFound) {
+		t.Fatalf("missing intent: %v", lookupErr)
+	}
+	queryErr := errors.New("unavailable")
+	expect().WillReturnError(queryErr)
+	if _, lookupErr := lookup(); !errors.Is(lookupErr, queryErr) {
+		t.Fatalf("query error: %v", lookupErr)
+	}
+	if expectationErr := mock.ExpectationsWereMet(); expectationErr != nil {
+		t.Fatal(expectationErr)
+	}
+}
+
 func TestSCMStatusTerminalDiscovery_Postgres(t *testing.T) {
 	db := openNotificationIntegrationDB(t)
 	t.Cleanup(func() { closeNotificationIntegrationDB(t, db) })
@@ -112,6 +144,13 @@ func TestSCMStatusDeliveryRepository_UsesRepositoryIdentityForConflictAndLookup(
 	result, claimErr := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: delivery, ClaimOwner: "worker", Now: now, ClaimDuration: time.Minute, MaxAttempts: 2})
 	if claimErr != nil || result.Outcome != repository.SCMStatusDeliveryClaimOutcomeAlreadySent {
 		t.Fatalf("expected identity conflict to resolve existing delivery, result=%+v err=%v", result, claimErr)
+	}
+	mock.ExpectBegin()
+	mock.ExpectQuery("INSERT INTO scm_status_deliveries").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("WHERE scm_connection_id").WithArgs(connectionID, providerRepositoryID, "deadbeef", "coyote/build").WillReturnRows(sqlmock.NewRows(row).AddRow(stored...))
+	discovered, discoverErr := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: delivery, ClaimOwner: "server", Now: now, ClaimDuration: time.Minute, MaxAttempts: 2, MissingIntentOnly: true})
+	if discoverErr != nil || discovered.Outcome != repository.SCMStatusDeliveryClaimOutcomeAlreadyRecorded || discovered.Delivery.Attempts != 1 {
+		t.Fatalf("discovery changed existing intent: %+v, %v", discovered, discoverErr)
 	}
 
 	mock.ExpectQuery("WHERE scm_connection_id").WithArgs(connectionID, providerRepositoryID, "deadbeef", "coyote/build").WillReturnRows(sqlmock.NewRows(row).AddRow(stored...))

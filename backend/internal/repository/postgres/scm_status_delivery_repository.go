@@ -474,6 +474,18 @@ func (r *SCMStatusDeliveryRepository) MarkSuperseded(ctx context.Context, input 
 	return r.resolveSCMStatusDeliveryUpdateConflict(ctx, input.DeliveryID, err)
 }
 
+func (r *SCMStatusDeliveryRepository) GetBuildContext(ctx context.Context, buildID, connectionID, providerRepositoryID, commitSHA string) (string, error) {
+	const query = `SELECT context_name FROM scm_status_deliveries
+		WHERE build_id = $1 AND scm_connection_id = $2 AND provider_repository_id = $3 AND commit_sha = $4
+		ORDER BY created_at, id LIMIT 1`
+	var name string
+	err := r.db.QueryRowContext(ctx, query, strings.TrimSpace(buildID), strings.TrimSpace(connectionID), strings.TrimSpace(providerRepositoryID), strings.TrimSpace(commitSHA)).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", repository.ErrSCMStatusDeliveryNotFound
+	}
+	return name, err
+}
+
 func (r *SCMStatusDeliveryRepository) GetByKey(ctx context.Context, provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error) {
 	delivery, err := scanSCMStatusDelivery(r.db.QueryRowContext(
 		ctx,

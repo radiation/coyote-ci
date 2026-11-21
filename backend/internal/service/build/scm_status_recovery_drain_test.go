@@ -25,6 +25,33 @@ func newTerminalTestDrain(t *testing.T, builds *memoryrepo.BuildRepository, publ
 	return drain
 }
 
+func TestSCMStatusDiscoveryReusesContextAfterProjectRename(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	builds := memoryrepo.NewBuildRepository()
+	build, err := builds.Create(ctx, scmMappedBuild(domain.Build{ID: "build", JobID: strPtr("job"), CommitSHA: strPtr("sha"), CreatedAt: now, Status: domain.BuildStatusRunning}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := &recordingSCMPublisher{}
+	drain := newTerminalTestDrain(t, builds, publisher, 2)
+	if notifyErr := drain.reporter.NotifyBuildStatus(ctx, build); notifyErr != nil {
+		t.Fatal(notifyErr)
+	}
+	if _, finishErr := builds.UpdateStatus(ctx, build.ID, domain.BuildStatusSuccess, nil); finishErr != nil {
+		t.Fatal(finishErr)
+	}
+	for _, slug := range []string{"renamed", "renamed-again"} {
+		drain.reporter.projectRepo = &fakeSCMProjectRepository{project: domain.Project{Slug: slug}}
+		if _, scanErr := drain.RunIteration(ctx); scanErr != nil {
+			t.Fatal(scanErr)
+		}
+	}
+	if len(publisher.reqs) != 2 || publisher.reqs[0].State != domain.SCMCommitStatusStatePending || publisher.reqs[1].State != domain.SCMCommitStatusStateSuccess || publisher.reqs[0].Context != "coyote/test/job" || publisher.reqs[1].Context != publisher.reqs[0].Context {
+		t.Fatalf("expected pending then success on original context only: %+v", publisher.reqs)
+	}
+}
+
 func TestSCMStatusDiscoveryAfterWorkerCompletion(t *testing.T) {
 	for _, path := range []string{"synchronous", "kubernetes-result"} {
 		for _, status := range []runner.RunStepStatus{runner.RunStepStatusSuccess, runner.RunStepStatusFailed} {
@@ -121,6 +148,48 @@ func TestSCMStatusDiscoveryPagesAndWraps(t *testing.T) {
 type unavailableRetryScan struct {
 	scmStatusDeliveryRepository
 	err error
+}
+
+type failingIntentLookup struct {
+	scmStatusDeliveryRepository
+	err error
+}
+
+func (repo failingIntentLookup) GetByRepositoryIdentity(ctx context.Context, connection, providerID, sha, contextName string) (domain.SCMStatusDelivery, error) {
+	if sha == "unavailable" {
+		return domain.SCMStatusDelivery{}, repo.err
+	}
+	return repo.scmStatusDeliveryRepository.GetByRepositoryIdentity(ctx, connection, providerID, sha, contextName)
+}
+
+func TestSCMStatusDiscoveryContinuesAfterIntentLookupError(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	builds := memoryrepo.NewBuildRepository()
+	publisher := &recordingSCMPublisher{}
+	drain := newTerminalTestDrain(t, builds, publisher, 3)
+	for _, sha := range []string{"unavailable", "available"} {
+		_, createErr := builds.Create(ctx, scmMappedBuild(domain.Build{ID: sha, JobID: strPtr("job"), CommitSHA: strPtr(sha), Status: domain.BuildStatusSuccess, CreatedAt: now, FinishedAt: &now}))
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+	}
+	deliveries := drain.reporter.deliveryRepo
+	failure := errors.New("identity lookup unavailable")
+	drain.reporter.deliveryRepo = failingIntentLookup{deliveries, failure}
+	if _, err := drain.RunIteration(ctx); !errors.Is(err, failure) {
+		t.Fatalf("expected discovery error, got %v", err)
+	}
+	if len(publisher.reqs) != 1 || publisher.reqs[0].CommitSHA != "available" {
+		t.Fatalf("posts during lookup failure: %+v", publisher.reqs)
+	}
+	drain.reporter.deliveryRepo = deliveries
+	if _, err := drain.RunIteration(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.reqs) != 2 || publisher.reqs[1].CommitSHA != "unavailable" {
+		t.Fatalf("posts after lookup recovered: %+v", publisher.reqs)
+	}
 }
 
 func (repo unavailableRetryScan) ListRecoverable(context.Context, repository.SCMStatusDeliveryRecoverableScanInput) ([]domain.SCMStatusDelivery, error) {

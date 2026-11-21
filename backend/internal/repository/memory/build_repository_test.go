@@ -10,6 +10,43 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
+func TestBuildRepository_ListSCMTerminalBuilds(t *testing.T) {
+	repo := NewBuildRepository()
+	ctx := context.Background()
+	end := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	start := end.Add(-7 * 24 * time.Hour)
+	job, registration, connection, providerID := "job", "registration", "connection", "123"
+	for _, test := range []struct {
+		id       string
+		finished time.Time
+		status   domain.BuildStatus
+	}{
+		{"b", end, domain.BuildStatusCanceled}, {"a", end, domain.BuildStatusFailed},
+		{"c", start, domain.BuildStatusSuccess}, {"old", start.Add(-time.Second), domain.BuildStatusSuccess},
+		{"future", end.Add(time.Second), domain.BuildStatusSuccess}, {"running", end, domain.BuildStatusRunning},
+		{"unregistered", end, domain.BuildStatusSuccess},
+	} {
+		build := domain.Build{ID: test.id, JobID: &job, Status: test.status, FinishedAt: &test.finished}
+		if test.id != "unregistered" {
+			build.RegisteredRepositoryID, build.SCMConnectionID, build.ProviderRepositoryID = &registration, &connection, &providerID
+		}
+		if _, createErr := repo.Create(ctx, build); createErr != nil {
+			t.Fatal(createErr)
+		}
+	}
+	before, cursor := end, ""
+	for _, want := range []string{"b", "a", "c"} {
+		page, err := repo.ListSCMTerminalBuilds(ctx, start, before, cursor, 1)
+		if err != nil || len(page) != 1 || page[0].ID != want {
+			t.Fatalf("after %q: got %+v, %v; want %q", cursor, page, err, want)
+		}
+		before, cursor = *page[0].FinishedAt, page[0].ID
+	}
+	if page, err := repo.ListSCMTerminalBuilds(ctx, start, before, cursor, 1); err != nil || len(page) != 0 {
+		t.Fatalf("after last build: %+v, %v", page, err)
+	}
+}
+
 func TestNewBuildRepository(t *testing.T) {
 	repo := NewBuildRepository()
 	if repo == nil {

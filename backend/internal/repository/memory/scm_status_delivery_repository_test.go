@@ -93,6 +93,13 @@ func TestSCMStatusDeliveryRepository_SeparatesRepositoryIdentityStreams(t *testi
 		if fetchErr != nil || fetched.BuildID != "build-"+connectionID {
 			t.Fatalf("expected identity lookup for %s, delivery=%+v err=%v", connectionID, fetched, fetchErr)
 		}
+		name, lookupErr := repo.GetBuildContext(context.Background(), fetched.BuildID, connectionID, "repository-1", "deadbeef")
+		if lookupErr != nil || name != fetched.Context {
+			t.Fatalf("build context = %q, err = %v", name, lookupErr)
+		}
+	}
+	if _, lookupErr := repo.GetBuildContext(context.Background(), "build-connection-b", "connection-a", "repository-1", "deadbeef"); !errors.Is(lookupErr, repository.ErrSCMStatusDeliveryNotFound) {
+		t.Fatalf("cross-connection lookup: %v", lookupErr)
 	}
 	if _, err := repo.GetByRepositoryIdentity(context.Background(), "connection-missing", "repository-1", "deadbeef", "coyote/build"); !errors.Is(err, repository.ErrSCMStatusDeliveryNotFound) {
 		t.Fatalf("expected missing identity stream error, got %v", err)

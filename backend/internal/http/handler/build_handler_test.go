@@ -66,6 +66,10 @@ func (r *failingSCMStatusDeliveryRepo) MarkSuperseded(context.Context, repositor
 	return repository.SCMStatusDeliveryUpdateResult{}, nil
 }
 
+func (r *failingSCMStatusDeliveryRepo) GetBuildContext(context.Context, string, string, string, string) (string, error) {
+	return "", r.err
+}
+
 func (r *failingSCMStatusDeliveryRepo) GetByKey(context.Context, string, string, string, string, string) (domain.SCMStatusDelivery, error) {
 	return domain.SCMStatusDelivery{}, r.err
 }
