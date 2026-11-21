@@ -55,10 +55,8 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 	if claimToken == "" {
 		return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, nil
 	}
-	if stepStatus == domain.BuildStepStatusSuccess && strings.TrimSpace(request.JobID) != "" && (request.RequireAtomicExecutionCompletion || s.workspaceRevisionPublicationEnabled()) {
-		atomicRepo, ok := s.executionJobRepo.(interface {
-			CompleteSuccessfulStepAndJob(context.Context, repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error)
-		})
+	if stepStatus == domain.BuildStepStatusSuccess && strings.TrimSpace(request.JobID) != "" {
+		atomicRepo, ok := s.executionJobRepo.(repository.ExecutionJobCompletionRepository)
 		if !ok {
 			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, errors.New("execution job repository does not support atomic successful completion")
 		}
@@ -84,10 +82,8 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 		return report, nil
 	}
 
-	if stepStatus == domain.BuildStepStatusFailed && strings.TrimSpace(request.JobID) != "" && request.RequireAtomicExecutionCompletion {
-		atomicRepo, ok := s.executionJobRepo.(interface {
-			CompleteFailedStepAndJob(context.Context, repository.CompleteFailedStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error)
-		})
+	if stepStatus == domain.BuildStepStatusFailed && strings.TrimSpace(request.JobID) != "" {
+		atomicRepo, ok := s.executionJobRepo.(repository.ExecutionJobCompletionRepository)
 		if !ok {
 			return StepCompletionReport{CompletionOutcome: repository.StepCompletionInvalidTransition}, errors.New("execution job repository does not support atomic failed completion")
 		}
@@ -133,23 +129,6 @@ func (s *BuildService) handleStepResult(ctx context.Context, request runner.RunS
 	}
 
 	report := StepCompletionReport{Step: completionResult.Step, CompletionOutcome: repository.StepCompletionCompleted, BuildBecameSuccessful: completionResult.BuildBecameSuccessful}
-	if s.executionJobRepo != nil && strings.TrimSpace(request.JobID) != "" {
-		var jobErr error
-		if stepStatus == domain.BuildStepStatusSuccess {
-			_, _, jobErr = s.executionJobRepo.CompleteJobSuccess(ctx, request.JobID, claimToken, result.FinishedAt, result.ExitCode, nil)
-		} else {
-			message := "step execution failed"
-			if stepError != nil {
-				message = *stepError
-			}
-			failureKind := executionFailureKind(result)
-			_, _, jobErr = s.executionJobRepo.CompleteJobFailure(ctx, request.JobID, claimToken, result.FinishedAt, message, failureKind, &exitCode, nil)
-		}
-		if jobErr != nil {
-			report.SideEffectErr = jobErr
-		}
-	}
-
 	report.SideEffectErr = errors.Join(report.SideEffectErr, s.postTerminalBuildByID(ctx, request.BuildID, report.BuildBecameSuccessful, deferArtifactTagging))
 
 	if skipLegacyLogWrite {

@@ -210,9 +210,13 @@ func PublishCoyoteChart(ctx context.Context, archive, repository, version string
 		if !missing || strings.Contains(message, "denied") || strings.Contains(message, "unauthorized") {
 			return nil, fmt.Errorf("cannot verify chart availability: %w: %s", pullErr, output)
 		}
-		_, pushErr := exec.CommandContext(ctx, "helm", "push", archive, strings.TrimSuffix(repository, "/coyote-ci")).CombinedOutput()
-		_, pullErr = pull()
+		pushOutput, pushErr := exec.CommandContext(ctx, "helm", "push", archive, strings.TrimSuffix(repository, "/coyote-ci")).CombinedOutput()
+		output, pullErr = pull()
 		if pullErr != nil {
+			if pushErr != nil {
+				pushErr = fmt.Errorf("helm push %s %s: %w: %s", archive, strings.TrimSuffix(repository, "/coyote-ci"), pushErr, strings.TrimSpace(string(pushOutput)))
+			}
+			pullErr = fmt.Errorf("helm pull %s --version %s: %w: %s", repository, version, pullErr, strings.TrimSpace(string(output)))
 			return nil, fmt.Errorf("cannot verify chart publication: %w", errors.Join(pushErr, pullErr))
 		}
 	}
@@ -240,8 +244,8 @@ func PublishCoyoteChart(ctx context.Context, archive, repository, version string
 	if removeErr := os.Remove(pulledChart); removeErr != nil {
 		return nil, removeErr
 	}
-	if _, pinnedErr := exec.CommandContext(ctx, "helm", "pull", repository+"@"+descriptor.Digest, "--version", version, "--destination", directory).CombinedOutput(); pinnedErr != nil {
-		return nil, fmt.Errorf("verifying digest-pinned chart: %w", pinnedErr)
+	if pinnedOutput, pinnedErr := exec.CommandContext(ctx, "helm", "pull", repository+"@"+descriptor.Digest, "--version", version, "--destination", directory).CombinedOutput(); pinnedErr != nil {
+		return nil, fmt.Errorf("verifying digest-pinned chart: %w: %s", pinnedErr, strings.TrimSpace(string(pinnedOutput)))
 	}
 	archives, globErr := filepath.Glob(filepath.Join(directory, "*.tgz"))
 	if globErr != nil || len(archives) != 1 {

@@ -22,6 +22,16 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/versioninfo"
 )
 
+func TestMain(tests *testing.M) {
+	for _, name := range []string{config.EnvServer, config.EnvToken, config.EnvContext} {
+		if unsetErr := os.Unsetenv(name); unsetErr != nil {
+			fmt.Fprintf(os.Stderr, "clear CLI test environment %s: %v\n", name, unsetErr)
+			os.Exit(1)
+		}
+	}
+	os.Exit(tests.Run())
+}
+
 type errWriter struct{}
 
 func (errWriter) Write([]byte) (int, error) {

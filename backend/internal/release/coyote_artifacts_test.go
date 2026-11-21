@@ -157,11 +157,12 @@ pull)
 		if [ "$HELM_TEST_MODE" = helm4 ]; then printf 'Error: failed to perform "FetchReference" on source: registry.example/charts/coyote-ci:%s: not found\n' "$4" >&2; else echo 'manifest unknown' >&2; fi
 		exit 1
 	fi
+	if [ "$HELM_TEST_MODE" = pull-failed ]; then echo 'pull response' ; echo 'pull unavailable' >&2; exit 1; fi
 	destination="$6/coyote-ci-$4.tgz"
 	case "$2" in
 		*@sha256:*)
 			destination="$6/coyote-ci@sha256-${2##*:}.tgz"
-			if [ "$HELM_TEST_MODE" = pinned-failed ]; then exit 1; fi
+			if [ "$HELM_TEST_MODE" = pinned-failed ]; then echo 'pinned pull denied' >&2; exit 1; fi
 			if [ "$HELM_TEST_MODE" = pinned-missing ]; then exit 0; fi
 			if [ "$HELM_TEST_MODE" = pinned-conflict ]; then echo different > "$destination"; exit 0; fi
 			;;
@@ -170,7 +171,7 @@ pull)
   ;;
 push)
 	printf 'push\n' >> "$HELM_TEST_PUSHES"
-  if [ "$HELM_TEST_MODE" = failed ]; then exit 1; fi
+	if [ "$HELM_TEST_MODE" = failed ]; then echo 'push response'; echo 'push rejected' >&2; exit 1; fi
   cp "$2" "$HELM_TEST_REMOTE"
   if [ "$HELM_TEST_MODE" = lost-response ]; then exit 1; fi
   ;;
@@ -195,7 +196,7 @@ esac
 		t.Fatal(writeErr)
 	}
 	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
-	for _, mode := range []string{"success", "helm4", "lost-response", "failed", "denied", "ambiguous", "inspect-failed", "invalid-json", "invalid-digest", "missing-digest", "pinned-failed", "pinned-missing", "pinned-conflict", "conflict"} {
+	for _, mode := range []string{"success", "helm4", "lost-response", "failed", "pull-failed", "denied", "ambiguous", "inspect-failed", "invalid-json", "invalid-digest", "missing-digest", "pinned-failed", "pinned-missing", "pinned-conflict", "conflict"} {
 		t.Run(mode, func(t *testing.T) {
 			remote := filepath.Join(t.TempDir(), "chart")
 			t.Setenv("HELM_TEST_REMOTE", remote)
@@ -222,6 +223,20 @@ esac
 				}
 			} else if err == nil {
 				t.Fatalf("accepted %s", mode)
+			}
+			var diagnostics []string
+			switch mode {
+			case "failed":
+				diagnostics = []string{"helm push", "push response", "push rejected", "helm pull", "manifest unknown"}
+			case "pull-failed":
+				diagnostics = []string{"helm pull", "pull response", "pull unavailable"}
+			case "pinned-failed":
+				diagnostics = []string{"pinned pull denied"}
+			}
+			for _, diagnostic := range diagnostics {
+				if !strings.Contains(err.Error(), diagnostic) {
+					t.Errorf("missing diagnostic %q in %v", diagnostic, err)
+				}
 			}
 		})
 	}

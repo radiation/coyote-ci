@@ -87,6 +87,14 @@ type recordingAtomicExecutionJobRepository struct {
 	failedAtomicCalls int
 }
 
+func (r *recordingAtomicExecutionJobRepository) SetBuildRepository(buildRepo repository.BuildRepository) {
+	if aware, ok := r.ExecutionJobRepository.(interface {
+		SetBuildRepository(repository.BuildRepository)
+	}); ok {
+		aware.SetBuildRepository(buildRepo)
+	}
+}
+
 func (r *recordingAtomicExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx context.Context, request repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	r.atomicCalls++
 	if r.buildRepo != nil {
@@ -108,6 +116,13 @@ func (r *recordingAtomicExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx
 
 func (r *recordingAtomicExecutionJobRepository) CompleteFailedStepAndJob(ctx context.Context, request repository.CompleteFailedStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
 	r.failedAtomicCalls++
+	if r.buildRepo == nil {
+		atomicRepo, ok := r.ExecutionJobRepository.(repository.ExecutionJobCompletionRepository)
+		if !ok {
+			return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, errors.New("atomic completion capability is unavailable")
+		}
+		return atomicRepo.CompleteFailedStepAndJob(ctx, request)
+	}
 	stepResult, stepErr := r.buildRepo.CompleteStep(ctx, request.StepRequest)
 	if stepErr != nil || stepResult.Outcome != repository.StepCompletionCompleted {
 		return stepResult, domain.ExecutionJob{}, stepResult.Outcome, stepErr
@@ -354,7 +369,7 @@ func TestBuildService_RunStep_PublishesWorkspaceBeforeAtomicSuccess(t *testing.T
 
 func TestBuildService_RunStep_WorkspacePublicationFailurePreventsSuccess(t *testing.T) {
 	claimToken := "claim-active"
-	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning}, steps: []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}}}
+	buildRepo := newMemoryCompletionBuildRepository(t, domain.Build{ID: "build-1"}, []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}})
 	memoryJobRepo := memoryrepo.NewExecutionJobRepository()
 	job := domain.ExecutionJob{ID: "job-1", BuildID: "build-1", StepID: "step-1", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: executionTestTimePointer(time.Now().Add(time.Minute)), CreatedAt: time.Now().UTC()}
 	if _, err := memoryJobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); err != nil {
@@ -370,11 +385,12 @@ func TestBuildService_RunStep_WorkspacePublicationFailurePreventsSuccess(t *test
 	if runErr == nil || !strings.Contains(runErr.Error(), "store unavailable") {
 		t.Fatalf("expected publication failure, got %v", runErr)
 	}
-	if buildRepo.steps[0].Status != domain.BuildStepStatusFailed {
-		t.Fatalf("expected failed step, got %q", buildRepo.steps[0].Status)
+	steps, stepsErr := buildRepo.GetStepsByBuildID(context.Background(), "build-1")
+	if stepsErr != nil || len(steps) != 1 || steps[0].Status != domain.BuildStepStatusFailed {
+		t.Fatalf("expected failed step, steps=%+v err=%v", steps, stepsErr)
 	}
-	if jobRepo.atomicCalls != 0 {
-		t.Fatalf("expected no atomic success finalization, got %d calls", jobRepo.atomicCalls)
+	if jobRepo.atomicCalls != 0 || jobRepo.failedAtomicCalls != 1 {
+		t.Fatalf("atomic calls: success=%d failure=%d", jobRepo.atomicCalls, jobRepo.failedAtomicCalls)
 	}
 	failedJob, jobErr := memoryJobRepo.GetJobByID(context.Background(), job.ID)
 	if jobErr != nil || failedJob.Status != domain.ExecutionJobStatusFailed || failedJob.FailureKind == nil || *failedJob.FailureKind != domain.ExecutionFailureKindWorkspace {
@@ -396,7 +412,7 @@ func TestBuildService_RunStep_RepositoryPublicationFailuresPreventAtomicSuccess(
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			claimToken := "claim-active"
-			buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning}, steps: []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}}}
+			buildRepo := newMemoryCompletionBuildRepository(t, domain.Build{ID: "build-1"}, []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}})
 			memoryJobRepo := memoryrepo.NewExecutionJobRepository()
 			job := domain.ExecutionJob{ID: "job-1", BuildID: "build-1", StepID: "step-1", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: executionTestTimePointer(time.Now().Add(time.Minute)), CreatedAt: time.Now().UTC()}
 			if _, createJobErr := memoryJobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); createJobErr != nil {
@@ -426,7 +442,7 @@ func TestBuildService_RunStep_RepositoryPublicationFailuresPreventAtomicSuccess(
 
 func TestBuildService_RunStep_WithoutRevisionStoreLeavesPublicationUnused(t *testing.T) {
 	claimToken := "claim-active"
-	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning}, steps: []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}}}
+	buildRepo := newMemoryCompletionBuildRepository(t, domain.Build{ID: "build-1"}, []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}})
 	memoryJobRepo := memoryrepo.NewExecutionJobRepository()
 	job := domain.ExecutionJob{ID: "job-1", BuildID: "build-1", StepID: "step-1", NodeID: "test", StepIndex: 0, AttemptNumber: 1, Status: domain.ExecutionJobStatusRunning, ClaimToken: &claimToken, ClaimExpiresAt: executionTestTimePointer(time.Now().Add(time.Minute)), CreatedAt: time.Now().UTC()}
 	if _, createJobErr := memoryJobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{job}); createJobErr != nil {
@@ -441,10 +457,10 @@ func TestBuildService_RunStep_WithoutRevisionStoreLeavesPublicationUnused(t *tes
 
 	_, report, runErr := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: job.BuildID, JobID: job.ID, StepID: job.StepID, StepIndex: 0, StepName: "test", ClaimToken: claimToken, Command: "echo"})
 	if runErr != nil || report.CompletionOutcome != repository.StepCompletionCompleted {
-		t.Fatalf("expected legacy completion, report=%#v err=%v", report, runErr)
+		t.Fatalf("expected atomic completion, report=%#v err=%v", report, runErr)
 	}
-	if jobRepo.atomicCalls != 0 {
-		t.Fatalf("expected legacy completion path, got %d atomic calls", jobRepo.atomicCalls)
+	if jobRepo.atomicCalls != 1 {
+		t.Fatalf("expected atomic completion without publication, got %d atomic calls", jobRepo.atomicCalls)
 	}
 }
 
@@ -585,10 +601,7 @@ func TestBuildService_RunStep_LegacyCompatibleFanOutAndFanInProceed(t *testing.T
 			if specErr != nil {
 				t.Fatalf("marshal execution job spec: %v", specErr)
 			}
-			buildRepo := &fakeBuildRepository{
-				build: domain.Build{ID: "build-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0},
-				steps: []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
-			}
+			buildRepo := newMemoryCompletionBuildRepository(t, domain.Build{ID: "build-1"}, []domain.BuildStep{{ID: "step-1", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}})
 			executionJobRepo := memoryrepo.NewExecutionJobRepository()
 			_, createErr := executionJobRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{
 				ID:               "job-1",
@@ -599,6 +612,7 @@ func TestBuildService_RunStep_LegacyCompatibleFanOutAndFanInProceed(t *testing.T
 				Status:           domain.ExecutionJobStatusRunning,
 				ClaimToken:       &claimToken,
 				ResolvedSpecJSON: jobSpecJSON,
+				ClaimExpiresAt:   executionTestTimePointer(time.Now().Add(time.Minute)),
 				CreatedAt:        time.Now().UTC(),
 			}})
 			if createErr != nil {
@@ -1586,10 +1600,8 @@ func TestBuildService_HandleStepResult_PersistsTypedTimeoutFailure(t *testing.T)
 	startedAt := time.Now().UTC()
 	finishedAt := startedAt.Add(time.Minute)
 	claimToken := "claim-timeout"
-	buildRepo := &fakeBuildRepository{
-		build: domain.Build{ID: "build-timeout", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: startedAt},
-		steps: []domain.BuildStep{{StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
-	}
+	buildRepo := newMemoryCompletionBuildRepository(t, domain.Build{ID: "build-timeout", ProjectID: "project-1", CreatedAt: startedAt},
+		[]domain.BuildStep{{ID: "step-timeout", StepIndex: 0, Name: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}})
 	execRepo := memoryrepo.NewExecutionJobRepository()
 	_, createErr := execRepo.CreateJobsForBuild(context.Background(), []domain.ExecutionJob{{
 		ID:               "execution-timeout",

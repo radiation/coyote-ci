@@ -18,7 +18,7 @@ func (r *BuildRepository) CompleteStep(ctx context.Context, request repository.C
 		return repository.CompleteStepResult{Outcome: completionReq.Outcome}, nil
 	}
 
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return repository.CompleteStepResult{}, err
 	}
@@ -29,6 +29,10 @@ func (r *BuildRepository) CompleteStep(ctx context.Context, request repository.C
 			_ = tx.Rollback()
 		}
 	}()
+
+	if lockErr := lockBuildForCompletionTx(ctx, tx, request.BuildID); lockErr != nil {
+		return repository.CompleteStepResult{}, lockErr
+	}
 
 	claimToken := (*string)(nil)
 	if request.RequireClaim {
@@ -60,6 +64,18 @@ func (r *BuildRepository) CompleteStep(ctx context.Context, request repository.C
 	}
 	rollback = false
 	return repository.CompleteStepResult{Step: step, Outcome: outcome, BuildBecameSuccessful: buildBecameSuccessful}, nil
+}
+
+// Lock the build before jobs or steps, and retain it through advancement and commit.
+// READ COMMITTED gives subsequent progress queries a fresh snapshot after waiting.
+// NO KEY UPDATE also permits foreign-key key-share checks on the parent build.
+func lockBuildForCompletionTx(ctx context.Context, tx *sql.Tx, buildID string) error {
+	var lockedID string
+	err := tx.QueryRowContext(ctx, `SELECT id FROM builds WHERE id = $1 FOR NO KEY UPDATE`, buildID).Scan(&lockedID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return repository.ErrBuildNotFound
+	}
+	return err
 }
 
 func resolveAndCommitConflictTx(ctx context.Context, tx *sql.Tx, buildID string, stepIndex int, claimRequired bool, allowStale bool) (domain.BuildStep, repository.StepCompletionOutcome, bool, error) {

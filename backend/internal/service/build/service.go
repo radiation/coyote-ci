@@ -140,7 +140,7 @@ type BuildServiceConfig struct {
 // NewBuildServiceFromConfig creates a fully-wired BuildService in one call.
 func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner runner.Runner, logSink logs.LogSink, cfg BuildServiceConfig) *BuildService {
 	svc := NewBuildService(buildRepo, stepRunner, logSink)
-	svc.executionJobRepo = cfg.ExecutionJobRepo
+	svc.SetExecutionJobRepository(cfg.ExecutionJobRepo)
 	svc.workspaceRevisionRepo = cfg.WorkspaceRevisionRepo
 	svc.workspaceRevisionStore = cfg.WorkspaceRevisionStore
 	svc.executionOutputRepo = cfg.ExecutionOutputRepo

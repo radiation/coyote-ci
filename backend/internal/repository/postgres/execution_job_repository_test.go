@@ -421,6 +421,7 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_CommitsStepAndJobSu
 	exitCode := 0
 
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", claimToken))
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(atomicCompletionStepRows(now, "success", &exitCode))
 	mock.ExpectQuery(`UPDATE build_jobs\s+SET status = 'success'`).WithArgs("job-1", finishedAt, exitCode).WillReturnRows(atomicCompletionJobRows(now, time.Time{}, "success", ""))
@@ -460,6 +461,7 @@ func TestExecutionJobRepository_CompleteFailedStepAndJob_CommitsStepAndJobFailur
 	request := repository.CompleteFailedStepAndJobRequest{JobID: "job-1", ClaimToken: claimToken, FinishedAt: finishedAt, ErrorMessage: "step timed out", FailureKind: domain.ExecutionFailureKindTimeout, ExitCode: &exitCode, StepRequest: repository.CompleteStepRequest{BuildID: "build-1", StepIndex: 0, ClaimToken: claimToken, RequireClaim: true, Update: repository.StepUpdate{Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, StartedAt: &now, FinishedAt: &finishedAt}}}
 
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", claimToken))
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(atomicCompletionStepRows(now, "failed", &exitCode))
 	mock.ExpectQuery(`UPDATE build_jobs\s+SET status = 'failed'`).WithArgs("job-1", finishedAt, "step timed out", domain.ExecutionFailureKindTimeout, &exitCode).WillReturnRows(atomicCompletionJobRows(now, time.Time{}, "failed", ""))
@@ -508,6 +510,7 @@ func TestExecutionJobRepository_CompleteFailedStepAndJob_RollsBackMutationFailur
 			}
 			now := time.Now().UTC()
 			mock.ExpectBegin()
+			expectBuildCompletionLock(mock)
 			testCase.configure(mock, now, now.Add(time.Minute))
 			mock.ExpectRollback()
 
@@ -541,6 +544,7 @@ func TestExecutionJobRepository_CompleteFailedStepAndJob_RejectsInvalidClaims(t 
 				t.Fatalf("failed to create sql mock: %v", setupErr)
 			}
 			mock.ExpectBegin()
+			expectBuildCompletionLock(mock)
 			expectation := mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1")
 			if testCase.expectNotFound {
 				expectation.WillReturnError(sql.ErrNoRows)
@@ -573,6 +577,7 @@ func TestExecutionJobRepository_CompleteFailedStepAndJob_DuplicateTerminalAndCom
 		}
 		now := time.Now().UTC()
 		mock.ExpectBegin()
+		expectBuildCompletionLock(mock)
 		mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, time.Time{}, "failed", ""))
 		mock.ExpectCommit()
 
@@ -594,6 +599,7 @@ func TestExecutionJobRepository_CompleteFailedStepAndJob_DuplicateTerminalAndCom
 		claimExpiresAt := now.Add(time.Minute)
 		exitCode := 1
 		mock.ExpectBegin()
+		expectBuildCompletionLock(mock)
 		mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", "claim-1"))
 		mock.ExpectQuery("UPDATE build_steps").WillReturnRows(atomicCompletionStepRows(now, "failed", &exitCode))
 		mock.ExpectQuery(`UPDATE build_jobs\s+SET status = 'failed'`).WithArgs("job-1", now.Add(2*time.Minute), "step failed", domain.ExecutionFailureKindExecution, &exitCode).WillReturnRows(atomicCompletionJobRows(now, time.Time{}, "failed", ""))
@@ -652,6 +658,7 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_RollsBackMutationFa
 			now := time.Now().UTC()
 			claimExpiresAt := now.Add(time.Minute)
 			mock.ExpectBegin()
+			expectBuildCompletionLock(mock)
 			testCase.configure(mock, now, claimExpiresAt)
 			mock.ExpectRollback()
 
@@ -686,6 +693,7 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_RejectsInvalidClaim
 				t.Fatalf("failed to create sql mock: %v", setupErr)
 			}
 			mock.ExpectBegin()
+			expectBuildCompletionLock(mock)
 			expectation := mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1")
 			if testCase.expectNotFound {
 				expectation.WillReturnError(sql.ErrNoRows)
@@ -718,6 +726,7 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_DuplicateTerminalAn
 		}
 		now := time.Now().UTC()
 		mock.ExpectBegin()
+		expectBuildCompletionLock(mock)
 		mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, time.Time{}, "success", ""))
 		mock.ExpectCommit()
 
@@ -742,6 +751,7 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_DuplicateTerminalAn
 		claimExpiresAt := now.Add(time.Minute)
 		exitCode := 0
 		mock.ExpectBegin()
+		expectBuildCompletionLock(mock)
 		mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", "claim-1"))
 		mock.ExpectQuery("UPDATE build_steps").WillReturnRows(atomicCompletionStepRows(now, "success", &exitCode))
 		mock.ExpectQuery(`UPDATE build_jobs\s+SET status = 'success'`).WillReturnRows(atomicCompletionJobRows(now, time.Time{}, "success", ""))
@@ -775,6 +785,7 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_ReturnsPreMutationT
 			name: "authoritative job lookup failure",
 			configure: func(mock sqlmock.Sqlmock) {
 				mock.ExpectBegin()
+				expectBuildCompletionLock(mock)
 				mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnError(errors.New("job lookup failed"))
 				mock.ExpectRollback()
 			},
@@ -809,6 +820,7 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_StepConflictDoesNot
 	now := time.Now().UTC()
 	claimExpiresAt := now.Add(time.Minute)
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery(`SELECT .* FROM build_jobs WHERE id = \$1 FOR UPDATE`).WithArgs("job-1").WillReturnRows(atomicCompletionJobRows(now, claimExpiresAt, "running", "claim-1"))
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WithArgs("build-1", 0).WillReturnRows(atomicCompletionStepRows(now, "running", nil))
@@ -821,6 +833,11 @@ func TestExecutionJobRepository_CompleteSuccessfulStepAndJob_StepConflictDoesNot
 	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
 		t.Fatalf("unmet sql expectations: %v", expectationsErr)
 	}
+}
+
+func expectBuildCompletionLock(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`SELECT id FROM builds WHERE id = \$1 FOR NO KEY UPDATE`).
+		WithArgs("build-1").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("build-1"))
 }
 
 func atomicCompletionRequest(claimToken string, finishedAt time.Time, exitCode int) repository.CompleteSuccessfulStepAndJobRequest {
