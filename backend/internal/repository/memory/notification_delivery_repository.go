@@ -95,9 +95,8 @@ func (r *NotificationDeliveryRepository) AcquireForDelivery(ctx context.Context,
 	if existingID, exists := r.index[key]; exists {
 		existing := r.deliveries[existingID]
 		claimed, outcome := claimNotificationDelivery(existing, now, claimOwner, claimDuration)
-		if outcome == repository.NotificationDeliveryClaimOutcomeCreatedClaimed || outcome == repository.NotificationDeliveryClaimOutcomeRetryClaimed || outcome == repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed {
+		if existing.Status != claimed.Status || claimed.Attempts != existing.Attempts {
 			r.deliveries[existingID] = claimed
-			return repository.NotificationDeliveryClaimResult{Delivery: claimed, Outcome: outcome}, nil
 		}
 		return repository.NotificationDeliveryClaimResult{Delivery: claimed, Outcome: outcome}, nil
 	}
@@ -383,17 +382,19 @@ func normalizeNotificationClaimInput(input repository.NotificationDeliveryClaimI
 
 func claimNotificationDelivery(existing domain.NotificationDelivery, now time.Time, claimOwner string, claimDuration time.Duration) (domain.NotificationDelivery, repository.NotificationDeliveryClaimOutcome) {
 	existing = existing.Normalize()
-	if existing.IsTerminal() {
-		return existing, repository.NotificationDeliveryClaimOutcomeFromExisting(existing, now)
-	}
-	if existing.Attempts >= existing.MaxAttempts {
-		return existing, repository.NotificationDeliveryClaimOutcomeAttemptsExhausted
-	}
-	switch existing.Status {
-	case domain.NotificationDeliveryStatusSending:
-		if existing.ClaimExpiresAt != nil && now.Before(existing.ClaimExpiresAt.UTC()) {
-			return existing, repository.NotificationDeliveryClaimOutcomeClaimedByOther
+	outcome := repository.NotificationDeliveryClaimOutcomeFromExisting(existing, now)
+	switch outcome {
+	case repository.NotificationDeliveryClaimOutcomeAttemptsExhausted:
+		if existing.Status == domain.NotificationDeliveryStatusSending {
+			category := domain.NotificationDeliveryFailureCategoryRetryable
+			reason := repository.NotificationDeliveryFinalClaimExpiredReason
+			existing.Status = domain.NotificationDeliveryStatusFailedExhausted
+			existing.UpdatedAt = now
+			existing.ClaimedAt, existing.ClaimExpiresAt, existing.ClaimedBy = nil, nil, nil
+			existing.NextAttemptAt, existing.LastError = nil, nil
+			existing.FailureCategory, existing.FailureReason = &category, &reason
 		}
+	case repository.NotificationDeliveryClaimOutcomeCreatedClaimed, repository.NotificationDeliveryClaimOutcomeRetryClaimed, repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed:
 		existing.Attempts++
 		existing.Status = domain.NotificationDeliveryStatusSending
 		existing.LastAttemptAt = &now
@@ -403,25 +404,8 @@ func claimNotificationDelivery(existing domain.NotificationDelivery, now time.Ti
 		existing.ClaimExpiresAt = &claimExpiresAt
 		existing.ClaimedBy = &claimOwner
 		existing.UpdatedAt = now
-		return existing, repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed
-	case domain.NotificationDeliveryStatusRetryWaiting, domain.NotificationDeliveryStatusPending:
-		if existing.Status == domain.NotificationDeliveryStatusRetryWaiting && existing.NextAttemptAt != nil && now.Before(existing.NextAttemptAt.UTC()) {
-			return existing, repository.NotificationDeliveryClaimOutcomeRetryNotDue
-		}
-		outcome := repository.NotificationDeliveryClaimOutcomeFromExisting(existing, now)
-		existing.Attempts++
-		existing.Status = domain.NotificationDeliveryStatusSending
-		existing.LastAttemptAt = &now
-		existing.NextAttemptAt = nil
-		existing.ClaimedAt = &now
-		claimExpiresAt := now.Add(claimDuration)
-		existing.ClaimExpiresAt = &claimExpiresAt
-		existing.ClaimedBy = &claimOwner
-		existing.UpdatedAt = now
-		return existing, outcome
-	default:
-		return existing, repository.NotificationDeliveryClaimOutcomeFromExisting(existing, now)
 	}
+	return existing, outcome
 }
 
 func notificationDeliveryClaimMatches(delivery domain.NotificationDelivery, claimOwner string, claimedAt time.Time) bool {

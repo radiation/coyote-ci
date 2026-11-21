@@ -677,6 +677,27 @@ func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
 		}
 	})
 
+	t.Run("expired final claim skips provider and leaves recovery scan", func(t *testing.T) {
+		fixture := newRecoveryDrainFixture(t, nil)
+		claim := seedStaleClaimDelivery(t, fixture.deliveryRepo, fixture.target, fixture.build.ID, domain.NotificationEventTypeBuildFailed, fixture.now.Add(-time.Minute), fixture.now)
+		final := claim.Delivery
+		final.Attempts = final.MaxAttempts
+		if _, updateErr := fixture.deliveryRepo.Update(context.Background(), final); updateErr != nil {
+			t.Fatal(updateErr)
+		}
+		drain := fixture.newDrain(t)
+		for _, expectedScanned := range []int{1, 0} {
+			result, runErr := drain.RunIteration(context.Background())
+			if runErr != nil || result.Scanned != expectedScanned || result.SkippedTerminal != expectedScanned || len(fixture.sender.messages) != 0 {
+				t.Fatalf("expected %d terminal skips and zero sends, got %+v sends=%d err=%v", expectedScanned, result, len(fixture.sender.messages), runErr)
+			}
+		}
+		stored := mustGetNotificationDelivery(t, fixture.deliveryRepo, fixture.build.ID, final.EventType, final.Recipient)
+		if stored.Status != domain.NotificationDeliveryStatusFailedExhausted || stored.Attempts != final.MaxAttempts || stored.ClaimedBy != nil || stored.ClaimedAt != nil || stored.ClaimExpiresAt != nil || stored.Validate() != nil {
+			t.Fatalf("unexpected exhausted delivery: %+v", stored)
+		}
+	})
+
 	t.Run("exhausted attempt becomes terminal", func(t *testing.T) {
 		fixture := newRecoveryDrainFixture(t, errors.New("smtp unavailable"))
 		seedDueRetryDelivery(t, fixture.deliveryRepo, fixture.target, fixture.build.ID, domain.NotificationEventTypeBuildFailed, fixture.now.Add(-time.Minute), 2, 3)
