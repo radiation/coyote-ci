@@ -5,14 +5,80 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/google/uuid"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
+
+func TestSCMStatusTerminalDiscovery_Postgres(t *testing.T) {
+	db := openNotificationIntegrationDB(t)
+	t.Cleanup(func() { closeNotificationIntegrationDB(t, db) })
+	ctx := context.Background()
+	connection, registration := uuid.NewString(), uuid.NewString()
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO scm_connections (id,provider,display_name,deployment_kind,api_base_url,web_base_url) VALUES ($1,'github','test','cloud','https://api.github.com','https://github.com')`, connection)
+	t.Cleanup(func() { exec(`DELETE FROM scm_connections WHERE id=$1`, connection) })
+	exec(`INSERT INTO scm_registered_repositories (id,connection_id,provider_repository_id,owner_name,repository_name,full_name,clone_url,web_url,metadata_refreshed_at) VALUES ($1,$2,'123','owner','repo','owner/repo','https://github.com/owner/repo.git','https://github.com/owner/repo',NOW())`, registration, connection)
+	t.Cleanup(func() { exec(`DELETE FROM scm_registered_repositories WHERE id=$1`, registration) })
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	ids := []string{createNotificationIntegrationBuild(t, db, ctx), createNotificationIntegrationBuild(t, db, ctx)}
+	sort.Strings(ids)
+	for _, id := range ids {
+		exec(`UPDATE builds SET finished_at=$2,status='success',registered_repository_id=$3,scm_connection_id=$4,provider_repository_id='123',commit_sha='abc' WHERE id=$1`, id, now, registration, connection)
+	}
+	builds := NewBuildRepository(db)
+	cursor := ""
+	for _, want := range []string{ids[1], ids[0]} {
+		page, err := builds.ListSCMTerminalBuilds(ctx, now, now, cursor, 1)
+		if err != nil || len(page) != 1 || page[0].ID != want {
+			t.Fatalf("page after %q: %+v %v", cursor, page, err)
+		}
+		cursor = want
+	}
+	page, err := builds.ListSCMTerminalBuilds(ctx, now, now, cursor, 1)
+	if err != nil || len(page) != 0 {
+		t.Fatalf("end of scan: %+v %v", page, err)
+	}
+	repo := NewSCMStatusDeliveryRepository(db)
+	providerID := "123"
+	delivery := domain.SCMStatusDelivery{BuildID: ids[0], BuildAttempt: 1, BuildCreatedAt: now, Provider: "github", RepositoryOwner: "owner", RepositoryName: "repo", SCMConnectionID: &connection, RegisteredRepositoryID: &registration, ProviderRepositoryID: &providerID, CommitSHA: "abc", Context: "test", DesiredState: domain.SCMCommitStatusStateSuccess, Description: "success"}
+	start := make(chan struct{})
+	type response struct {
+		result repository.SCMStatusDeliveryClaimResult
+		err    error
+	}
+	results := make(chan response, 2)
+	for _, owner := range []string{"server-a", "server-b"} {
+		go func() {
+			<-start
+			result, claimErr := repo.AcquireForDelivery(ctx, repository.SCMStatusDeliveryClaimInput{MissingIntentOnly: true, Delivery: delivery, ClaimOwner: owner, Now: now, ClaimDuration: time.Minute, MaxAttempts: 3})
+			results <- response{result, claimErr}
+		}()
+	}
+	close(start)
+	outcomes := map[repository.SCMStatusDeliveryClaimOutcome]int{}
+	for range 2 {
+		got := <-results
+		if got.err != nil || got.result.Delivery.Attempts != 1 {
+			t.Errorf("claim: %+v %v", got.result, got.err)
+		}
+		outcomes[got.result.Outcome]++
+	}
+	if outcomes[repository.SCMStatusDeliveryClaimOutcomeCreatedClaimed] != 1 || outcomes[repository.SCMStatusDeliveryClaimOutcomeAlreadyRecorded] != 1 {
+		t.Fatalf("concurrent claims: %v", outcomes)
+	}
+}
 
 func TestNormalizePostgresSCMStatusDeliveryClaimInputRejectsWhitespaceIdentitySnapshot(t *testing.T) {
 	whitespace := "  "

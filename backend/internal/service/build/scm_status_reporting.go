@@ -135,14 +135,18 @@ func (r *SCMStatusReporter) NotifyBuildStatus(ctx context.Context, build domain.
 	if r == nil {
 		return nil
 	}
-	result, shouldSend, err := r.acquireDelivery(ctx, build, scmStatusRecoveryReasonInline)
+	return r.reportBuildStatus(ctx, build, scmStatusRecoveryReasonInline)
+}
+
+func (r *SCMStatusReporter) reportBuildStatus(ctx context.Context, build domain.Build, reason string) error {
+	result, shouldSend, err := r.acquireDelivery(ctx, build, reason)
 	if err != nil {
 		return err
 	}
 	if !shouldSend {
 		return nil
 	}
-	_, executeErr := r.executeClaimedDelivery(ctx, result.Delivery, result.ReassertAfter, scmStatusRecoveryReasonInline)
+	_, executeErr := r.executeClaimedDelivery(ctx, result.Delivery, result.ReassertAfter, reason)
 	return executeErr
 }
 
@@ -151,12 +155,26 @@ func (r *SCMStatusReporter) acquireDelivery(ctx context.Context, build domain.Bu
 	if err != nil || !ok {
 		return repository.SCMStatusDeliveryClaimResult{}, false, err
 	}
+	discovering := recoveryReason == scmStatusRecoveryReasonDiscovery
+	if discovering {
+		existing, lookupErr := r.getAuthoritativeDelivery(ctx, delivery)
+		switch {
+		case lookupErr == nil:
+			order := repository.CompareSCMStatusDeliveryOwners(existing, delivery)
+			if order > 0 || (order == 0 && existing.DesiredState == delivery.DesiredState) {
+				return repository.SCMStatusDeliveryClaimResult{}, false, nil
+			}
+		case !errors.Is(lookupErr, repository.ErrSCMStatusDeliveryNotFound):
+			return repository.SCMStatusDeliveryClaimResult{}, false, lookupErr
+		}
+	}
 	result, err := r.deliveryRepo.AcquireForDelivery(ctx, repository.SCMStatusDeliveryClaimInput{
-		Delivery:      delivery,
-		ClaimOwner:    r.claimOwner,
-		Now:           r.now().UTC(),
-		ClaimDuration: r.claimDuration,
-		MaxAttempts:   r.retryPolicy.maxAttempts,
+		MissingIntentOnly: discovering,
+		Delivery:          delivery,
+		ClaimOwner:        r.claimOwner,
+		Now:               r.now().UTC(),
+		ClaimDuration:     r.claimDuration,
+		MaxAttempts:       r.retryPolicy.maxAttempts,
 	})
 	if err != nil {
 		return repository.SCMStatusDeliveryClaimResult{}, false, err
@@ -639,6 +657,7 @@ func parseGitHubRepositoryURL(rawURL string) (string, string, bool) {
 }
 
 const scmStatusRecoveryReasonInline = "inline"
+const scmStatusRecoveryReasonDiscovery = "terminal_discovery"
 const scmStatusRecoveryReasonDrain = "recovery_drain"
 
 const scmStatusFailureReasonAuthoritativeReassert = "authoritative_reassert_pending"

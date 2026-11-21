@@ -243,7 +243,7 @@ func newAtomicSynchronousFixture(t *testing.T, configured, publish bool) (*Build
 	ctx := context.Background()
 	claimToken := "active-claim"
 	now := time.Now().UTC()
-	builds := newMemoryCompletionBuildRepository(t, domain.Build{ID: "build-atomic", CreatedAt: now},
+	builds := newMemoryCompletionBuildRepository(t, scmMappedBuild(domain.Build{ID: "build-atomic", JobID: strPtr("job-definition"), CommitSHA: strPtr("deadbeef"), CreatedAt: now}),
 		[]domain.BuildStep{{ID: "step-atomic", StepIndex: 0, Name: "test", NodeID: "test", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}})
 	jobs := memoryrepo.NewExecutionJobRepository()
 	if _, createErr := jobs.CreateJobsForBuild(ctx, []domain.ExecutionJob{{

@@ -42,6 +42,9 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 	key := scmStatusDeliveryKey(delivery)
 	if existingID, exists := r.index[key]; exists {
 		existing := r.deliveries[existingID]
+		if input.MissingIntentOnly && existing.BuildID == delivery.BuildID && existing.DesiredState == delivery.DesiredState {
+			return repository.SCMStatusDeliveryClaimResult{Delivery: existing, Outcome: repository.SCMStatusDeliveryClaimOutcomeAlreadyRecorded}, nil
+		}
 		claimed, outcome, persist, reassertAfter, claimErr := reconcileSCMStatusDeliveryForClaim(existing, delivery, now, claimOwner, claimDuration, input.MaxAttempts)
 		if claimErr != nil {
 			return repository.SCMStatusDeliveryClaimResult{}, claimErr

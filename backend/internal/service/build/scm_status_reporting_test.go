@@ -297,8 +297,26 @@ func TestSCMStatusReporter_NotifyBuildStatus_ReassertsAuthoritativeStateAfterSta
 
 	<-olderStarted
 	buildRepo.setJobBuilds(jobID, []domain.Build{newer, older})
-	if notifyErr := reporter.NotifyBuildStatus(context.Background(), newer); notifyErr != nil {
-		t.Fatalf("notify newer build failed: %v", notifyErr)
+	newer.FinishedAt = &now
+	for _, server := range []string{"server-a", "server-b"} {
+		serverReporter, serverErr := NewSCMStatusReporter(SCMStatusReporterConfig{BuildRepo: buildRepo, ProjectRepo: reporter.projectRepo, DeliveryRepo: deliveryRepo, Publisher: publisher, ClaimOwner: server})
+		if serverErr != nil {
+			t.Fatal(serverErr)
+		}
+		serverReporter.now = reporter.now
+		drain, drainErr := NewSCMStatusRecoveryDrain(SCMStatusRecoveryDrainConfig{Reporter: serverReporter, BatchSize: 2, Interval: time.Second, ListTerminalBuilds: func(context.Context, time.Time, time.Time, string, int) ([]domain.Build, error) {
+			return []domain.Build{newer}, nil
+		}})
+		if drainErr != nil {
+			t.Fatal(drainErr)
+		}
+		drain.now = reporter.now
+		if _, scanErr := drain.RunIteration(context.Background()); scanErr != nil {
+			t.Fatal(scanErr)
+		}
+	}
+	if publisher.countState(domain.SCMCommitStatusStateSuccess) != 1 {
+		t.Fatal("second server republished recorded terminal intent")
 	}
 	<-newerPublished
 	close(releaseOlder)

@@ -42,6 +42,10 @@ func TestSCMStatusDeliveryRepository_ClaimAndStateUpdates(t *testing.T) {
 	if blocked.Outcome != repository.SCMStatusDeliveryClaimOutcomeClaimedByOther {
 		t.Fatalf("expected claimed_by_other, got %q", blocked.Outcome)
 	}
+	discovered, discoverErr := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: base, ClaimOwner: "server", Now: now.Add(time.Hour), ClaimDuration: time.Minute, MaxAttempts: 3, MissingIntentOnly: true})
+	if discoverErr != nil || discovered.Outcome != repository.SCMStatusDeliveryClaimOutcomeAlreadyRecorded || discovered.Delivery.Attempts != 1 {
+		t.Fatalf("discovery reclaimed an expired delivery: %+v, %v", discovered, discoverErr)
+	}
 
 	sent, err := repo.MarkSent(context.Background(), repository.SCMStatusDeliveryMarkSentInput{DeliveryID: claimed.Delivery.ID, ClaimOwner: "worker-a", ClaimedAt: *claimed.Delivery.ClaimedAt, SentAt: now, State: domain.SCMCommitStatusStatePending})
 	if err != nil {

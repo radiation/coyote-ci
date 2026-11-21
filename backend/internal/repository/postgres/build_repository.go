@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
@@ -397,6 +398,32 @@ func (r *BuildRepository) ListActive(ctx context.Context) (builds []domain.Build
 	}
 
 	return builds, nil
+}
+
+func (r *BuildRepository) ListSCMTerminalBuilds(ctx context.Context, since, before time.Time, beforeID string, limit int) (builds []domain.Build, err error) {
+	const query = `SELECT ` + buildColumns + ` FROM builds
+		WHERE status IN ('success', 'failed', 'canceled') AND finished_at >= $1 AND finished_at <= $2
+		AND ($3::text = '' OR (finished_at, id) < ($2, NULLIF($3, '')::uuid))
+		AND job_id IS NOT NULL AND registered_repository_id IS NOT NULL
+		AND scm_connection_id IS NOT NULL AND provider_repository_id IS NOT NULL
+		ORDER BY finished_at DESC, id DESC LIMIT $4`
+	rows, err := r.db.QueryContext(ctx, query, since, before, beforeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+	for rows.Next() {
+		build, scanErr := scanBuild(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		builds = append(builds, build)
+	}
+	return builds, rows.Err()
 }
 
 func (r *BuildRepository) ListPaged(ctx context.Context, params repository.ListParams) (builds []domain.Build, err error) {

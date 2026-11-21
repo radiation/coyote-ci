@@ -24,12 +24,15 @@ const (
 	SCMStatusDeliveryClaimOutcomeSuperseded          SCMStatusDeliveryClaimOutcome = "superseded"
 )
 
+const SCMStatusDeliveryClaimOutcomeAlreadyRecorded SCMStatusDeliveryClaimOutcome = "already_recorded"
+
 type SCMStatusDeliveryClaimInput struct {
-	Delivery      domain.SCMStatusDelivery
-	ClaimOwner    string
-	Now           time.Time
-	ClaimDuration time.Duration
-	MaxAttempts   int
+	MissingIntentOnly bool
+	Delivery          domain.SCMStatusDelivery
+	ClaimOwner        string
+	Now               time.Time
+	ClaimDuration     time.Duration
+	MaxAttempts       int
 }
 
 type SCMStatusDeliveryClaimResult struct {

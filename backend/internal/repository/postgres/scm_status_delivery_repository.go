@@ -302,6 +302,9 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 	}
 
 	ownerComparison := repository.CompareSCMStatusDeliveryOwners(existing, delivery)
+	if input.MissingIntentOnly && ownerComparison == 0 && existing.DesiredState == delivery.DesiredState {
+		return repository.SCMStatusDeliveryClaimResult{Delivery: existing, Outcome: repository.SCMStatusDeliveryClaimOutcomeAlreadyRecorded}, nil
+	}
 	if ownerComparison > 0 {
 		return repository.SCMStatusDeliveryClaimResult{Delivery: existing, Outcome: repository.SCMStatusDeliveryClaimOutcomeSuperseded}, nil
 	}

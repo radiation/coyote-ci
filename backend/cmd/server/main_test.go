@@ -223,7 +223,7 @@ func TestConfigureSCMStatusRuntime(t *testing.T) {
 		}
 		cases := []struct {
 			name         string
-			buildRepo    repository.BuildRepository
+			buildRepo    scmStatusBuildStore
 			projectRepo  repository.ProjectRepository
 			deliveryRepo repository.SCMStatusDeliveryRepository
 		}{

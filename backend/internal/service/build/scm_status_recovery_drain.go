@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
@@ -17,9 +18,10 @@ const (
 )
 
 type SCMStatusRecoveryDrainConfig struct {
-	Reporter  *SCMStatusReporter
-	Interval  time.Duration
-	BatchSize int
+	ListTerminalBuilds func(context.Context, time.Time, time.Time, string, int) ([]domain.Build, error)
+	Reporter           *SCMStatusReporter
+	Interval           time.Duration
+	BatchSize          int
 }
 
 type SCMStatusRecoveryIterationResult struct {
@@ -43,11 +45,14 @@ type SCMStatusRecoveryIterationResult struct {
 }
 
 type SCMStatusRecoveryDrain struct {
-	reporter  *SCMStatusReporter
-	interval  time.Duration
-	batchSize int
-	now       func() time.Time
-	mu        sync.Mutex
+	listTerminalBuilds func(context.Context, time.Time, time.Time, string, int) ([]domain.Build, error)
+	before             time.Time
+	beforeID           string
+	reporter           *SCMStatusReporter
+	interval           time.Duration
+	batchSize          int
+	now                func() time.Time
+	mu                 sync.Mutex
 }
 
 func NewSCMStatusRecoveryDrain(cfg SCMStatusRecoveryDrainConfig) (*SCMStatusRecoveryDrain, error) {
@@ -63,7 +68,7 @@ func NewSCMStatusRecoveryDrain(cfg SCMStatusRecoveryDrainConfig) (*SCMStatusReco
 	if cfg.BatchSize <= 0 {
 		return nil, errors.New("scm status recovery drain batch size must be positive")
 	}
-	return &SCMStatusRecoveryDrain{reporter: cfg.Reporter, interval: cfg.Interval, batchSize: cfg.BatchSize, now: func() time.Time { return time.Now().UTC() }}, nil
+	return &SCMStatusRecoveryDrain{reporter: cfg.Reporter, listTerminalBuilds: cfg.ListTerminalBuilds, interval: cfg.Interval, batchSize: cfg.BatchSize, now: func() time.Time { return time.Now().UTC() }}, nil
 }
 
 func (d *SCMStatusRecoveryDrain) Run(ctx context.Context) error {
@@ -89,9 +94,10 @@ func (d *SCMStatusRecoveryDrain) RunIteration(ctx context.Context) (SCMStatusRec
 	defer d.mu.Unlock()
 
 	now := d.now().UTC()
+	discoveryErr := d.discoverTerminalIntent(ctx, now)
 	candidates, err := d.reporter.deliveryRepo.ListRecoverable(ctx, repository.SCMStatusDeliveryRecoverableScanInput{Now: now, Limit: d.batchSize})
 	if err != nil {
-		return SCMStatusRecoveryIterationResult{}, err
+		return SCMStatusRecoveryIterationResult{}, errors.Join(discoveryErr, err)
 	}
 	result := SCMStatusRecoveryIterationResult{Scanned: len(candidates)}
 	var iterationErrs []error
@@ -109,7 +115,34 @@ func (d *SCMStatusRecoveryDrain) RunIteration(ctx context.Context) (SCMStatusRec
 	if result.Scanned > 0 || result.Errors > 0 {
 		log.Printf("scm status recovery iteration completed: scanned=%d claim_acquired=%d retry_claimed=%d stale_claim_reclaimed=%d skipped=%d skipped_contention=%d skipped_not_due=%d skipped_terminal=%d sent=%d reassert_scheduled=%d retry_scheduled=%d permanently_failed=%d attempts_exhausted=%d lost_claim=%d superseded=%d rehydration_failed=%d errors=%d", result.Scanned, result.ClaimAcquired, result.RetryClaimed, result.StaleClaimReclaimed, result.Skipped, result.SkippedContention, result.SkippedNotDue, result.SkippedTerminal, result.Sent, result.ReassertScheduled, result.RetryScheduled, result.PermanentlyFailed, result.AttemptsExhausted, result.LostClaim, result.Superseded, result.RehydrationFailed, result.Errors)
 	}
-	return result, errors.Join(iterationErrs...)
+	return result, errors.Join(discoveryErr, errors.Join(iterationErrs...))
+}
+
+func (d *SCMStatusRecoveryDrain) discoverTerminalIntent(ctx context.Context, now time.Time) error {
+	if d.listTerminalBuilds == nil {
+		return nil
+	}
+	before := now
+	if d.beforeID != "" {
+		before = d.before
+	}
+	builds, err := d.listTerminalBuilds(ctx, now.Add(-7*24*time.Hour), before, d.beforeID, d.batchSize)
+	if err != nil {
+		return fmt.Errorf("scan terminal builds: %w", err)
+	}
+	var discoveryErrs []error
+	for _, build := range builds {
+		d.before, d.beforeID = *build.FinishedAt, build.ID
+		if domain.IsTerminalBuildStatus(build.Status) {
+			if reportErr := d.reporter.reportBuildStatus(ctx, build, scmStatusRecoveryReasonDiscovery); reportErr != nil {
+				discoveryErrs = append(discoveryErrs, fmt.Errorf("terminal SCM intent for build %s: %w", build.ID, reportErr))
+			}
+		}
+	}
+	if len(builds) < d.batchSize {
+		d.beforeID = ""
+	}
+	return errors.Join(discoveryErrs...)
 }
 
 func (d *SCMStatusRecoveryDrain) applyAttemptResult(result *SCMStatusRecoveryIterationResult, attempt scmStatusRecoveryAttemptResult) {
