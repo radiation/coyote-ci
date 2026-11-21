@@ -7,6 +7,37 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 )
 
+func TestValidatePlannedNotification(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status domain.BuildStatus
+		event  domain.NotificationEventType
+		valid  bool
+	}{
+		{"success", domain.BuildStatusSuccess, domain.NotificationEventTypeBuildSucceeded, true},
+		{"failure", domain.BuildStatusFailed, domain.NotificationEventTypeBuildFailed, true},
+		{"mismatched event", domain.BuildStatusFailed, domain.NotificationEventTypeBuildSucceeded, false},
+		{"canceled", domain.BuildStatusCanceled, domain.NotificationEventTypeBuildFailed, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			delivery := domain.NotificationDelivery{BuildID: "build", EventType: tc.event, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "target", Status: domain.NotificationDeliveryStatusPending, MaxAttempts: 3}
+			if err := ValidatePlannedNotification("build", tc.status, delivery); (err == nil) != tc.valid {
+				t.Fatalf("expected valid=%v, got %v", tc.valid, err)
+			}
+			if !tc.valid {
+				return
+			}
+			if err := ValidatePlannedNotification("another-build", tc.status, delivery); err == nil {
+				t.Fatal("accepted a delivery for another build")
+			}
+			delivery.Attempts = 1
+			if err := ValidatePlannedNotification("build", tc.status, delivery); err == nil {
+				t.Fatal("accepted an attempted delivery")
+			}
+		})
+	}
+}
+
 func TestNotificationDeliveryClaimOutcomeFromExisting(t *testing.T) {
 	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
 	claimedAt := now.Add(-time.Minute)
@@ -27,7 +58,8 @@ func TestNotificationDeliveryClaimOutcomeFromExisting(t *testing.T) {
 		{name: "expired final-attempt claim maps to attempts exhausted", delivery: domain.NotificationDelivery{Status: domain.NotificationDeliveryStatusSending, Attempts: 3, MaxAttempts: 3, ClaimedAt: &claimedAt, ClaimExpiresAt: &expiresEarlier}, want: NotificationDeliveryClaimOutcomeAttemptsExhausted},
 		{name: "retry waiting not due maps to retry not due", delivery: domain.NotificationDelivery{Status: domain.NotificationDeliveryStatusRetryWaiting, NextAttemptAt: &retryLater, Attempts: 1, MaxAttempts: 3}, want: NotificationDeliveryClaimOutcomeRetryNotDue},
 		{name: "retry waiting due maps to retry claimed", delivery: domain.NotificationDelivery{Status: domain.NotificationDeliveryStatusRetryWaiting, Attempts: 1, MaxAttempts: 3}, want: NotificationDeliveryClaimOutcomeRetryClaimed},
-		{name: "pending due maps to retry claimed", delivery: domain.NotificationDelivery{Status: domain.NotificationDeliveryStatusPending, Attempts: 0, MaxAttempts: 3}, want: NotificationDeliveryClaimOutcomeRetryClaimed},
+		{name: "unattempted pending maps to first claim", delivery: domain.NotificationDelivery{Status: domain.NotificationDeliveryStatusPending, Attempts: 0, MaxAttempts: 3}, want: NotificationDeliveryClaimOutcomeCreatedClaimed},
+		{name: "previously attempted pending maps to retry", delivery: domain.NotificationDelivery{Status: domain.NotificationDeliveryStatusPending, Attempts: 1, MaxAttempts: 3}, want: NotificationDeliveryClaimOutcomeRetryClaimed},
 		{name: "attempt bound maps to exhausted", delivery: domain.NotificationDelivery{Status: domain.NotificationDeliveryStatusPending, Attempts: 3, MaxAttempts: 3}, want: NotificationDeliveryClaimOutcomeAttemptsExhausted},
 	}
 

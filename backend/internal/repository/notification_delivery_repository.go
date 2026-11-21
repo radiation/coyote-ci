@@ -125,6 +125,9 @@ func NotificationDeliveryClaimOutcomeFromExisting(delivery domain.NotificationDe
 		if delivery.Attempts >= delivery.MaxAttempts {
 			return NotificationDeliveryClaimOutcomeAttemptsExhausted
 		}
+		if delivery.Attempts == 0 {
+			return NotificationDeliveryClaimOutcomeCreatedClaimed
+		}
 		return NotificationDeliveryClaimOutcomeRetryClaimed
 	default:
 		return NotificationDeliveryClaimOutcomeClaimedByOther

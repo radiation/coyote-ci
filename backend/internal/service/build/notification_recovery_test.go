@@ -74,6 +74,17 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 		}
 	})
 
+	for _, recipient := range []string{"not an address", "other@example.com"} {
+		t.Run("reject configured email recipient "+recipient, func(t *testing.T) {
+			delivery := domain.NotificationDelivery{Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-config:ops@example.com", Recipient: recipient}
+			_, err := notifier.rehydrateDestination(context.Background(), delivery)
+			var failure *notificationExecutionFailure
+			if !errors.As(err, &failure) || failure.retryable || failure.reason != "delivery_metadata_invalid" {
+				t.Fatalf("expected permanent metadata failure, got %v", err)
+			}
+		})
+	}
+
 	t.Run("shared email missing target does not send", func(t *testing.T) {
 		missingTargetID := "00000000-0000-4000-a000-000000000111"
 		kind, key, keyErr := domain.NotificationSharedEmailTargetKey(missingTargetID)
@@ -474,6 +485,22 @@ func newDestinationBranchFixture(t *testing.T) *destinationBranchFixture {
 }
 
 func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
+	t.Run("first inline send records an initial claim", func(t *testing.T) {
+		fixture := newRecoveryDrainFixture(t, nil)
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), fixture.build); err != nil {
+			t.Fatal(err)
+		}
+		delivery := mustGetNotificationDelivery(t, fixture.deliveryRepo, fixture.build.ID, domain.NotificationEventTypeBuildFailed, fixture.target.Recipient)
+		if delivery.Attempts != 1 || delivery.Status != domain.NotificationDeliveryStatusSent {
+			t.Fatalf("unexpected first delivery: %+v", delivery)
+		}
+		for outcome, want := range map[string]int{observability.NotificationDeliveryOutcomeClaimAcquired: 1, observability.NotificationDeliveryOutcomeRetryClaimed: 0} {
+			if got := fixture.metrics.OutcomeCount(string(delivery.EventType), string(delivery.Transport), string(delivery.DestinationKind), notificationRecoveryReasonInline, outcome); int(got) != want {
+				t.Errorf("inline %s = %d, want %d", outcome, got, want)
+			}
+		}
+	})
+
 	t.Run("due retry is claimed and sent with metrics", func(t *testing.T) {
 		fixture := newRecoveryDrainFixture(t, nil)
 		seedDueRetryDelivery(t, fixture.deliveryRepo, fixture.target, fixture.build.ID, domain.NotificationEventTypeBuildFailed, fixture.now.Add(-time.Minute), 1, 3)
@@ -482,7 +509,7 @@ func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("run iteration failed: %v", err)
 		}
-		if result.Scanned != 1 || result.RetryClaimed != 1 || result.Sent != 1 {
+		if result.Scanned != 1 || result.ClaimAcquired != 0 || result.RetryClaimed != 1 || result.Sent != 1 {
 			t.Fatalf("unexpected recovery result: %+v", result)
 		}
 		if len(fixture.sender.messages) != 1 {
@@ -491,6 +518,11 @@ func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
 		delivery := mustGetNotificationDelivery(t, fixture.deliveryRepo, fixture.build.ID, domain.NotificationEventTypeBuildFailed, fixture.target.Recipient)
 		if delivery.Status != domain.NotificationDeliveryStatusSent || delivery.Attempts != 2 {
 			t.Fatalf("unexpected recovered delivery state: %+v", delivery)
+		}
+		for outcome, want := range map[string]int{observability.NotificationDeliveryOutcomeClaimAcquired: 0, observability.NotificationDeliveryOutcomeRetryClaimed: 1} {
+			if got := fixture.metrics.OutcomeCount(string(delivery.EventType), string(delivery.Transport), string(delivery.DestinationKind), notificationRecoveryReasonDueRetry, outcome); int(got) != want {
+				t.Errorf("due retry %s = %d, want %d", outcome, got, want)
+			}
 		}
 		if fixture.metrics.OutcomeCount(string(domain.NotificationEventTypeBuildFailed), string(domain.NotificationTransportEmail), string(domain.NotificationDestinationKindSharedTarget), notificationRecoveryReasonDueRetry, observability.NotificationDeliveryOutcomeScanned) != 1 {
 			t.Fatal("expected scanned metric to increment once")

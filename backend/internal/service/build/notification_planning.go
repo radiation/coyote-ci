@@ -220,22 +220,7 @@ func (s *BuildNotificationService) resolveCommitAuthorSlackDestination(ctx conte
 
 func (s *BuildNotificationService) resolveConfiguredEmailDestination(ctx context.Context, recipient string) (notificationDestination, error) {
 	if s.subscriptionRepo == nil {
-		parsedRecipient, ok := parseNotificationRecipient(&recipient)
-		if !ok {
-			trimmedRecipient := strings.TrimSpace(recipient)
-			return notificationDestination{}, fmt.Errorf("invalid email notification recipient %q", trimmedRecipient)
-		}
-		parsedAddress, err := mail.ParseAddress(parsedRecipient)
-		if err != nil {
-			return notificationDestination{}, fmt.Errorf("invalid email notification recipient %q: %w", strings.TrimSpace(recipient), err)
-		}
-		return notificationDestination{
-			transport:       domain.NotificationTransportEmail,
-			destinationKind: domain.NotificationDestinationKindSharedTarget,
-			destinationKey:  "email-config:" + strings.ToLower(strings.TrimSpace(parsedAddress.Address)),
-			recipient:       parsedRecipient,
-			emailRecipient:  parsedRecipient,
-		}, nil
+		return configuredEmailDestination(recipient)
 	}
 	now := s.now().UTC()
 	target, err := s.subscriptionRepo.EnsureConfigEmailTarget(ctx, repository.EnsureConfigNotificationEmailTargetInput{
@@ -248,6 +233,20 @@ func (s *BuildNotificationService) resolveConfiguredEmailDestination(ctx context
 		return notificationDestination{}, err
 	}
 	return notificationTargetDestination(target)
+}
+
+func configuredEmailDestination(recipient string) (notificationDestination, error) {
+	address, err := mail.ParseAddress(strings.TrimSpace(recipient))
+	if err != nil {
+		return notificationDestination{}, fmt.Errorf("invalid email notification recipient %q: %w", strings.TrimSpace(recipient), err)
+	}
+	return notificationDestination{
+		transport:       domain.NotificationTransportEmail,
+		destinationKind: domain.NotificationDestinationKindSharedTarget,
+		destinationKey:  "email-config:" + strings.ToLower(strings.TrimSpace(address.Address)),
+		recipient:       address.String(),
+		emailRecipient:  address.String(),
+	}, nil
 }
 
 func dedupeDestinations(destinations []notificationDestination) []notificationDestination {

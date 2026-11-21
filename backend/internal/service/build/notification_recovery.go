@@ -215,6 +215,13 @@ func (s *BuildNotificationService) rehydrateDestination(ctx context.Context, del
 
 func (s *BuildNotificationService) rehydrateSharedEmailDestination(ctx context.Context, delivery domain.NotificationDelivery) (notificationDestination, error) {
 	if delivery.NotificationTargetID == nil {
+		if strings.HasPrefix(delivery.DestinationKey, "email-config:") {
+			destination, err := configuredEmailDestination(delivery.Recipient)
+			if err != nil || destination.destinationKey != delivery.DestinationKey {
+				return notificationDestination{}, permanentNotificationExecutionFailure("delivery_metadata_invalid", "configured email recipient does not match the persisted destination", nil)
+			}
+			return destination, nil
+		}
 		return notificationDestination{}, permanentNotificationExecutionFailure("delivery_metadata_invalid", "shared email delivery target reference is missing", nil)
 	}
 	if s.subscriptionRepo == nil {

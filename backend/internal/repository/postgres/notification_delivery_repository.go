@@ -232,7 +232,7 @@ func (r *NotificationDeliveryRepository) AcquireForDelivery(ctx context.Context,
 	}
 
 	claimOutcome := repository.NotificationDeliveryClaimOutcomeFromExisting(existing, now)
-	if claimOutcome != repository.NotificationDeliveryClaimOutcomeRetryClaimed && claimOutcome != repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed {
+	if claimOutcome != repository.NotificationDeliveryClaimOutcomeCreatedClaimed && claimOutcome != repository.NotificationDeliveryClaimOutcomeRetryClaimed && claimOutcome != repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed {
 		return repository.NotificationDeliveryClaimResult{Delivery: existing, Outcome: claimOutcome}, nil
 	}
 

@@ -42,6 +42,42 @@ func TestNotificationPlanCommitFailureNeverSends(t *testing.T) {
 	}
 }
 
+func TestNotificationPlanConfiguredEmailRecoversAfterCommit(t *testing.T) {
+	ctx := context.Background()
+	builds := memory.NewBuildRepository()
+	ledger := memory.NewNotificationDeliveryRepository()
+	plans := memory.NewNotificationPlanningRepository(builds, ledger)
+	build := domain.Build{ID: "configured-email", Status: domain.BuildStatusFailed}
+	if _, err := builds.Create(ctx, build); err != nil {
+		t.Fatal(err)
+	}
+	sender := &recordingEmailSender{}
+	cfg := BuildNotificationConfig{Enabled: true, Recipients: "Ops <Ops@example.com>", Sender: sender, BuildRepo: builds, DeliveryRepo: ledger, PlanningRepo: plans}
+	planner, err := NewBuildNotificationService(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, planErr := planner.planTerminalBuild(ctx, build, domain.NotificationEventTypeBuildFailed); planErr != nil {
+		t.Fatal(planErr)
+	}
+	cfg.Recipients = "replacement@example.com"
+	restarted, err := NewBuildNotificationService(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain, err := NewNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: restarted, Interval: time.Second, BatchSize: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := drain.RunIteration(ctx)
+	if err != nil || result.Sent != 1 || result.ClaimAcquired != 1 || len(sender.messages) != 1 || sender.messages[0].To != `"Ops" <Ops@example.com>` {
+		t.Fatalf("recovery result %+v, messages %+v, err %v", result, sender.messages, err)
+	}
+	if next, runErr := drain.RunIteration(ctx); runErr != nil || next.Scanned != 0 || len(sender.messages) != 1 {
+		t.Fatalf("repeat recovery result %+v, messages %d, err %v", next, len(sender.messages), runErr)
+	}
+}
+
 func TestNotificationPlanUsesPreferencesUntilCommit(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPersonalCommitAuthorNotificationFixture(t, personalCommitAuthorNotificationOptions{createEmailTarget: true, emailTargetEnabled: true})

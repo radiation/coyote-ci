@@ -67,7 +67,7 @@ func TestNotificationPlanRestartPostgres(t *testing.T) {
 		t.Fatal(result)
 	}
 	failed := terminal(domain.BuildStatusFailed)
-	if result := drain(true); result.Sent != 1 {
+	if result := drain(true); result.Sent != 1 || result.ClaimAcquired != 1 || result.RetryClaimed != 0 {
 		t.Fatal(result)
 	}
 	if result := drain(true); result.Scanned != 0 {
