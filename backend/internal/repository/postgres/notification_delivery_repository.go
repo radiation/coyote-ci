@@ -232,26 +232,25 @@ func (r *NotificationDeliveryRepository) AcquireForDelivery(ctx context.Context,
 	}
 
 	claimOutcome := repository.NotificationDeliveryClaimOutcomeFromExisting(existing, now)
-	if claimOutcome != repository.NotificationDeliveryClaimOutcomeCreatedClaimed && claimOutcome != repository.NotificationDeliveryClaimOutcomeRetryClaimed && claimOutcome != repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed {
+	var updated domain.NotificationDelivery
+	switch {
+	case existing.Status == domain.NotificationDeliveryStatusSending && claimOutcome == repository.NotificationDeliveryClaimOutcomeAttemptsExhausted:
+		updated, err = scanNotificationDelivery(tx.QueryRowContext(ctx, notificationDeliveryRecordFailureQuery,
+			existing.ID, existing.ClaimedBy, existing.ClaimedAt, domain.NotificationDeliveryStatusFailedExhausted, now, nil,
+			domain.NotificationDeliveryFailureCategoryRetryable, repository.NotificationDeliveryFinalClaimExpiredReason, nil))
+	case claimOutcome == repository.NotificationDeliveryClaimOutcomeCreatedClaimed || claimOutcome == repository.NotificationDeliveryClaimOutcomeRetryClaimed || claimOutcome == repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed:
+		updated, err = scanNotificationDelivery(tx.QueryRowContext(ctx, notificationDeliveryUpdateClaimQuery,
+			existing.ID, string(domain.NotificationDeliveryStatusSending), now, now.Add(claimDuration), claimOwner))
+	default:
 		return repository.NotificationDeliveryClaimResult{Delivery: existing, Outcome: claimOutcome}, nil
 	}
-
-	claimed, err := scanNotificationDelivery(tx.QueryRowContext(
-		ctx,
-		notificationDeliveryUpdateClaimQuery,
-		existing.ID,
-		string(domain.NotificationDeliveryStatusSending),
-		now,
-		now.Add(claimDuration),
-		claimOwner,
-	))
 	if err != nil {
 		return repository.NotificationDeliveryClaimResult{}, err
 	}
 	if commitErr := tx.Commit(); commitErr != nil {
 		return repository.NotificationDeliveryClaimResult{}, commitErr
 	}
-	return repository.NotificationDeliveryClaimResult{Delivery: claimed, Outcome: claimOutcome}, nil
+	return repository.NotificationDeliveryClaimResult{Delivery: updated, Outcome: claimOutcome}, nil
 }
 
 func (r *NotificationDeliveryRepository) ListRecoverable(ctx context.Context, input repository.NotificationDeliveryRecoverableScanInput) (result []domain.NotificationDelivery, err error) {

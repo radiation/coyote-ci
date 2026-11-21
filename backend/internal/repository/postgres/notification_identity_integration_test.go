@@ -21,6 +21,7 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/observability"
 	platformemail "github.com/radiation/coyote-ci/backend/internal/platform/email"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
 
@@ -360,6 +361,65 @@ func TestNotificationDeliveryRepository_AcquireConcurrentStaleClaimReclaimsOnce_
 	}
 	if winningSent.Outcome != repository.NotificationDeliveryUpdateOutcomeUpdated {
 		t.Fatalf("expected updated outcome for winning owner, got %q", winningSent.Outcome)
+	}
+}
+
+func TestNotificationDeliveryRepository_ConcurrentFinalClaimExpiry(t *testing.T) {
+	for _, backend := range []string{"memory", "postgres"} {
+		t.Run(backend, func(t *testing.T) {
+			ctx := context.Background()
+			var repo repository.NotificationDeliveryRepository = memory.NewNotificationDeliveryRepository()
+			buildID := uuid.NewString()
+			if backend == "postgres" {
+				db := openNotificationIntegrationDB(t)
+				t.Cleanup(func() { closeNotificationIntegrationDB(t, db) })
+				repo = NewNotificationDeliveryRepository(db)
+				buildID = createNotificationIntegrationBuild(t, db, ctx)
+			}
+			now := time.Date(2026, 7, 2, 13, 0, 0, 0, time.UTC)
+			input := repository.NotificationDeliveryClaimInput{
+				Delivery:   domain.NotificationDelivery{BuildID: buildID, EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:" + buildID, Recipient: "dev@example.com"},
+				ClaimOwner: "sender", Now: now, ClaimDuration: time.Minute, MaxAttempts: 1,
+			}
+			claim, err := repo.AcquireForDelivery(ctx, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input.ExistingOnly = true
+			input.ClaimOwner = "recovery"
+			input.Now = now.Add(time.Minute - time.Microsecond)
+			live, liveErr := repo.AcquireForDelivery(ctx, input)
+			if liveErr != nil || live.Outcome != repository.NotificationDeliveryClaimOutcomeClaimedByOther || live.Delivery.Status != domain.NotificationDeliveryStatusSending {
+				t.Fatalf("live final claim: %+v err=%v", live, liveErr)
+			}
+
+			start := make(chan struct{})
+			results := make(chan repository.NotificationDeliveryClaimResult, 2)
+			for _, delay := range []time.Duration{time.Minute, 2 * time.Minute} {
+				worker := input
+				worker.Now, worker.ClaimOwner = now.Add(delay), uuid.NewString()
+				go func() {
+					<-start
+					result, claimErr := repo.AcquireForDelivery(ctx, worker)
+					if claimErr != nil {
+						t.Errorf("recovery acquire: %v", claimErr)
+					}
+					results <- result
+				}()
+			}
+			close(start)
+			first, second := <-results, <-results
+			for _, result := range []repository.NotificationDeliveryClaimResult{first, second} {
+				delivery := result.Delivery
+				if result.Outcome != repository.NotificationDeliveryClaimOutcomeAttemptsExhausted || delivery.Status != domain.NotificationDeliveryStatusFailedExhausted || delivery.Attempts != 1 || !delivery.UpdatedAt.Equal(first.Delivery.UpdatedAt) || delivery.ClaimedBy != nil || delivery.ClaimedAt != nil || delivery.ClaimExpiresAt != nil || delivery.Validate() != nil {
+					t.Fatalf("expected one terminal transition, got %+v and %+v", first, second)
+				}
+			}
+			ack, ackErr := repo.MarkSent(ctx, repository.NotificationDeliveryMarkSentInput{DeliveryID: claim.Delivery.ID, ClaimOwner: "sender", ClaimedAt: now, SentAt: now.Add(3 * time.Minute)})
+			if ackErr != nil || ack.Outcome != repository.NotificationDeliveryUpdateOutcomeLostClaim || ack.Delivery.Status != domain.NotificationDeliveryStatusFailedExhausted {
+				t.Fatalf("stale acknowledgment: %+v err=%v", ack, ackErr)
+			}
+		})
 	}
 }
 

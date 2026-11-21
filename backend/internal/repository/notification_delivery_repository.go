@@ -13,6 +13,8 @@ var ErrNotificationDeliveryDuplicate = errors.New("notification delivery already
 
 type NotificationDeliveryClaimOutcome string
 
+const NotificationDeliveryFinalClaimExpiredReason = "final delivery claim expired"
+
 const (
 	NotificationDeliveryClaimOutcomeCreatedClaimed      NotificationDeliveryClaimOutcome = "created_claimed"
 	NotificationDeliveryClaimOutcomeRetryClaimed        NotificationDeliveryClaimOutcome = "retry_claimed"
@@ -106,13 +108,13 @@ func NotificationDeliveryClaimOutcomeFromExisting(delivery domain.NotificationDe
 	case domain.NotificationDeliveryStatusFailedExhausted:
 		return NotificationDeliveryClaimOutcomeAttemptsExhausted
 	case domain.NotificationDeliveryStatusSending:
+		if delivery.ClaimExpiresAt == nil || now.Before(*delivery.ClaimExpiresAt) {
+			return NotificationDeliveryClaimOutcomeClaimedByOther
+		}
 		if delivery.Attempts >= delivery.MaxAttempts {
 			return NotificationDeliveryClaimOutcomeAttemptsExhausted
 		}
-		if delivery.ClaimExpiresAt != nil && !now.UTC().Before(delivery.ClaimExpiresAt.UTC()) {
-			return NotificationDeliveryClaimOutcomeStaleClaimReclaimed
-		}
-		return NotificationDeliveryClaimOutcomeClaimedByOther
+		return NotificationDeliveryClaimOutcomeStaleClaimReclaimed
 	case domain.NotificationDeliveryStatusRetryWaiting:
 		if delivery.NextAttemptAt != nil && now.UTC().Before(delivery.NextAttemptAt.UTC()) {
 			return NotificationDeliveryClaimOutcomeRetryNotDue
