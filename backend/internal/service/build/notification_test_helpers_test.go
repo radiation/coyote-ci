@@ -410,7 +410,7 @@ func newPersonalCommitAuthorNotificationFixture(t *testing.T, opts personalCommi
 		mustCreateNotificationSubscription(t, subscriptionRepo, sharedSlackTarget.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
 	}
 
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{
 		Enabled:          true,
 		Sender:           emailSender,
 		SlackSender:      slackSender,
@@ -423,6 +423,7 @@ func newPersonalCommitAuthorNotificationFixture(t *testing.T, opts personalCommi
 		WorkspaceRepo:    workspaceRepo,
 		PublicBaseURL:    "https://ci.example.com/",
 	})
+
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}

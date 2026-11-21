@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -95,6 +94,9 @@ const notificationDeliverySelectByRecipientQuery = `
 
 const notificationDeliveryListRecoverableQuery = `
 	WITH recoverable AS (
+		SELECT ` + notificationDeliveryColumns + `, created_at AS recover_at
+		FROM notification_deliveries WHERE status = 'pending'
+		UNION ALL
 		SELECT ` + notificationDeliveryColumns + `,
 			next_attempt_at AS recover_at
 		FROM notification_deliveries
@@ -172,44 +174,46 @@ func (r *NotificationDeliveryRepository) AcquireForDelivery(ctx context.Context,
 		_ = tx.Rollback()
 	}()
 
-	if strings.TrimSpace(delivery.ID) == "" {
-		delivery.ID = uuid.NewString()
-	}
-	if delivery.CreatedAt.IsZero() {
-		delivery.CreatedAt = now
-	}
-	claimExpiresAt := now.Add(claimDuration)
-	created, err := scanNotificationDelivery(tx.QueryRowContext(
-		ctx,
-		notificationDeliveryInsertClaimQuery,
-		delivery.ID,
-		delivery.BuildID,
-		string(delivery.EventType),
-		string(delivery.Transport),
-		string(delivery.DestinationKind),
-		delivery.DestinationKey,
-		nullableOptionalStringLocal(delivery.NotificationTargetID),
-		nullableOptionalStringLocal(delivery.RecipientUserID),
-		nullableOptionalStringLocal(delivery.SlackWorkspaceIntegrationID),
-		delivery.Recipient,
-		string(domain.NotificationDeliveryStatusSending),
-		1,
-		input.MaxAttempts,
-		now,
-		now,
-		claimExpiresAt,
-		claimOwner,
-		delivery.CreatedAt,
-		now,
-	))
-	if err == nil {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return repository.NotificationDeliveryClaimResult{}, commitErr
+	if !input.ExistingOnly {
+		if strings.TrimSpace(delivery.ID) == "" {
+			delivery.ID = uuid.NewString()
 		}
-		return repository.NotificationDeliveryClaimResult{Delivery: created, Outcome: repository.NotificationDeliveryClaimOutcomeCreatedClaimed}, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return repository.NotificationDeliveryClaimResult{}, err
+		if delivery.CreatedAt.IsZero() {
+			delivery.CreatedAt = now
+		}
+		claimExpiresAt := now.Add(claimDuration)
+		created, insertErr := scanNotificationDelivery(tx.QueryRowContext(
+			ctx,
+			notificationDeliveryInsertClaimQuery,
+			delivery.ID,
+			delivery.BuildID,
+			string(delivery.EventType),
+			string(delivery.Transport),
+			string(delivery.DestinationKind),
+			delivery.DestinationKey,
+			nullableOptionalStringLocal(delivery.NotificationTargetID),
+			nullableOptionalStringLocal(delivery.RecipientUserID),
+			nullableOptionalStringLocal(delivery.SlackWorkspaceIntegrationID),
+			delivery.Recipient,
+			string(domain.NotificationDeliveryStatusSending),
+			1,
+			input.MaxAttempts,
+			now,
+			now,
+			claimExpiresAt,
+			claimOwner,
+			delivery.CreatedAt,
+			now,
+		))
+		if insertErr == nil {
+			if commitErr := tx.Commit(); commitErr != nil {
+				return repository.NotificationDeliveryClaimResult{}, commitErr
+			}
+			return repository.NotificationDeliveryClaimResult{Delivery: created, Outcome: repository.NotificationDeliveryClaimOutcomeCreatedClaimed}, nil
+		}
+		if !errors.Is(insertErr, sql.ErrNoRows) {
+			return repository.NotificationDeliveryClaimResult{}, insertErr
+		}
 	}
 
 	existing, err := scanNotificationDelivery(tx.QueryRowContext(
@@ -222,7 +226,7 @@ func (r *NotificationDeliveryRepository) AcquireForDelivery(ctx context.Context,
 	))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return repository.NotificationDeliveryClaimResult{}, fmt.Errorf("notification delivery acquire conflict did not resolve to an existing row")
+			return repository.NotificationDeliveryClaimResult{}, repository.ErrNotificationDeliveryNotFound
 		}
 		return repository.NotificationDeliveryClaimResult{}, err
 	}
@@ -238,7 +242,7 @@ func (r *NotificationDeliveryRepository) AcquireForDelivery(ctx context.Context,
 		existing.ID,
 		string(domain.NotificationDeliveryStatusSending),
 		now,
-		claimExpiresAt,
+		now.Add(claimDuration),
 		claimOwner,
 	))
 	if err != nil {

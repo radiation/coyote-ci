@@ -25,6 +25,7 @@ const (
 )
 
 type NotificationDeliveryClaimInput struct {
+	ExistingOnly  bool
 	Delivery      domain.NotificationDelivery
 	ClaimOwner    string
 	Now           time.Time
@@ -80,6 +81,20 @@ type NotificationDeliveryRepository interface {
 	RecordPermanentFailure(ctx context.Context, input NotificationDeliveryRecordFailureInput) (NotificationDeliveryUpdateResult, error)
 	RecordExhaustedFailure(ctx context.Context, input NotificationDeliveryRecordFailureInput) (NotificationDeliveryUpdateResult, error)
 	GetByBuildEventRecipient(ctx context.Context, buildID string, eventType domain.NotificationEventType, recipient string) (domain.NotificationDelivery, error)
+}
+
+type NotificationPlanningRepository interface {
+	ListUnplannedBuildIDs(ctx context.Context, after string, limit int) ([]string, error)
+	CommitNotificationPlan(ctx context.Context, buildID string, status domain.BuildStatus, deliveries []domain.NotificationDelivery) (bool, error)
+}
+
+func ValidatePlannedNotification(buildID string, status domain.BuildStatus, delivery domain.NotificationDelivery) error {
+	eventMatches := status == domain.BuildStatusSuccess && delivery.EventType == domain.NotificationEventTypeBuildSucceeded ||
+		status == domain.BuildStatusFailed && delivery.EventType == domain.NotificationEventTypeBuildFailed
+	if !eventMatches || delivery.BuildID != buildID || delivery.Status != domain.NotificationDeliveryStatusPending || delivery.Attempts != 0 || delivery.MaxAttempts <= 0 {
+		return errors.New("notification plan requires an unattempted delivery for the terminal build event")
+	}
+	return delivery.Validate()
 }
 
 func NotificationDeliveryClaimOutcomeFromExisting(delivery domain.NotificationDelivery, now time.Time) NotificationDeliveryClaimOutcome {

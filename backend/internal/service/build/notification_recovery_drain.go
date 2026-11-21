@@ -42,11 +42,12 @@ type NotificationRecoveryIterationResult struct {
 }
 
 type NotificationRecoveryDrain struct {
-	notifier  *BuildNotificationService
-	interval  time.Duration
-	batchSize int
-	now       func() time.Time
-	mu        sync.Mutex
+	notifier     *BuildNotificationService
+	interval     time.Duration
+	batchSize    int
+	now          func() time.Time
+	mu           sync.Mutex
+	afterBuildID string
 }
 
 func NewNotificationRecoveryDrain(cfg NotificationRecoveryDrainConfig) (*NotificationRecoveryDrain, error) {
@@ -58,6 +59,9 @@ func NewNotificationRecoveryDrain(cfg NotificationRecoveryDrainConfig) (*Notific
 	}
 	if cfg.Notifier.buildRepo == nil {
 		return nil, errors.New("notification recovery drain requires a build repository")
+	}
+	if cfg.Notifier.plans == nil {
+		return nil, errors.New("notification recovery drain requires a planning repository")
 	}
 	if cfg.Interval <= 0 {
 		return nil, errors.New("notification recovery drain interval must be positive")
@@ -97,9 +101,10 @@ func (d *NotificationRecoveryDrain) RunIteration(ctx context.Context) (Notificat
 	defer d.mu.Unlock()
 
 	now := d.now().UTC()
+	planningErr := d.planUnfinished(ctx)
 	candidates, err := d.notifier.deliveryRepo.ListRecoverable(ctx, repository.NotificationDeliveryRecoverableScanInput{Now: now, Limit: d.batchSize})
 	if err != nil {
-		return NotificationRecoveryIterationResult{}, err
+		return NotificationRecoveryIterationResult{}, errors.Join(planningErr, err)
 	}
 
 	result := NotificationRecoveryIterationResult{Scanned: len(candidates)}
@@ -120,7 +125,31 @@ func (d *NotificationRecoveryDrain) RunIteration(ctx context.Context) (Notificat
 	if result.Scanned > 0 || result.Errors > 0 {
 		log.Printf("notification recovery iteration completed: scanned=%d claim_acquired=%d retry_claimed=%d stale_claim_reclaimed=%d skipped_contention=%d skipped_not_due=%d skipped_terminal=%d skipped=%d sent=%d retry_scheduled=%d permanently_failed=%d attempts_exhausted=%d lost_claim=%d rehydration_failed=%d errors=%d", result.Scanned, result.ClaimAcquired, result.RetryClaimed, result.StaleClaimReclaimed, result.SkippedContention, result.SkippedNotDue, result.SkippedTerminal, result.Skipped, result.Sent, result.RetryScheduled, result.PermanentlyFailed, result.AttemptsExhausted, result.LostClaim, result.RehydrationFailed, result.Errors)
 	}
-	return result, errors.Join(iterationErrs...)
+	return result, errors.Join(planningErr, errors.Join(iterationErrs...))
+}
+
+func (d *NotificationRecoveryDrain) planUnfinished(ctx context.Context) error {
+	ids, err := d.notifier.plans.ListUnplannedBuildIDs(ctx, d.afterBuildID, d.batchSize)
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for _, id := range ids {
+		d.afterBuildID = id
+		build, lookupErr := d.notifier.buildRepo.GetByID(ctx, id)
+		if lookupErr == nil {
+			if event, ok := buildStatusNotificationEventType(build.Status); ok {
+				_, lookupErr = d.notifier.planTerminalBuild(ctx, build, event)
+			}
+		}
+		if lookupErr != nil {
+			failures = append(failures, fmt.Errorf("plan build %s: %w", id, lookupErr))
+		}
+	}
+	if len(ids) < d.batchSize {
+		d.afterBuildID = ""
+	}
+	return errors.Join(failures...)
 }
 
 func (d *NotificationRecoveryDrain) applyAttemptResult(result *NotificationRecoveryIterationResult, attempt notificationRecoveryAttemptResult) {

@@ -21,6 +21,19 @@ type stubProjectRepository struct {
 	project domain.Project
 }
 
+func TestNotificationRecoveryEmailSender(t *testing.T) {
+	valid := config.Config{SMTPHost: "localhost", SMTPPort: "1025", SMTPFromAddress: "alerts@example.com"}
+	if sender, err := notificationRecoveryEmailSender(valid); err != nil || sender == nil {
+		t.Fatalf("disabled planning should retain SMTP: %v", err)
+	}
+	if sender, err := notificationRecoveryEmailSender(config.Config{}); err != nil || sender != nil {
+		t.Fatalf("disabled unconfigured SMTP: %v %v", sender, err)
+	}
+	if _, err := notificationRecoveryEmailSender(config.Config{EmailNotificationsEnabled: true}); err == nil {
+		t.Fatal("enabled invalid SMTP must fail startup")
+	}
+}
+
 func TestDatabaseConfigError(t *testing.T) {
 	if got, want := databaseConfigError(errors.New("mounted URL is empty")), "failed to resolve database configuration: mounted URL is empty"; got != want {
 		t.Fatalf("database configuration error=%q, want %q", got, want)

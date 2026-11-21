@@ -18,18 +18,6 @@ func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context,
 	var sendErrs []error
 
 	for _, destination := range destinations {
-		if s.deliveryRepo == nil {
-			content, renderErr := s.renderNotificationContent(ctx, build, destination.transport)
-			if renderErr != nil {
-				sendErrs = append(sendErrs, renderErr)
-				continue
-			}
-			if sendErr := s.sendDestination(ctx, destination, content.subject, content.body, content.slackText, content.personalSlackText); sendErr != nil {
-				sendErrs = append(sendErrs, sendErr)
-			}
-			continue
-		}
-
 		var delivery domain.NotificationDelivery
 		var shouldSend bool
 		var err error
@@ -40,7 +28,14 @@ func (s *BuildNotificationService) sendTerminalNotification(ctx context.Context,
 		if !shouldSend {
 			continue
 		}
-		content, renderErr := s.renderNotificationContent(ctx, build, destination.transport)
+		var content notificationContent
+		var renderErr error
+		if destination.notificationTargetID != nil || destination.slackWorkspaceIntegrationID != nil {
+			destination, renderErr = s.rehydrateDestination(ctx, destination.deliveryIdentity(build.ID, eventType))
+		}
+		if renderErr == nil {
+			content, renderErr = s.renderNotificationContent(ctx, build, destination.transport)
+		}
 		if renderErr != nil {
 			if errors.Is(renderErr, context.Canceled) || errors.Is(renderErr, context.DeadlineExceeded) {
 				return renderErr
@@ -87,7 +82,12 @@ func (s *BuildNotificationService) sendDestination(ctx context.Context, destinat
 }
 
 func (s *BuildNotificationService) prepareDelivery(ctx context.Context, buildID string, eventType domain.NotificationEventType, destination notificationDestination) (domain.NotificationDelivery, bool, error) {
-	result, shouldSend, err := s.acquireDelivery(ctx, domain.NotificationDelivery{
+	result, shouldSend, err := s.acquireDelivery(ctx, destination.deliveryIdentity(buildID, eventType), notificationRecoveryReasonInline)
+	return result.Delivery, shouldSend, err
+}
+
+func (destination notificationDestination) deliveryIdentity(buildID string, eventType domain.NotificationEventType) domain.NotificationDelivery {
+	return domain.NotificationDelivery{
 		BuildID:                     buildID,
 		EventType:                   eventType,
 		Transport:                   destination.transport,
@@ -97,15 +97,12 @@ func (s *BuildNotificationService) prepareDelivery(ctx context.Context, buildID 
 		RecipientUserID:             destination.recipientUserID,
 		SlackWorkspaceIntegrationID: destination.slackWorkspaceIntegrationID,
 		Recipient:                   destination.recipient,
-	}, notificationRecoveryReasonInline)
-	if err != nil {
-		return domain.NotificationDelivery{}, false, err
 	}
-	return result.Delivery, shouldSend, nil
 }
 
 func (s *BuildNotificationService) acquireDelivery(ctx context.Context, delivery domain.NotificationDelivery, recoveryReason string) (repository.NotificationDeliveryClaimResult, bool, error) {
 	result, err := s.deliveryRepo.AcquireForDelivery(ctx, repository.NotificationDeliveryClaimInput{
+		ExistingOnly: true,
 		Delivery: domain.NotificationDelivery{
 			BuildID:                     delivery.BuildID,
 			EventType:                   delivery.EventType,

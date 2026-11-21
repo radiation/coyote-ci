@@ -35,7 +35,10 @@ func (r *NotificationDeliveryRepository) Create(ctx context.Context, delivery do
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.createLocked(delivery)
+}
 
+func (r *NotificationDeliveryRepository) createLocked(delivery domain.NotificationDelivery) (domain.NotificationDelivery, error) {
 	delivery = delivery.Normalize()
 	if err := delivery.ValidateIdentity(); err != nil {
 		return domain.NotificationDelivery{}, err
@@ -63,13 +66,17 @@ func (r *NotificationDeliveryRepository) Create(ctx context.Context, delivery do
 	if err := delivery.Validate(); err != nil {
 		return domain.NotificationDelivery{}, err
 	}
+	r.storeCreatedDelivery(key, delivery)
+	return delivery, nil
+}
+
+func (r *NotificationDeliveryRepository) storeCreatedDelivery(key string, delivery domain.NotificationDelivery) {
 	r.deliveries[delivery.ID] = delivery
 	r.index[key] = delivery.ID
 	recipientKey := notificationDeliveryRecipientKey(delivery.BuildID, delivery.EventType, delivery.Recipient)
 	if recipientKey != "||" {
 		r.recipient[recipientKey] = delivery.ID
 	}
-	return delivery, nil
 }
 
 func (r *NotificationDeliveryRepository) AcquireForDelivery(ctx context.Context, input repository.NotificationDeliveryClaimInput) (repository.NotificationDeliveryClaimResult, error) {
@@ -93,6 +100,9 @@ func (r *NotificationDeliveryRepository) AcquireForDelivery(ctx context.Context,
 			return repository.NotificationDeliveryClaimResult{Delivery: claimed, Outcome: outcome}, nil
 		}
 		return repository.NotificationDeliveryClaimResult{Delivery: claimed, Outcome: outcome}, nil
+	}
+	if input.ExistingOnly {
+		return repository.NotificationDeliveryClaimResult{}, repository.ErrNotificationDeliveryNotFound
 	}
 
 	if strings.TrimSpace(delivery.ID) == "" {
@@ -445,6 +455,8 @@ func trimMemoryNotificationOptionalString(value *string) *string {
 func notificationDeliveryRecoverableDueAt(delivery domain.NotificationDelivery, now time.Time) (time.Time, bool) {
 	delivery = delivery.Normalize()
 	switch delivery.Status {
+	case domain.NotificationDeliveryStatusPending:
+		return delivery.CreatedAt, true
 	case domain.NotificationDeliveryStatusRetryWaiting:
 		if delivery.NextAttemptAt == nil || delivery.NextAttemptAt.After(now) {
 			return time.Time{}, false

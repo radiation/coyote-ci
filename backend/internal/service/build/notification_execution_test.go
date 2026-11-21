@@ -16,7 +16,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 	t.Run("records sent delivery state", func(t *testing.T) {
 		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 		sender := &recordingEmailSender{}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -39,7 +39,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 	t.Run("records failed delivery state", func(t *testing.T) {
 		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 		sender := &recordingEmailSender{err: errors.New("smtp unavailable")}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -65,7 +65,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 	t.Run("duplicate terminal hook does not send twice", func(t *testing.T) {
 		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 		sender := &recordingEmailSender{}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -100,7 +100,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 		}
 
 		sender := &recordingEmailSender{}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -124,7 +124,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 		repo := &scriptedNotificationDeliveryRepo{createFunc: func(context.Context, domain.NotificationDelivery) (domain.NotificationDelivery, error) {
 			return domain.NotificationDelivery{}, errors.New("create failed")
 		}}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -139,7 +139,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 		}, getFunc: func(context.Context, string, domain.NotificationEventType, string) (domain.NotificationDelivery, error) {
 			return domain.NotificationDelivery{}, errors.New("lookup failed")
 		}}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -170,7 +170,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 			}
 			return delivery, nil
 		}}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -194,7 +194,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 			}
 			return domain.NotificationDelivery{}, errors.New("write failed failed")
 		}}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, DeliveryRepo: repo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -211,7 +211,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_ExecutionPaths(t *testing.
 	t.Run("multiple recipients create separate delivery records", func(t *testing.T) {
 		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 		sender := &recordingEmailSender{}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com, qa@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com, qa@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -241,7 +241,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureDoesNotBlockEm
 	slackTarget := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
 	mustCreateNotificationSubscription(t, subscriptionRepo, emailTarget.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
 	mustCreateNotificationSubscription(t, subscriptionRepo, slackTarget.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Sender: emailSender, SlackSender: slackSender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Sender: emailSender, SlackSender: slackSender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureEnrichmentErro
 	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
 	projectID := "project-1"
 	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, BuildRepo: &fakeBuildRepository{stepsErr: errors.New("db unavailable")}, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, BuildRepo: &fakeBuildRepository{stepsErr: errors.New("db unavailable")}, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackSuccessEnrichmentErro
 	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
 	projectID := "project-1"
 	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildSucceeded, true)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, ArtifactRepo: &fakeArtifactRepository{listErr: errors.New("storage unavailable")}, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, ArtifactRepo: &fakeArtifactRepository{listErr: errors.New("storage unavailable")}, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureSanitizedError
 	slackTarget := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/"+secretToken, true)
 	mustCreateNotificationSubscription(t, subscriptionRepo, emailTarget.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
 	mustCreateNotificationSubscription(t, subscriptionRepo, slackTarget.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Sender: emailSender, SlackSender: slackSender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Sender: emailSender, SlackSender: slackSender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}

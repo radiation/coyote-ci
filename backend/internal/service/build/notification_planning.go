@@ -13,6 +13,32 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
+func (s *BuildNotificationService) planTerminalBuild(ctx context.Context, build domain.Build, eventType domain.NotificationEventType) ([]notificationDestination, error) {
+	if s.plans == nil || s.deliveryRepo == nil {
+		return nil, errors.New("notification planning requires a planning repository and delivery ledger")
+	}
+	var destinations []notificationDestination
+	if s.enabled {
+		var err error
+		destinations, err = s.resolveTerminalDestinations(ctx, build, eventType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	deliveries := make([]domain.NotificationDelivery, 0, len(destinations))
+	for _, destination := range destinations {
+		delivery := destination.deliveryIdentity(build.ID, eventType)
+		delivery.Status = domain.NotificationDeliveryStatusPending
+		delivery.MaxAttempts = s.retryPolicy.maxAttempts
+		deliveries = append(deliveries, delivery)
+	}
+	committed, err := s.plans.CommitNotificationPlan(ctx, build.ID, build.Status, deliveries)
+	if err != nil || !committed {
+		return nil, err
+	}
+	return destinations, nil
+}
+
 func (s *BuildNotificationService) resolveTerminalDestinations(ctx context.Context, build domain.Build, eventType domain.NotificationEventType) ([]notificationDestination, error) {
 	var destinations []notificationDestination
 	if s.subscriptionRepo == nil {

@@ -69,6 +69,22 @@ func newRepositoryAwareCheckoutResolver(connections checkoutResolverConnectionRe
 	})
 }
 
+func notificationRecoveryEmailSender(cfg config.Config) (platformemail.Sender, error) {
+	sender, err := platformemail.NewSender(platformemail.Config{
+		Enabled:     true,
+		Host:        cfg.SMTPHost,
+		Port:        cfg.SMTPPort,
+		Username:    cfg.SMTPUsername,
+		Password:    cfg.SMTPPassword,
+		FromAddress: cfg.SMTPFromAddress,
+	})
+	if err != nil && !cfg.EmailNotificationsEnabled {
+		log.Printf("email planning disabled and SMTP transport unavailable for committed deliveries: %v", err)
+		return nil, nil
+	}
+	return sender, err
+}
+
 // @title Coyote CI API
 // @version 0.1
 // @description HTTP API for Coyote CI control-plane workflows.
@@ -77,14 +93,7 @@ func newRepositoryAwareCheckoutResolver(connections checkoutResolverConnectionRe
 
 func main() {
 	cfg := config.Load()
-	emailSender, emailSenderErr := platformemail.NewSender(platformemail.Config{
-		Enabled:     cfg.EmailNotificationsEnabled,
-		Host:        cfg.SMTPHost,
-		Port:        cfg.SMTPPort,
-		Username:    cfg.SMTPUsername,
-		Password:    cfg.SMTPPassword,
-		FromAddress: cfg.SMTPFromAddress,
-	})
+	emailSender, emailSenderErr := notificationRecoveryEmailSender(cfg)
 	if emailSenderErr != nil {
 		log.Fatalf("failed to configure email sender: %v", emailSenderErr)
 	}
@@ -160,6 +169,7 @@ func main() {
 		JobRepo:          jobRepo,
 		ProjectRepo:      projectRepo,
 		DeliveryRepo:     notificationDeliveryRepo,
+		PlanningRepo:     notificationDeliveryRepo,
 		SubscriptionRepo: notificationSubscriptionRepo,
 		UserRepo:         userRepo,
 		PreferenceRepo:   notificationPreferenceRepo,

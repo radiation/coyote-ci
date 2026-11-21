@@ -357,6 +357,9 @@ func (s *BuildNotificationService) rehydrateSlackDMDestination(ctx context.Conte
 }
 
 func candidateRecoveryReason(status domain.NotificationDeliveryStatus) string {
+	if status == domain.NotificationDeliveryStatusPending {
+		return "pending"
+	}
 	if status == domain.NotificationDeliveryStatusSending {
 		return notificationRecoveryReasonStaleClaim
 	}
