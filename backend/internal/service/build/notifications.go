@@ -30,6 +30,7 @@ type BuildNotificationService struct {
 	jobRepo           notificationJobRepository
 	projectRepo       notificationProjectRepository
 	deliveryRepo      notificationDeliveryRepository
+	plans             repository.NotificationPlanningRepository
 	subscriptionRepo  notificationSubscriptionRepository
 	userRepo          notificationUserRepository
 	preferenceRepo    notificationPreferenceRepository
@@ -103,6 +104,7 @@ type BuildNotificationConfig struct {
 	JobRepo          repository.JobRepository
 	ProjectRepo      repository.ProjectRepository
 	DeliveryRepo     repository.NotificationDeliveryRepository
+	PlanningRepo     repository.NotificationPlanningRepository
 	SubscriptionRepo repository.NotificationSubscriptionRepository
 	UserRepo         repository.UserRepository
 	PreferenceRepo   repository.UserNotificationPreferenceRepository
@@ -157,6 +159,7 @@ func NewBuildNotificationService(cfg BuildNotificationConfig) (*BuildNotificatio
 		jobRepo:           cfg.JobRepo,
 		projectRepo:       cfg.ProjectRepo,
 		deliveryRepo:      cfg.DeliveryRepo,
+		plans:             cfg.PlanningRepo,
 		subscriptionRepo:  cfg.SubscriptionRepo,
 		userRepo:          cfg.UserRepo,
 		preferenceRepo:    cfg.PreferenceRepo,
@@ -175,35 +178,15 @@ func (s *BuildNotificationService) NotifyTerminalBuild(ctx context.Context, buil
 	if s == nil {
 		return nil
 	}
-	if !s.enabled {
-		log.Printf("build notification skipped: build_id=%s status=%s reason=disabled", build.ID, build.Status)
-		return nil
-	}
-	if !shouldNotifyBuildStatus(build.Status) {
-		return nil
-	}
-
 	eventType, ok := buildStatusNotificationEventType(build.Status)
 	if !ok {
 		return nil
 	}
-	destinations, err := s.resolveTerminalDestinations(ctx, build, eventType)
-	if err != nil {
+	destinations, err := s.planTerminalBuild(ctx, build, eventType)
+	if err != nil || len(destinations) == 0 {
 		return err
 	}
-	if len(destinations) == 0 {
-		log.Printf("build notification skipped: build_id=%s status=%s reason=no_recipients", build.ID, build.Status)
-		return nil
-	}
-
-	log.Printf("build notification sending: build_id=%s status=%s recipients=%d", build.ID, build.Status, len(destinations))
-	sendErr := s.sendTerminalNotification(ctx, build, eventType, destinations)
-	if sendErr != nil {
-		log.Printf("build notification send failed: build_id=%s status=%s err=%v", build.ID, build.Status, sendErr)
-		return sendErr
-	}
-	log.Printf("build notification sent: build_id=%s status=%s recipients=%d", build.ID, build.Status, len(destinations))
-	return nil
+	return s.sendTerminalNotification(ctx, build, eventType, destinations)
 }
 
 func (s *BuildNotificationService) SendSampleBuildFailure(ctx context.Context) ([]string, error) {

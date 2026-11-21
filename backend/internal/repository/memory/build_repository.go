@@ -16,6 +16,7 @@ import (
 type BuildRepository struct {
 	mu                  sync.RWMutex
 	builds              map[string]domain.Build
+	notificationPlans   map[string]bool
 	buildSteps          map[string][]domain.BuildStep
 	nextAnonymousNumber int64
 	nextNumberByJob     map[string]int64
@@ -24,6 +25,7 @@ type BuildRepository struct {
 func NewBuildRepository() *BuildRepository {
 	return &BuildRepository{
 		builds:              make(map[string]domain.Build),
+		notificationPlans:   make(map[string]bool),
 		buildSteps:          make(map[string][]domain.BuildStep),
 		nextAnonymousNumber: 1,
 		nextNumberByJob:     make(map[string]int64),

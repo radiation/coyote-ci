@@ -13,6 +13,32 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
+func (s *BuildNotificationService) planTerminalBuild(ctx context.Context, build domain.Build, eventType domain.NotificationEventType) ([]notificationDestination, error) {
+	if s.plans == nil || s.deliveryRepo == nil {
+		return nil, errors.New("notification planning requires a planning repository and delivery ledger")
+	}
+	var destinations []notificationDestination
+	if s.enabled {
+		var err error
+		destinations, err = s.resolveTerminalDestinations(ctx, build, eventType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	deliveries := make([]domain.NotificationDelivery, 0, len(destinations))
+	for _, destination := range destinations {
+		delivery := destination.deliveryIdentity(build.ID, eventType)
+		delivery.Status = domain.NotificationDeliveryStatusPending
+		delivery.MaxAttempts = s.retryPolicy.maxAttempts
+		deliveries = append(deliveries, delivery)
+	}
+	committed, err := s.plans.CommitNotificationPlan(ctx, build.ID, build.Status, deliveries)
+	if err != nil || !committed {
+		return nil, err
+	}
+	return destinations, nil
+}
+
 func (s *BuildNotificationService) resolveTerminalDestinations(ctx context.Context, build domain.Build, eventType domain.NotificationEventType) ([]notificationDestination, error) {
 	var destinations []notificationDestination
 	if s.subscriptionRepo == nil {
@@ -194,22 +220,7 @@ func (s *BuildNotificationService) resolveCommitAuthorSlackDestination(ctx conte
 
 func (s *BuildNotificationService) resolveConfiguredEmailDestination(ctx context.Context, recipient string) (notificationDestination, error) {
 	if s.subscriptionRepo == nil {
-		parsedRecipient, ok := parseNotificationRecipient(&recipient)
-		if !ok {
-			trimmedRecipient := strings.TrimSpace(recipient)
-			return notificationDestination{}, fmt.Errorf("invalid email notification recipient %q", trimmedRecipient)
-		}
-		parsedAddress, err := mail.ParseAddress(parsedRecipient)
-		if err != nil {
-			return notificationDestination{}, fmt.Errorf("invalid email notification recipient %q: %w", strings.TrimSpace(recipient), err)
-		}
-		return notificationDestination{
-			transport:       domain.NotificationTransportEmail,
-			destinationKind: domain.NotificationDestinationKindSharedTarget,
-			destinationKey:  "email-config:" + strings.ToLower(strings.TrimSpace(parsedAddress.Address)),
-			recipient:       parsedRecipient,
-			emailRecipient:  parsedRecipient,
-		}, nil
+		return configuredEmailDestination(recipient)
 	}
 	now := s.now().UTC()
 	target, err := s.subscriptionRepo.EnsureConfigEmailTarget(ctx, repository.EnsureConfigNotificationEmailTargetInput{
@@ -222,6 +233,20 @@ func (s *BuildNotificationService) resolveConfiguredEmailDestination(ctx context
 		return notificationDestination{}, err
 	}
 	return notificationTargetDestination(target)
+}
+
+func configuredEmailDestination(recipient string) (notificationDestination, error) {
+	address, err := mail.ParseAddress(strings.TrimSpace(recipient))
+	if err != nil {
+		return notificationDestination{}, fmt.Errorf("invalid email notification recipient %q: %w", strings.TrimSpace(recipient), err)
+	}
+	return notificationDestination{
+		transport:       domain.NotificationTransportEmail,
+		destinationKind: domain.NotificationDestinationKindSharedTarget,
+		destinationKey:  "email-config:" + strings.ToLower(strings.TrimSpace(address.Address)),
+		recipient:       address.String(),
+		emailRecipient:  address.String(),
+	}, nil
 }
 
 func dedupeDestinations(destinations []notificationDestination) []notificationDestination {

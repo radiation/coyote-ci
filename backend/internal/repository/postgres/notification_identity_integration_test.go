@@ -26,7 +26,7 @@ import (
 
 func TestNotificationDeliveryRepository_AcquireConcurrentIdenticalCreatesOneRow_Postgres(t *testing.T) {
 	db := openNotificationIntegrationDB(t)
-	defer closeNotificationIntegrationDB(t, db)
+	t.Cleanup(func() { closeNotificationIntegrationDB(t, db) })
 
 	ctx := context.Background()
 	buildID := createNotificationIntegrationBuild(t, db, ctx)
@@ -138,7 +138,7 @@ func TestNotificationDeliveryRepository_AcquireConcurrentIdenticalCreatesOneRow_
 
 func TestNotificationDeliveryRepository_AcquireConcurrentDueRetryClaimsOnce_Postgres(t *testing.T) {
 	db := openNotificationIntegrationDB(t)
-	defer closeNotificationIntegrationDB(t, db)
+	t.Cleanup(func() { closeNotificationIntegrationDB(t, db) })
 
 	ctx := context.Background()
 	buildID := createNotificationIntegrationBuild(t, db, ctx)
@@ -233,7 +233,7 @@ func TestNotificationDeliveryRepository_AcquireConcurrentDueRetryClaimsOnce_Post
 
 func TestNotificationDeliveryRepository_AcquireConcurrentStaleClaimReclaimsOnce_Postgres(t *testing.T) {
 	db := openNotificationIntegrationDB(t)
-	defer closeNotificationIntegrationDB(t, db)
+	t.Cleanup(func() { closeNotificationIntegrationDB(t, db) })
 
 	ctx := context.Background()
 	buildID := createNotificationIntegrationBuild(t, db, ctx)
@@ -365,7 +365,7 @@ func TestNotificationDeliveryRepository_AcquireConcurrentStaleClaimReclaimsOnce_
 
 func TestNotificationDeliveryRepository_ListRecoverable_Postgres(t *testing.T) {
 	db := openNotificationIntegrationDB(t)
-	defer closeNotificationIntegrationDB(t, db)
+	t.Cleanup(func() { closeNotificationIntegrationDB(t, db) })
 
 	ctx := context.Background()
 	buildID := createNotificationIntegrationBuild(t, db, ctx)
@@ -373,6 +373,7 @@ func TestNotificationDeliveryRepository_ListRecoverable_Postgres(t *testing.T) {
 	now := time.Date(2026, 7, 2, 14, 0, 0, 0, time.UTC)
 	retryDueA := uuid.NewString()
 	retryDueB := uuid.NewString()
+	pendingID := uuid.NewString()
 	retryFuture := uuid.NewString()
 	staleClaim := uuid.NewString()
 	activeClaim := uuid.NewString()
@@ -396,14 +397,15 @@ func TestNotificationDeliveryRepository_ListRecoverable_Postgres(t *testing.T) {
 		($12, $7, 'build_failed', 'email', 'shared_target', $13, $14, 'retry_waiting', 1, 3, $8, $15, NULL, NULL, NULL, 'retryable', 'email_send_failed', $9, $9, NULL),
 		($16, $7, 'build_failed', 'email', 'shared_target', $17, $18, 'sending', 1, 3, $19, NULL, $19, $20, 'worker-a', NULL, NULL, $9, $9, NULL),
 		($21, $7, 'build_failed', 'email', 'shared_target', $22, $23, 'sending', 1, 3, $19, NULL, $19, $24, 'worker-a', NULL, NULL, $9, $9, NULL),
-		($25, $7, 'build_failed', 'email', 'shared_target', $26, $27, 'sent', 1, 1, $8, NULL, NULL, NULL, NULL, NULL, NULL, $9, $9, $8)
+		($25, $7, 'build_failed', 'email', 'shared_target', $26, $27, 'sent', 1, 1, $8, NULL, NULL, NULL, NULL, NULL, NULL, $9, $9, $8),
+		($28, $7, 'build_failed', 'email', 'shared_target', 'email-target:g', 'g@example.com', 'pending', 0, 3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, $29, $29, NULL)
 	`, retryDueA, "email-target:a", "a@example.com", retryDueAtA,
-		retryDueB, "email-target:b", buildID, createdAt,
+		retryDueB, "email-target:b", buildID, createdAt, createdAt,
 		"b@example.com", retryDueAtB,
 		retryFuture, "email-target:c", "c@example.com", retryFutureAt,
 		staleClaim, "email-target:d", "d@example.com", claimedAt, staleExpiresAt,
 		activeClaim, "email-target:e", "e@example.com", activeExpiresAt,
-		sentID, "email-target:f", "f@example.com",
+		sentID, "email-target:f", "f@example.com", pendingID, now,
 	)
 	if insertErr != nil {
 		t.Fatalf("insert recoverable rows failed: %v", insertErr)
@@ -413,11 +415,11 @@ func TestNotificationDeliveryRepository_ListRecoverable_Postgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list recoverable failed: %v", err)
 	}
-	if len(result) != 3 {
-		t.Fatalf("expected 3 recoverable rows, got %d", len(result))
+	if len(result) != 4 {
+		t.Fatalf("expected 4 recoverable rows, got %d", len(result))
 	}
-	got := []string{result[0].ID, result[1].ID, result[2].ID}
-	want := []string{retryDueA, retryDueB, staleClaim}
+	got := []string{result[0].ID, result[1].ID, result[2].ID, result[3].ID}
+	want := []string{retryDueA, retryDueB, staleClaim, pendingID}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expected ordered ids %v, got %v", want, got)
 	}
@@ -439,11 +441,11 @@ func TestNotificationDeliveryRepository_ListRecoverable_Postgres(t *testing.T) {
 
 func TestNotificationRecoveryDrain_ConcurrentDrainsSendOnce_Postgres(t *testing.T) {
 	db := openNotificationIntegrationDB(t)
-	defer closeNotificationIntegrationDB(t, db)
+	t.Cleanup(func() { closeNotificationIntegrationDB(t, db) })
 
 	ctx := context.Background()
 	buildID := createNotificationIntegrationBuild(t, db, ctx)
-	_, updateErr := db.ExecContext(ctx, `UPDATE builds SET status = 'failed', updated_at = $2 WHERE id = $1`, buildID, time.Now().UTC())
+	_, updateErr := db.ExecContext(ctx, `UPDATE builds SET status = 'failed', notification_plan_complete = true WHERE id = $1`, buildID)
 	if updateErr != nil {
 		t.Fatalf("update build status failed: %v", updateErr)
 	}
@@ -451,7 +453,7 @@ func TestNotificationRecoveryDrain_ConcurrentDrainsSendOnce_Postgres(t *testing.
 	deliveryRepo := NewNotificationDeliveryRepository(db)
 	buildRepo := NewBuildRepository(db)
 	subscriptionRepo := NewNotificationSubscriptionRepository(db)
-	target, targetErr := subscriptionRepo.CreateTarget(ctx, domain.NotificationTarget{Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Name: "alerts", Recipient: "alerts@example.com", Enabled: true})
+	target, targetErr := subscriptionRepo.CreateTarget(ctx, domain.NotificationTarget{ID: uuid.NewString(), Type: domain.NotificationTargetTypeEmail, Origin: domain.NotificationTargetOriginManual, Name: "alerts", Recipient: "alerts@example.com", Enabled: true})
 	if targetErr != nil {
 		t.Fatalf("create notification target failed: %v", targetErr)
 	}
@@ -481,6 +483,7 @@ func TestNotificationRecoveryDrain_ConcurrentDrainsSendOnce_Postgres(t *testing.
 			Sender:           sender,
 			BuildRepo:        buildRepo,
 			DeliveryRepo:     deliveryRepo,
+			PlanningRepo:     deliveryRepo,
 			SubscriptionRepo: subscriptionRepo,
 			ClaimOwner:       claimOwner,
 			DeliveryMetrics:  observability.NewNoopNotificationDeliveryMetrics(),
@@ -559,7 +562,7 @@ func (s *countingEmailSender) Count() int {
 
 func TestNotificationDeliveryRepository_AcquireRejectsTerminalAndBlockedStates_Postgres(t *testing.T) {
 	db := openNotificationIntegrationDB(t)
-	defer closeNotificationIntegrationDB(t, db)
+	t.Cleanup(func() { closeNotificationIntegrationDB(t, db) })
 
 	ctx := context.Background()
 	buildID := createNotificationIntegrationBuild(t, db, ctx)

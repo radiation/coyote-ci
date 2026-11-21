@@ -60,7 +60,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackDMDistinctFro
 		t.Fatalf("upsert slack identity failed: %v", err)
 	}
 
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{
 		Enabled:          true,
 		Sender:           emailSender,
 		SlackClient:      slackClient,
@@ -71,6 +71,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackDMDistinctFro
 		IdentityRepo:     identityRepo,
 		WorkspaceRepo:    workspaceRepo,
 	})
+
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}

@@ -103,7 +103,7 @@ jobs:
           fi
           go test -covermode=atomic -coverprofile=coverage.out "${packages[@]}"
 
-      - name: Run release PostgreSQL tests with coverage
+      - name: Run release and notification PostgreSQL tests with coverage
         env:
           COYOTE_TEST_DATABASE_URL: postgres://postgres:coyote-test@localhost:5432/coyote_release_test?sslmode=disable
         run: |
@@ -112,7 +112,7 @@ jobs:
             -coverpkg=./internal/repository/postgres,./internal/service/build,./internal/service/release \
             -coverprofile=release-integration-coverage.out \
             ./internal/repository/postgres \
-            -run '^(TestApplicationReleaseRepository_.*_Postgres|TestArtifactLabelRepository_ImmutableVersions_Postgres)$'
+            -run '^(TestApplicationReleaseRepository_.*_Postgres|TestArtifactLabelRepository_ImmutableVersions_Postgres|TestNotificationPlan(Restart|Atomicity)Postgres)$'
 
       - name: Verify coverage files
         working-directory: backend

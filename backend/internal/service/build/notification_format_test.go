@@ -27,7 +27,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SendsSlackWebhookSubscript
 		t.Fatalf("create job failed: %v", err)
 	}
 	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureIncludesFailed
 	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
 	exitCode := 7
 	stepError := strings.Repeat("deploy <prod> failed after verifying the release artifact manifest. ", 4)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, BuildRepo: &fakeBuildRepository{steps: []domain.BuildStep{{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "deploy <prod>", Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, ErrorMessage: &stepError}}}, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, BuildRepo: &fakeBuildRepository{steps: []domain.BuildStep{{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "deploy <prod>", Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, ErrorMessage: &stepError}}}, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackFailureUsesFa
 	}
 	exitCode := 7
 	stepError := "deploy failed"
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackClient: slackClient, BuildRepo: &fakeBuildRepository{steps: []domain.BuildStep{{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "deploy", Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, ErrorMessage: &stepError}}}, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo, IdentityRepo: identityRepo, WorkspaceRepo: workspaceRepo, PublicBaseURL: "https://ci.example.com/"})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackClient: slackClient, BuildRepo: &fakeBuildRepository{steps: []domain.BuildStep{{ID: "step-1", BuildID: "build-1", StepIndex: 0, Name: "deploy", Status: domain.BuildStepStatusFailed, ExitCode: &exitCode, ErrorMessage: &stepError}}}, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo, IdentityRepo: identityRepo, WorkspaceRepo: workspaceRepo, PublicBaseURL: "https://ci.example.com/"})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_PersonalSlackFailureFallba
 		t.Fatalf("upsert slack identity failed: %v", err)
 	}
 	buildError := "build level failure"
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackClient: slackClient, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo, IdentityRepo: identityRepo, WorkspaceRepo: workspaceRepo, PublicBaseURL: "https://ci.example.com/"})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackClient: slackClient, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo, IdentityRepo: identityRepo, WorkspaceRepo: workspaceRepo, PublicBaseURL: "https://ci.example.com/"})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackSuccessArtifactsRemai
 			t.Fatalf("create artifact failed: %v", err)
 		}
 	}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, ArtifactRepo: artifactRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, ArtifactRepo: artifactRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackFailureIncludesArtifa
 	}
 	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
 	buildError := "artifact consumer failed"
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackSuccessIncludesArtifa
 		t.Fatalf("create downstream job failed: %v", err)
 	}
 	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildSucceeded, true)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackOrdinaryBuildOmitsArt
 	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
 	projectID := "project-1"
 	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildFailed, true)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestBuildNotificationService_NotifyTerminalBuild_SlackMessageOmitsMissingOp
 	target := mustCreateSlackNotificationTarget(t, subscriptionRepo, "https://hooks.slack.example/services/T/B/X", true)
 	projectID := "project-1"
 	mustCreateNotificationSubscription(t, subscriptionRepo, target.ID, &projectID, nil, domain.NotificationEventTypeBuildSucceeded, true)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, SubscriptionRepo: subscriptionRepo})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, SlackSender: slackSender, SubscriptionRepo: subscriptionRepo})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}

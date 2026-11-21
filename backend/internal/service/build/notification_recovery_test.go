@@ -20,7 +20,7 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 	identityRepo := memoryrepo.NewUserSlackIdentityRepository()
 	workspaceRepo := memoryrepo.NewSlackWorkspaceIntegrationRepository()
 	workspaceRepo.SetUserSlackIdentityRepository(identityRepo)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{
 		Enabled:          true,
 		Recipients:       "dev@example.com",
 		Sender:           &recordingEmailSender{},
@@ -33,6 +33,7 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 		WorkspaceRepo:    workspaceRepo,
 		ClaimOwner:       "recovery-test",
 	})
+
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -73,15 +74,27 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 		}
 	})
 
+	for _, recipient := range []string{"not an address", "other@example.com"} {
+		t.Run("reject configured email recipient "+recipient, func(t *testing.T) {
+			delivery := domain.NotificationDelivery{Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-config:ops@example.com", Recipient: recipient}
+			_, err := notifier.rehydrateDestination(context.Background(), delivery)
+			var failure *notificationExecutionFailure
+			if !errors.As(err, &failure) || failure.retryable || failure.reason != "delivery_metadata_invalid" {
+				t.Fatalf("expected permanent metadata failure, got %v", err)
+			}
+		})
+	}
+
 	t.Run("shared email missing target does not send", func(t *testing.T) {
 		missingTargetID := "00000000-0000-4000-a000-000000000111"
 		kind, key, keyErr := domain.NotificationSharedEmailTargetKey(missingTargetID)
 		if keyErr != nil {
 			t.Fatalf("shared email key failed: %v", keyErr)
 		}
-		claimedAt := time.Now().UTC()
-		claimExpiresAt := claimedAt.Add(time.Minute)
-		delivery := domain.NotificationDelivery{ID: "delivery-missing-target", BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: kind, DestinationKey: key, NotificationTargetID: &missingTargetID, Recipient: "alerts@example.com", Status: domain.NotificationDeliveryStatusSending, Attempts: 1, MaxAttempts: 3, ClaimedAt: &claimedAt, ClaimExpiresAt: &claimExpiresAt, ClaimedBy: strPtr("recovery-test")}
+		delivery := domain.NotificationDelivery{BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: kind, DestinationKey: key, NotificationTargetID: &missingTargetID, Recipient: "alerts@example.com", Status: domain.NotificationDeliveryStatusPending, MaxAttempts: 3}
+		if won, planErr := notifier.plans.CommitNotificationPlan(context.Background(), delivery.BuildID, domain.BuildStatusFailed, []domain.NotificationDelivery{delivery}); planErr != nil || !won {
+			t.Fatalf("seed pending delivery: %v, %v", won, planErr)
+		}
 		result, err := notifier.recoverDelivery(context.Background(), delivery, notificationRecoveryReasonDueRetry)
 		if err != nil {
 			t.Fatalf("recover missing target delivery failed: %v", err)
@@ -277,7 +290,7 @@ func TestBuildNotificationService_RehydrateDelivery_CurrentTransports(t *testing
 			t.Run(tc.name, func(t *testing.T) {
 				fixture := newDestinationBranchFixture(t)
 				tc.mutate(fixture)
-				localNotifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, SlackSender: &recordingSlackSender{}, SlackClient: &recordingSlackDMClient{}, BuildRepo: buildRepo, DeliveryRepo: memoryrepo.NewNotificationDeliveryRepository(), SubscriptionRepo: fixture.subscriptionRepo, IdentityRepo: fixture.identityRepo, WorkspaceRepo: fixture.workspaceRepo, ClaimOwner: "recovery-test"})
+				localNotifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, SlackSender: &recordingSlackSender{}, SlackClient: &recordingSlackDMClient{}, BuildRepo: buildRepo, DeliveryRepo: memoryrepo.NewNotificationDeliveryRepository(), SubscriptionRepo: fixture.subscriptionRepo, IdentityRepo: fixture.identityRepo, WorkspaceRepo: fixture.workspaceRepo, ClaimOwner: "recovery-test"})
 				if err != nil {
 					t.Fatalf("create notifier failed: %v", err)
 				}
@@ -358,7 +371,7 @@ func TestBuildNotificationService_RehydrateDelivery_RendersSameContentAsInline(t
 	if keyErr != nil {
 		t.Fatalf("shared email key failed: %v", keyErr)
 	}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{
 		Enabled:          true,
 		Recipients:       "alerts@example.com",
 		Sender:           &recordingEmailSender{},
@@ -371,6 +384,7 @@ func TestBuildNotificationService_RehydrateDelivery_RendersSameContentAsInline(t
 		PublicBaseURL:    "https://ci.example.com/",
 		ClaimOwner:       "recovery-test",
 	})
+
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -471,6 +485,22 @@ func newDestinationBranchFixture(t *testing.T) *destinationBranchFixture {
 }
 
 func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
+	t.Run("first inline send records an initial claim", func(t *testing.T) {
+		fixture := newRecoveryDrainFixture(t, nil)
+		if err := fixture.notifier.NotifyTerminalBuild(context.Background(), fixture.build); err != nil {
+			t.Fatal(err)
+		}
+		delivery := mustGetNotificationDelivery(t, fixture.deliveryRepo, fixture.build.ID, domain.NotificationEventTypeBuildFailed, fixture.target.Recipient)
+		if delivery.Attempts != 1 || delivery.Status != domain.NotificationDeliveryStatusSent {
+			t.Fatalf("unexpected first delivery: %+v", delivery)
+		}
+		for outcome, want := range map[string]int{observability.NotificationDeliveryOutcomeClaimAcquired: 1, observability.NotificationDeliveryOutcomeRetryClaimed: 0} {
+			if got := fixture.metrics.OutcomeCount(string(delivery.EventType), string(delivery.Transport), string(delivery.DestinationKind), notificationRecoveryReasonInline, outcome); int(got) != want {
+				t.Errorf("inline %s = %d, want %d", outcome, got, want)
+			}
+		}
+	})
+
 	t.Run("due retry is claimed and sent with metrics", func(t *testing.T) {
 		fixture := newRecoveryDrainFixture(t, nil)
 		seedDueRetryDelivery(t, fixture.deliveryRepo, fixture.target, fixture.build.ID, domain.NotificationEventTypeBuildFailed, fixture.now.Add(-time.Minute), 1, 3)
@@ -479,7 +509,7 @@ func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("run iteration failed: %v", err)
 		}
-		if result.Scanned != 1 || result.RetryClaimed != 1 || result.Sent != 1 {
+		if result.Scanned != 1 || result.ClaimAcquired != 0 || result.RetryClaimed != 1 || result.Sent != 1 {
 			t.Fatalf("unexpected recovery result: %+v", result)
 		}
 		if len(fixture.sender.messages) != 1 {
@@ -488,6 +518,11 @@ func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
 		delivery := mustGetNotificationDelivery(t, fixture.deliveryRepo, fixture.build.ID, domain.NotificationEventTypeBuildFailed, fixture.target.Recipient)
 		if delivery.Status != domain.NotificationDeliveryStatusSent || delivery.Attempts != 2 {
 			t.Fatalf("unexpected recovered delivery state: %+v", delivery)
+		}
+		for outcome, want := range map[string]int{observability.NotificationDeliveryOutcomeClaimAcquired: 0, observability.NotificationDeliveryOutcomeRetryClaimed: 1} {
+			if got := fixture.metrics.OutcomeCount(string(delivery.EventType), string(delivery.Transport), string(delivery.DestinationKind), notificationRecoveryReasonDueRetry, outcome); int(got) != want {
+				t.Errorf("due retry %s = %d, want %d", outcome, got, want)
+			}
 		}
 		if fixture.metrics.OutcomeCount(string(domain.NotificationEventTypeBuildFailed), string(domain.NotificationTransportEmail), string(domain.NotificationDestinationKindSharedTarget), notificationRecoveryReasonDueRetry, observability.NotificationDeliveryOutcomeScanned) != 1 {
 			t.Fatal("expected scanned metric to increment once")
@@ -513,7 +548,7 @@ func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
 		}, acquireFunc: func(context.Context, repository.NotificationDeliveryClaimInput) (repository.NotificationDeliveryClaimResult, error) {
 			return repository.NotificationDeliveryClaimResult{Delivery: domain.NotificationDelivery{ID: "delivery-1", BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:1", Recipient: "dev@example.com", Attempts: 1}, Outcome: repository.NotificationDeliveryClaimOutcomeClaimedByOther}, nil
 		}}, deliveryMetrics: observability.NewInMemoryNotificationDeliveryMetrics(), claimOwner: "recovery-a", retryPolicy: defaultNotificationRetryPolicy(), claimDuration: minimumNotificationClaimDuration(), now: func() time.Time { return time.Date(2026, 7, 2, 18, 0, 0, 0, time.UTC) }}
-		drain, err := NewNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: time.Millisecond, BatchSize: 1})
+		drain, err := newTestNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: time.Millisecond, BatchSize: 1})
 		if err != nil {
 			t.Fatalf("create drain failed: %v", err)
 		}
@@ -535,7 +570,7 @@ func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
 			claimExpiresAt := claimedAt.Add(time.Minute)
 			return repository.NotificationDeliveryClaimResult{Delivery: domain.NotificationDelivery{ID: "delivery-1", BuildID: "build-1", EventType: domain.NotificationEventTypeBuildFailed, Transport: domain.NotificationTransportEmail, DestinationKind: domain.NotificationDestinationKindSharedTarget, DestinationKey: "email-target:1", Recipient: "dev@example.com", Status: domain.NotificationDeliveryStatusSending, Attempts: 2, MaxAttempts: 3, ClaimedAt: &claimedAt, ClaimExpiresAt: &claimExpiresAt, ClaimedBy: strPtr("recovery-a")}, Outcome: repository.NotificationDeliveryClaimOutcomeStaleClaimReclaimed}, nil
 		}}, deliveryMetrics: metrics, claimOwner: "recovery-a", retryPolicy: defaultNotificationRetryPolicy(), claimDuration: minimumNotificationClaimDuration(), now: func() time.Time { return time.Date(2026, 7, 2, 18, 0, 0, 0, time.UTC) }}
-		drain, err := NewNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: time.Millisecond, BatchSize: 1})
+		drain, err := newTestNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: time.Millisecond, BatchSize: 1})
 		if err != nil {
 			t.Fatalf("create drain failed: %v", err)
 		}
@@ -683,7 +718,7 @@ func TestNotificationRecoveryDrain_RunIteration(t *testing.T) {
 			acquires.Add(1)
 			return repository.NotificationDeliveryClaimResult{}, nil
 		}}, deliveryMetrics: observability.NewNoopNotificationDeliveryMetrics(), claimOwner: "recovery-a", retryPolicy: defaultNotificationRetryPolicy(), claimDuration: minimumNotificationClaimDuration(), now: func() time.Time { return time.Date(2026, 7, 2, 18, 0, 0, 0, time.UTC) }}
-		drain, err := NewNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: time.Millisecond, BatchSize: 10})
+		drain, err := newTestNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: time.Millisecond, BatchSize: 10})
 		if err != nil {
 			t.Fatalf("create drain failed: %v", err)
 		}
@@ -719,7 +754,7 @@ func TestNewNotificationRecoveryDrain_Validation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			drain, err := NewNotificationRecoveryDrain(tc.cfg)
+			drain, err := newTestNotificationRecoveryDrain(tc.cfg)
 			if err == nil {
 				t.Fatalf("expected validation error, got drain=%+v", drain)
 			}
@@ -785,7 +820,7 @@ func TestNotificationRecoveryDrain_Run(t *testing.T) {
 			}
 			return nil, nil
 		}}, deliveryMetrics: observability.NewNoopNotificationDeliveryMetrics(), claimOwner: "recovery-a", retryPolicy: defaultNotificationRetryPolicy(), claimDuration: minimumNotificationClaimDuration(), now: func() time.Time { return time.Now().UTC() }}
-		drain, err := NewNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: 5 * time.Millisecond, BatchSize: 1})
+		drain, err := newTestNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: 5 * time.Millisecond, BatchSize: 1})
 		if err != nil {
 			t.Fatalf("create drain failed: %v", err)
 		}
@@ -821,7 +856,7 @@ func TestNotificationRecoveryDrain_Run(t *testing.T) {
 			<-release
 			return nil, nil
 		}}, deliveryMetrics: observability.NewNoopNotificationDeliveryMetrics(), claimOwner: "recovery-a", retryPolicy: defaultNotificationRetryPolicy(), claimDuration: minimumNotificationClaimDuration(), now: func() time.Time { return time.Now().UTC() }}
-		drain, err := NewNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: 5 * time.Millisecond, BatchSize: 1})
+		drain, err := newTestNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: 5 * time.Millisecond, BatchSize: 1})
 		if err != nil {
 			t.Fatalf("create drain failed: %v", err)
 		}
@@ -857,7 +892,7 @@ func TestNotificationRecoveryDrain_Run(t *testing.T) {
 			}
 			return nil, nil
 		}}, deliveryMetrics: observability.NewNoopNotificationDeliveryMetrics(), claimOwner: "recovery-a", retryPolicy: defaultNotificationRetryPolicy(), claimDuration: minimumNotificationClaimDuration(), now: func() time.Time { return time.Now().UTC() }}
-		drain, err := NewNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: 5 * time.Millisecond, BatchSize: 1})
+		drain, err := newTestNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: notifier, Interval: 5 * time.Millisecond, BatchSize: 1})
 		if err != nil {
 			t.Fatalf("create drain failed: %v", err)
 		}
@@ -898,7 +933,7 @@ func newRecoveryDrainFixture(t *testing.T, senderErr error) recoveryDrainFixture
 	target := mustCreateNotificationTarget(t, subscriptionRepo, "dev@example.com", true)
 	sender := &recordingEmailSender{err: senderErr}
 	metrics := observability.NewInMemoryNotificationDeliveryMetrics()
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, BuildRepo: &fakeBuildRepository{build: build}, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, ClaimOwner: "recovery-owner", DeliveryMetrics: metrics})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, BuildRepo: &fakeBuildRepository{build: build}, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, ClaimOwner: "recovery-owner", DeliveryMetrics: metrics})
 	if err != nil {
 		t.Fatalf("create recovery notifier failed: %v", err)
 	}
@@ -908,7 +943,7 @@ func newRecoveryDrainFixture(t *testing.T, senderErr error) recoveryDrainFixture
 
 func (f recoveryDrainFixture) newDrain(t *testing.T) *NotificationRecoveryDrain {
 	t.Helper()
-	drain, err := NewNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: f.notifier, Interval: time.Millisecond, BatchSize: 10})
+	drain, err := newTestNotificationRecoveryDrain(NotificationRecoveryDrainConfig{Notifier: f.notifier, Interval: time.Millisecond, BatchSize: 10})
 	if err != nil {
 		t.Fatalf("create recovery drain failed: %v", err)
 	}

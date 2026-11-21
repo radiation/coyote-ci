@@ -29,7 +29,7 @@ func TestBuildService_FailBuild_SendsNotificationWhenConfigured(t *testing.T) {
 	}
 	sender := &recordingEmailSender{}
 	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestBuildService_CompleteBuild_SendsNotificationWhenConfigured(t *testing.T
 	}
 	sender := &recordingEmailSender{}
 	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestBuildService_FailBuild_EmailIncludesCoyoteEntityLinksWhenPublicURLSet(t
 	}
 	sender := &recordingEmailSender{}
 	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, JobRepo: jobRepo, ProjectRepo: projectRepo, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, PublicBaseURL: "https://ci.example.com/"})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestBuildService_FailBuild_EmailIncludesCoyoteEntityLinksWhenPublicURLSet(t
 func TestBuildService_FailBuild_DoesNotSendNotificationWhenDisabled(t *testing.T) {
 	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}}
 	sender := &recordingEmailSender{}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: false, Recipients: "dev@example.com", Sender: sender})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: false, Recipients: "dev@example.com", Sender: sender})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestBuildService_NotificationsDisabled_DoesNotSendForSuccessOrFailure(t *te
 		t.Run(tc.name, func(t *testing.T) {
 			buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}}
 			sender := &recordingEmailSender{}
-			notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: false, Recipients: "dev@example.com", Sender: sender})
+			notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: false, Recipients: "dev@example.com", Sender: sender})
 			if err != nil {
 				t.Fatalf("create notifier failed: %v", err)
 			}
@@ -209,7 +209,7 @@ func TestBuildService_NotificationsDisabled_DoesNotSendForSuccessOrFailure(t *te
 func TestBuildService_FailBuild_DoesNotSendNotificationWithoutRecipients(t *testing.T) {
 	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}}
 	sender := &recordingEmailSender{}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Sender: sender})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Sender: sender})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestBuildService_FailBuild_SenderFailureDoesNotBreakPersistence(t *testing.
 	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
 	sender := &recordingEmailSender{err: errors.New("smtp unavailable")}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestBuildService_FailBuild_SenderFailureDoesNotBreakPersistence(t *testing.
 func TestBuildService_CompleteBuild_SenderFailureDoesNotBreakPersistence(t *testing.T) {
 	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}}
 	sender := &recordingEmailSender{err: errors.New("smtp unavailable")}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestBuildService_CompleteBuild_SenderFailureDoesNotBreakPersistence(t *test
 func TestBuildService_CancelBuild_DoesNotSendNotificationWhenConfigured(t *testing.T) {
 	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CreatedAt: time.Now().UTC()}}
 	sender := &recordingEmailSender{}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestBuildService_FailBuild_UsesPersistedProvenanceForCommitAuthorNotificati
 	user := mustCreateNotificationUser(t, userRepo, "author@example.com")
 	mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, "author@example.com", true)
 	mustUpsertNotificationPreference(t, preferenceRepo, user.ID, true)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestBuildService_FailBuild_SendsCommitAuthorNotificationWhenUserOptedIn(t *
 	user := mustCreateNotificationUser(t, userRepo, authorEmail)
 	mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, authorEmail, true)
 	mustUpsertNotificationPreference(t, preferenceRepo, user.ID, true)
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestBuildService_CompleteBuild_DoesNotIncludeCommitAuthorOnSuccess(t *testi
 	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
 	sender := &recordingEmailSender{}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -477,7 +477,7 @@ func TestBuildService_FailBuild_DedupesCommitAuthorAgainstConfiguredRecipients(t
 	deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 	subscriptionRepo := memoryrepo.NewNotificationSubscriptionRepository()
 	sender := &recordingEmailSender{}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestBuildService_HandleStepResult_FailedStepThenFailBuild_DoesNotDoubleSend
 	claimToken := "claim-active"
 	buildRepo := &fakeBuildRepository{build: domain.Build{ID: "build-1", ProjectID: "project-1", Status: domain.BuildStatusRunning, CurrentStepIndex: 0, CreatedAt: time.Now().UTC()}, steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}, {StepIndex: 1, Name: "step-2", Status: domain.BuildStepStatusPending}}}
 	sender := &recordingEmailSender{}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestBuildService_HandleStepResult_FailedStepThenFailBuild_DoesNotDoubleSend
 
 func TestBuildNotificationService_SendSampleBuildFailure(t *testing.T) {
 	sender := &recordingEmailSender{}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com, qa@example.com", Sender: sender})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com, qa@example.com", Sender: sender})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -569,7 +569,7 @@ func TestBuildNotificationService_SendSampleBuildFailure(t *testing.T) {
 }
 
 func TestBuildNotificationService_SendSampleBuildFailureRequiresEnabledConfig(t *testing.T) {
-	disabledNotifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: false, Recipients: "dev@example.com", Sender: &recordingEmailSender{}})
+	disabledNotifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: false, Recipients: "dev@example.com", Sender: &recordingEmailSender{}})
 	if err != nil {
 		t.Fatalf("create disabled notifier failed: %v", err)
 	}
@@ -577,7 +577,7 @@ func TestBuildNotificationService_SendSampleBuildFailureRequiresEnabledConfig(t 
 		t.Fatalf("expected disabled error, got %v", sendErr)
 	}
 
-	noRecipientsNotifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Sender: &recordingEmailSender{}})
+	noRecipientsNotifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Sender: &recordingEmailSender{}})
 	if err != nil {
 		t.Fatalf("create no-recipient notifier failed: %v", err)
 	}
@@ -587,7 +587,7 @@ func TestBuildNotificationService_SendSampleBuildFailureRequiresEnabledConfig(t 
 }
 
 func TestNewBuildNotificationService_DisabledIgnoresInvalidRecipients(t *testing.T) {
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: false, Recipients: "not-an-email", Sender: &recordingEmailSender{}})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: false, Recipients: "not-an-email", Sender: &recordingEmailSender{}})
 	if err != nil {
 		t.Fatalf("expected disabled notifier to ignore invalid recipients, got %v", err)
 	}
@@ -601,7 +601,7 @@ func TestNewBuildNotificationService_DisabledIgnoresInvalidRecipients(t *testing
 }
 
 func TestNewBuildNotificationService_EnabledRejectsInvalidRecipients(t *testing.T) {
-	_, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "not-an-email", Sender: &recordingEmailSender{}})
+	_, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "not-an-email", Sender: &recordingEmailSender{}})
 	if err == nil {
 		t.Fatal("expected invalid recipient error")
 	}
@@ -616,7 +616,7 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 	})
 
 	t.Run("no sender returns error", func(t *testing.T) {
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -627,7 +627,7 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 
 	t.Run("non failed terminal status is ignored", func(t *testing.T) {
 		sender := &recordingEmailSender{}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -641,7 +641,7 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 
 	t.Run("successful terminal status sends email", func(t *testing.T) {
 		sender := &recordingEmailSender{}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -659,7 +659,7 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 	t.Run("configured recipients send without subscription repo", func(t *testing.T) {
 		deliveryRepo := memoryrepo.NewNotificationDeliveryRepository()
 		sender := &recordingEmailSender{}
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "Dev <dev@example.com>", Sender: sender, DeliveryRepo: deliveryRepo})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "Dev <dev@example.com>", Sender: sender, DeliveryRepo: deliveryRepo})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -700,7 +700,7 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		user := mustCreateNotificationUser(t, userRepo, authorEmail)
 		mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, authorEmail, true)
 		mustUpsertNotificationPreference(t, preferenceRepo, user.ID, true)
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -723,7 +723,7 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 		user := mustCreateNotificationUser(t, userRepo, authorEmail)
 		mustEnsureOwnedNotificationTarget(t, subscriptionRepo, user.ID, authorEmail, true)
 		mustUpsertNotificationPreference(t, preferenceRepo, user.ID, true)
-		notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo})
+		notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: sender, DeliveryRepo: deliveryRepo, SubscriptionRepo: subscriptionRepo, UserRepo: userRepo, PreferenceRepo: preferenceRepo})
 		if err != nil {
 			t.Fatalf("create notifier failed: %v", err)
 		}
@@ -738,7 +738,7 @@ func TestBuildNotificationService_NotifyTerminalBuild(t *testing.T) {
 }
 
 func TestNewBuildNotificationService_RejectsClaimDurationBelowProviderSafetyMargin(t *testing.T) {
-	_, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, ClaimDuration: minimumNotificationClaimDuration() - time.Second})
+	_, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, ClaimDuration: minimumNotificationClaimDuration() - time.Second})
 	if err == nil {
 		t.Fatal("expected claim duration validation error")
 	}
@@ -748,7 +748,7 @@ func TestNewBuildNotificationService_RejectsClaimDurationBelowProviderSafetyMarg
 }
 
 func TestBuildNotificationService_SendSampleBuildFailureRequiresSender(t *testing.T) {
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}
@@ -762,7 +762,7 @@ func TestBuildNotificationService_IsActive(t *testing.T) {
 	if nilNotifier.isActive() {
 		t.Fatal("expected nil notifier to be inactive")
 	}
-	notifier, err := NewBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
+	notifier, err := newTestBuildNotificationService(BuildNotificationConfig{Enabled: true, Recipients: "dev@example.com", Sender: &recordingEmailSender{}, SubscriptionRepo: memoryrepo.NewNotificationSubscriptionRepository()})
 	if err != nil {
 		t.Fatalf("create notifier failed: %v", err)
 	}

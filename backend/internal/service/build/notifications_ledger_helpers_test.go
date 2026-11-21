@@ -131,26 +131,15 @@ func TestBuildNotificationService_MarkDeliveryFailedRoutesPersistence(t *testing
 		}
 	})
 
-	t.Run("non-ledger send handles provider errors without persistence", func(t *testing.T) {
+	t.Run("missing ledger prevents provider calls", func(t *testing.T) {
 		sender := &recordingEmailSender{err: errors.New("smtp unavailable")}
 		service := &BuildNotificationService{
 			enabled: true,
 			sender:  sender,
 		}
-		destinations := []notificationDestination{{
-			transport:       domain.NotificationTransportEmail,
-			destinationKind: domain.NotificationDestinationKindSharedTarget,
-			destinationKey:  "email-target:target-1",
-			recipient:       "<dev@example.com>",
-			emailRecipient:  "dev@example.com",
-		}}
-
-		err := service.sendTerminalNotification(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed}, domain.NotificationEventTypeBuildFailed, destinations)
-		if err == nil || !strings.Contains(err.Error(), "smtp unavailable") {
-			t.Fatalf("expected provider error, got %v", err)
-		}
-		if len(sender.messages) != 1 {
-			t.Fatalf("expected one direct send attempt, got %d", len(sender.messages))
+		err := service.NotifyTerminalBuild(context.Background(), domain.Build{ID: "build-1", Status: domain.BuildStatusFailed})
+		if err == nil || len(sender.messages) != 0 {
+			t.Fatalf("expected planning error and no provider attempts, got %v, %d", err, len(sender.messages))
 		}
 	})
 }
