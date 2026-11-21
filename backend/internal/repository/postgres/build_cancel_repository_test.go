@@ -27,12 +27,12 @@ func TestBuildRepository_CancelBuild_UpdatesBuildStepsAndJobsAtomically(t *testi
 	mock.ExpectQuery("SELECT id, build_number, project_id, job_id, priority, status, created_at").
 		WithArgs("build-1").
 		WillReturnRows(buildCancelMockRows(domain.Build{ID: "build-1", BuildNumber: 7, ProjectID: "project-1", Priority: 5, Status: domain.BuildStatusRunning, CreatedAt: now, StartedAt: &now}))
-	mock.ExpectExec("UPDATE build_steps").
-		WithArgs("build-1", canceledAt, "operator canceled").
-		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectExec("UPDATE build_jobs").
 		WithArgs("build-1", canceledAt, "operator canceled").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE build_steps").
+		WithArgs("build-1", canceledAt, "operator canceled").
+		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectQuery("UPDATE builds").
 		WithArgs("build-1", canceledAt, "operator canceled").
 		WillReturnRows(buildCancelMockRows(domain.Build{ID: "build-1", BuildNumber: 7, ProjectID: "project-1", Priority: 5, Status: domain.BuildStatusCanceled, CreatedAt: now, StartedAt: &now, FinishedAt: &canceledAt, ErrorMessage: buildCancelStringPtr("operator canceled")}))

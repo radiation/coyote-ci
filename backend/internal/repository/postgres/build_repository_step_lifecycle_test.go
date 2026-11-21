@@ -179,6 +179,7 @@ func TestBuildRepository_CompleteStep_NonFinalSuccess(t *testing.T) {
 	stdout := "ok"
 
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
 			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "shell", nil, "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil, nil, nil, "external", nil, nil),
@@ -222,6 +223,7 @@ func TestBuildRepository_CompleteStep_FinalSuccess(t *testing.T) {
 	exitCode := 0
 
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
 			AddRow("step-2", "build-1", 1, nil, nil, "[]", "second", "shell", nil, "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil, nil, nil, "external", nil, nil),
@@ -264,6 +266,7 @@ func TestBuildRepository_CompleteStep_FailedStep(t *testing.T) {
 	errMsg := "boom"
 
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
 			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "shell", nil, "", "sh", "[\"-c\",\"echo boom\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 7, "", "boom", "boom", "[]", nil, nil, nil, "external", nil, nil),
@@ -308,6 +311,7 @@ func TestBuildRepository_CompleteStep_FailedStepNilErrorMessage_UsesTypedBuildUp
 	stderr := "command failed"
 
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
 			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "shell", nil, "", "sh", "[\"-c\",\"exit 1\"]", "{}", ".", 0, "failed", nil, nil, nil, nil, now, now, 1, "", "command failed", nil, "[]", nil, nil, nil, "external", nil, nil),
@@ -357,6 +361,7 @@ func TestBuildRepository_CompleteStep_DuplicateNoOp(t *testing.T) {
 	exitCode := 0
 
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
@@ -395,6 +400,7 @@ func TestBuildRepository_CompleteStep_CanceledNoOp(t *testing.T) {
 	exitCode := 0
 
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
@@ -435,6 +441,7 @@ func TestBuildRepository_CompleteStep_InvalidTransition(t *testing.T) {
 	exitCode := 0
 
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
@@ -470,6 +477,7 @@ func TestBuildRepository_CompleteStep_RollsBackOnAdvanceError(t *testing.T) {
 	exitCode := 0
 
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery("UPDATE build_steps").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).
 			AddRow("step-1", "build-1", 0, nil, nil, "[]", "first", "shell", nil, "", "sh", "[\"-c\",\"echo ok\"]", "{}", ".", 0, "success", nil, nil, nil, nil, now, now, 0, "ok", "", nil, "[]", nil, nil, nil, "external", nil, nil),
@@ -657,6 +665,7 @@ func TestBuildRepository_CompleteStep_StaleClaim(t *testing.T) {
 	exitCode := 0
 
 	mock.ExpectBegin()
+	expectBuildCompletionLock(mock)
 	mock.ExpectQuery("UPDATE build_steps").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT id, build_id, step_index").WillReturnRows(
 		sqlmock.NewRows(stepMockColumns).

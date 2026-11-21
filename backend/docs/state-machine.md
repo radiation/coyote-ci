@@ -99,6 +99,36 @@ than a normal step-completion transition.
   execution failures; `failure_kind = timeout` identifies timeouts. Successful
   and canceled execution jobs have no failure kind.
 
+## PostgreSQL Completion and Cancellation Locks
+
+Job-backed synchronous execution and Kubernetes execution require the repository's
+atomic success and failure completion capabilities. This requirement is independent
+of workspace revision storage or per-request opt-in: the execution job, step, and
+parent build advancement are persisted together. Persistence errors are lifecycle
+errors, not post-completion side-effect errors. The worker's jobless step-claim
+fallback retains step-only completion for builds without execution jobs.
+
+Step-only completion, atomic step/job completion, and build cancellation use
+`READ COMMITTED` transactions and acquire a `FOR NO KEY UPDATE` lock on the
+build before mutating children. Atomic completion and cancellation then lock
+execution jobs before steps; step-only completion skips the job lock. The build
+lock is held through progress evaluation and commit, including nonterminal
+outcomes. Each subsequent progress query therefore sees sibling completions
+committed by the preceding lock holder, even if this transaction began earlier.
+Locking only at the final build update is too late to protect that decision.
+
+The build lock does not reject terminal builds early: existing job/step guards
+still distinguish duplicate terminal outcomes from stale claims. A failed step
+does not force immediate build failure while siblings are running or pending
+steps can still run. Cancellation preserves already terminal steps and jobs.
+
+Job claims use `FOR UPDATE SKIP LOCKED` on their build/job candidates, so they
+skip a contended lifecycle lock rather than wait while holding a child lock.
+Step claims/reclaims and lease renewals only mutate their own rows and do not
+subsequently lock builds. Queueing locks the build before replacing steps.
+`NO KEY UPDATE` permits foreign-key key-share checks from child insertion; it
+must not be upgraded to `FOR UPDATE` without reviewing those insert paths.
+
 ## Pipeline Group Semantics
 
 - Top-level pipeline `steps` are ordered.

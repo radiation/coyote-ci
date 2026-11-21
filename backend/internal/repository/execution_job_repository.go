@@ -35,6 +35,13 @@ type ExecutionJobRepository interface {
 	CompleteJobFailure(ctx context.Context, jobID string, claimToken string, finishedAt time.Time, errorMessage string, failureKind domain.ExecutionFailureKind, exitCode *int, outputRefs []domain.ArtifactRef) (domain.ExecutionJob, StepCompletionOutcome, error)
 }
 
+// ExecutionJobCompletionRepository is required when completing job-backed work.
+// Both outcomes persist the execution job, step, and build advancement atomically.
+type ExecutionJobCompletionRepository interface {
+	CompleteSuccessfulStepAndJob(context.Context, CompleteSuccessfulStepAndJobRequest) (CompleteStepResult, domain.ExecutionJob, StepCompletionOutcome, error)
+	CompleteFailedStepAndJob(context.Context, CompleteFailedStepAndJobRequest) (CompleteStepResult, domain.ExecutionJob, StepCompletionOutcome, error)
+}
+
 // CompleteSuccessfulStepAndJobRequest atomically exposes successful step and
 // execution-job state after trusted runtime work has completed.
 type CompleteSuccessfulStepAndJobRequest struct {

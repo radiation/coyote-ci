@@ -413,7 +413,7 @@ func (r *ExecutionJobRepository) CompleteJobSuccess(ctx context.Context, jobID s
 }
 
 func (r *ExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx context.Context, request repository.CompleteSuccessfulStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, err
 	}
@@ -423,6 +423,10 @@ func (r *ExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx context.Contex
 			_ = tx.Rollback()
 		}
 	}()
+
+	if lockErr := lockBuildForCompletionTx(ctx, tx, request.StepRequest.BuildID); lockErr != nil {
+		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, lockErr
+	}
 
 	job, jobErr := scanExecutionJob(tx.QueryRowContext(ctx, `SELECT `+executionJobColumns+` FROM build_jobs WHERE id = $1 FOR UPDATE`, request.JobID))
 	if jobErr != nil {
@@ -482,7 +486,7 @@ func (r *ExecutionJobRepository) CompleteSuccessfulStepAndJob(ctx context.Contex
 }
 
 func (r *ExecutionJobRepository) CompleteFailedStepAndJob(ctx context.Context, request repository.CompleteFailedStepAndJobRequest) (repository.CompleteStepResult, domain.ExecutionJob, repository.StepCompletionOutcome, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, err
 	}
@@ -492,6 +496,10 @@ func (r *ExecutionJobRepository) CompleteFailedStepAndJob(ctx context.Context, r
 			_ = tx.Rollback()
 		}
 	}()
+
+	if lockErr := lockBuildForCompletionTx(ctx, tx, request.StepRequest.BuildID); lockErr != nil {
+		return repository.CompleteStepResult{}, domain.ExecutionJob{}, repository.StepCompletionInvalidTransition, lockErr
+	}
 
 	job, jobErr := scanExecutionJob(tx.QueryRowContext(ctx, `SELECT `+executionJobColumns+` FROM build_jobs WHERE id = $1 FOR UPDATE`, request.JobID))
 	if jobErr != nil {

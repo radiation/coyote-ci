@@ -13,7 +13,7 @@ import (
 
 // CancelBuild terminalizes a cancelable build and any cancellable steps/jobs in one transaction.
 func (r *BuildRepository) CancelBuild(ctx context.Context, id string, reason string, canceledAt time.Time) (domain.Build, int, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return domain.Build{}, 0, err
 	}
@@ -29,7 +29,7 @@ func (r *BuildRepository) CancelBuild(ctx context.Context, id string, reason str
 		SELECT `+buildColumns+`
 		FROM builds
 		WHERE id = $1
-		FOR UPDATE
+		FOR NO KEY UPDATE
 	`, id))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -48,6 +48,21 @@ func (r *BuildRepository) CancelBuild(ctx context.Context, id string, reason str
 		reasonPtr = &trimmedReason
 	}
 
+	if _, updateJobsErr := tx.ExecContext(ctx, `
+		UPDATE build_jobs
+		SET status = 'canceled',
+			claim_token = NULL,
+			claimed_by = NULL,
+			claim_expires_at = NULL,
+			started_at = COALESCE(started_at, $2),
+			finished_at = COALESCE(finished_at, $2),
+			error_message = COALESCE($3::text, error_message)
+		WHERE build_id = $1
+		  AND status IN ('queued', 'running')
+	`, id, canceledAt, reasonPtr); updateJobsErr != nil {
+		return domain.Build{}, 0, updateJobsErr
+	}
+
 	stepResult, err := tx.ExecContext(ctx, `
 		UPDATE build_steps
 		SET status = 'canceled',
@@ -62,21 +77,6 @@ func (r *BuildRepository) CancelBuild(ctx context.Context, id string, reason str
 	`, id, canceledAt, reasonPtr)
 	if err != nil {
 		return domain.Build{}, 0, err
-	}
-
-	if _, updateJobsErr := tx.ExecContext(ctx, `
-		UPDATE build_jobs
-		SET status = 'canceled',
-			claim_token = NULL,
-			claimed_by = NULL,
-			claim_expires_at = NULL,
-			started_at = COALESCE(started_at, $2),
-			finished_at = COALESCE(finished_at, $2),
-			error_message = COALESCE($3::text, error_message)
-		WHERE build_id = $1
-		  AND status IN ('queued', 'running')
-	`, id, canceledAt, reasonPtr); updateJobsErr != nil {
-		return domain.Build{}, 0, updateJobsErr
 	}
 
 	updatedSteps := 0
