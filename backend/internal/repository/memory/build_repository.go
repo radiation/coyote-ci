@@ -245,6 +245,28 @@ func (r *BuildRepository) ListActive(_ context.Context) ([]domain.Build, error) 
 	return builds, nil
 }
 
+func (r *BuildRepository) ListSCMTerminalBuilds(_ context.Context, since, before time.Time, beforeID string, limit int) ([]domain.Build, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var builds []domain.Build
+	for _, build := range r.builds {
+		if !domain.IsTerminalBuildStatus(build.Status) || build.FinishedAt == nil || build.JobID == nil || build.RegisteredRepositoryID == nil || build.SCMConnectionID == nil || build.ProviderRepositoryID == nil {
+			continue
+		}
+		if build.FinishedAt.Before(since) || build.FinishedAt.After(before) || (beforeID != "" && build.FinishedAt.Equal(before) && build.ID >= beforeID) {
+			continue
+		}
+		builds = append(builds, cloneBuildApplicationVersion(build))
+	}
+	sort.Slice(builds, func(i, j int) bool {
+		if builds[i].FinishedAt.Equal(*builds[j].FinishedAt) {
+			return builds[i].ID > builds[j].ID
+		}
+		return builds[i].FinishedAt.After(*builds[j].FinishedAt)
+	})
+	return builds[:min(limit, len(builds))], nil
+}
+
 func (r *BuildRepository) ListPaged(ctx context.Context, params repository.ListParams) ([]domain.Build, error) {
 	all, err := r.List(ctx)
 	if err != nil {

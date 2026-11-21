@@ -42,6 +42,10 @@ func TestSCMStatusDeliveryRepository_ClaimAndStateUpdates(t *testing.T) {
 	if blocked.Outcome != repository.SCMStatusDeliveryClaimOutcomeClaimedByOther {
 		t.Fatalf("expected claimed_by_other, got %q", blocked.Outcome)
 	}
+	discovered, discoverErr := repo.AcquireForDelivery(context.Background(), repository.SCMStatusDeliveryClaimInput{Delivery: base, ClaimOwner: "server", Now: now.Add(time.Hour), ClaimDuration: time.Minute, MaxAttempts: 3, MissingIntentOnly: true})
+	if discoverErr != nil || discovered.Outcome != repository.SCMStatusDeliveryClaimOutcomeAlreadyRecorded || discovered.Delivery.Attempts != 1 {
+		t.Fatalf("discovery reclaimed an expired delivery: %+v, %v", discovered, discoverErr)
+	}
 
 	sent, err := repo.MarkSent(context.Background(), repository.SCMStatusDeliveryMarkSentInput{DeliveryID: claimed.Delivery.ID, ClaimOwner: "worker-a", ClaimedAt: *claimed.Delivery.ClaimedAt, SentAt: now, State: domain.SCMCommitStatusStatePending})
 	if err != nil {
@@ -89,6 +93,13 @@ func TestSCMStatusDeliveryRepository_SeparatesRepositoryIdentityStreams(t *testi
 		if fetchErr != nil || fetched.BuildID != "build-"+connectionID {
 			t.Fatalf("expected identity lookup for %s, delivery=%+v err=%v", connectionID, fetched, fetchErr)
 		}
+		name, lookupErr := repo.GetBuildContext(context.Background(), fetched.BuildID, connectionID, "repository-1", "deadbeef")
+		if lookupErr != nil || name != fetched.Context {
+			t.Fatalf("build context = %q, err = %v", name, lookupErr)
+		}
+	}
+	if _, lookupErr := repo.GetBuildContext(context.Background(), "build-connection-b", "connection-a", "repository-1", "deadbeef"); !errors.Is(lookupErr, repository.ErrSCMStatusDeliveryNotFound) {
+		t.Fatalf("cross-connection lookup: %v", lookupErr)
 	}
 	if _, err := repo.GetByRepositoryIdentity(context.Background(), "connection-missing", "repository-1", "deadbeef", "coyote/build"); !errors.Is(err, repository.ErrSCMStatusDeliveryNotFound) {
 		t.Fatalf("expected missing identity stream error, got %v", err)

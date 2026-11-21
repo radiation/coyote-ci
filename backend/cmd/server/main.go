@@ -587,12 +587,18 @@ func bootstrapAdminsAtStartup(ctx context.Context, users *service.UserService, e
 	return users.BootstrapAdmins(ctx, emails)
 }
 
-func configureSCMStatusRuntime(cfg config.Config, buildRepo repository.BuildRepository, projectRepo repository.ProjectRepository, deliveryRepo repository.SCMStatusDeliveryRepository, connectionRepo repository.SCMConnectionRepository, registrationRepo repository.SCMRepositoryRegistrationRepository) (scmStatusRuntime, error) {
+type scmStatusBuildStore interface {
+	GetByID(context.Context, string) (domain.Build, error)
+	ListByJobID(context.Context, string) ([]domain.Build, error)
+	ListSCMTerminalBuilds(context.Context, time.Time, time.Time, string, int) ([]domain.Build, error)
+}
+
+func configureSCMStatusRuntime(cfg config.Config, buildRepo scmStatusBuildStore, projectRepo repository.ProjectRepository, deliveryRepo repository.SCMStatusDeliveryRepository, connectionRepo repository.SCMConnectionRepository, registrationRepo repository.SCMRepositoryRegistrationRepository) (scmStatusRuntime, error) {
 	publisher, err := buildsvc.NewGitHubAppCommitStatusPublisher(buildsvc.GitHubAppCommitStatusPublisherConfig{
 		Connections:   connectionRepo,
 		Registrations: registrationRepo,
 		Secrets:       platformsecret.NewEnvResolver(),
-		GitHubApps:    platformgithubapp.NewClient(nil),
+		GitHubApps:    platformgithubapp.NewClient(&nethttp.Client{Timeout: 30 * time.Second}),
 	})
 	if err != nil {
 		return scmStatusRuntime{}, err
@@ -610,9 +616,10 @@ func configureSCMStatusRuntime(cfg config.Config, buildRepo repository.BuildRepo
 	}
 
 	recoveryDrain, err := buildsvc.NewSCMStatusRecoveryDrain(buildsvc.SCMStatusRecoveryDrainConfig{
-		Reporter:  reporterImpl,
-		Interval:  cfg.SCMStatusRecoveryInterval,
-		BatchSize: cfg.SCMStatusRecoveryBatchSize,
+		ListTerminalBuilds: buildRepo.ListSCMTerminalBuilds,
+		Reporter:           reporterImpl,
+		Interval:           cfg.SCMStatusRecoveryInterval,
+		BatchSize:          cfg.SCMStatusRecoveryBatchSize,
 	})
 	if err != nil {
 		return scmStatusRuntime{}, err

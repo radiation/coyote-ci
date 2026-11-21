@@ -95,6 +95,8 @@ that require Postgres are gated behind `DB_HOST` being set.
 
 ## Persistence support
 
+The server reconciles GitHub commit statuses from registered-repository builds at startup and periodically. It scans terminal builds finished within the last seven days, including builds with no prior delivery. Older builds are not automatically reconciled. Recovery of already recorded deliveries uses its own retry and lease rules, independently of that window.
+
 - Durable runtime persistence is PostgreSQL only.
 - In-memory repositories are for tests/non-durable scenarios.
 - Managed Postgres provider selection is deployment-specific and stays outside core runtime logic.

@@ -302,6 +302,9 @@ func (r *SCMStatusDeliveryRepository) AcquireForDelivery(ctx context.Context, in
 	}
 
 	ownerComparison := repository.CompareSCMStatusDeliveryOwners(existing, delivery)
+	if input.MissingIntentOnly && ownerComparison == 0 && existing.DesiredState == delivery.DesiredState {
+		return repository.SCMStatusDeliveryClaimResult{Delivery: existing, Outcome: repository.SCMStatusDeliveryClaimOutcomeAlreadyRecorded}, nil
+	}
 	if ownerComparison > 0 {
 		return repository.SCMStatusDeliveryClaimResult{Delivery: existing, Outcome: repository.SCMStatusDeliveryClaimOutcomeSuperseded}, nil
 	}
@@ -469,6 +472,18 @@ func (r *SCMStatusDeliveryRepository) MarkSuperseded(ctx context.Context, input 
 		return repository.SCMStatusDeliveryUpdateResult{Delivery: updated, Outcome: repository.SCMStatusDeliveryUpdateOutcomeUpdated}, nil
 	}
 	return r.resolveSCMStatusDeliveryUpdateConflict(ctx, input.DeliveryID, err)
+}
+
+func (r *SCMStatusDeliveryRepository) GetBuildContext(ctx context.Context, buildID, connectionID, providerRepositoryID, commitSHA string) (string, error) {
+	const query = `SELECT context_name FROM scm_status_deliveries
+		WHERE build_id = $1 AND scm_connection_id = $2 AND provider_repository_id = $3 AND commit_sha = $4
+		ORDER BY created_at, id LIMIT 1`
+	var name string
+	err := r.db.QueryRowContext(ctx, query, strings.TrimSpace(buildID), strings.TrimSpace(connectionID), strings.TrimSpace(providerRepositoryID), strings.TrimSpace(commitSHA)).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", repository.ErrSCMStatusDeliveryNotFound
+	}
+	return name, err
 }
 
 func (r *SCMStatusDeliveryRepository) GetByKey(ctx context.Context, provider string, repositoryOwner string, repositoryName string, commitSHA string, contextName string) (domain.SCMStatusDelivery, error) {

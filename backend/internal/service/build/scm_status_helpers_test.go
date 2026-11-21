@@ -24,6 +24,10 @@ type helperSCMDeliveryRepo struct {
 	getByRepositoryIdentity func(context.Context, string, string, string, string) (domain.SCMStatusDelivery, error)
 }
 
+func (r *helperSCMDeliveryRepo) GetBuildContext(context.Context, string, string, string, string) (string, error) {
+	return "", repository.ErrSCMStatusDeliveryNotFound
+}
+
 func (r *helperSCMDeliveryRepo) AcquireForDelivery(ctx context.Context, input repository.SCMStatusDeliveryClaimInput) (repository.SCMStatusDeliveryClaimResult, error) {
 	if r.acquireForDelivery != nil {
 		return r.acquireForDelivery(ctx, input)
