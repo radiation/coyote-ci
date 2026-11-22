@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,16 @@ import (
 	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
+
+type stalledArtifactFetcher struct{ t *testing.T }
+
+func (fetcher stalledArtifactFetcher) Fetch(ctx context.Context, _, _ string) (string, string, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		fetcher.t.Fatal("artifact fetch has no deadline")
+	}
+	<-ctx.Done()
+	return "", "", errors.New("git clone interrupted")
+}
 
 func TestWorkspaceHelperArtifactPublicationRecovery(t *testing.T) {
 	ctx := context.Background()
@@ -63,13 +74,31 @@ func TestWorkspaceHelperArtifactPublicationRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broken.PipelineYAML = "invalid"
+	path := ".coyote/pipeline.yml"
+	broken.PipelineYAML, broken.PipelinePath = "", &path
 	if _, updateErr := jobs.Update(ctx, broken); updateErr != nil {
 		t.Fatal(updateErr)
 	}
 	buildService := buildsvc.NewBuildService(builds, nil, nil)
 	buildService.SetArtifactPersistence(publisher, nil, "")
 	server := NewJobService(jobs, buildService).WithArtifactTriggerDeliveryRepository(deliveries)
+	server.artifactAttemptTimeout = 100 * time.Millisecond
+	buildService.SetRepoFetcher(stalledArtifactFetcher{t})
+	if _, pageErr := server.recoverArtifactPage(ctx, "", 64); pageErr != nil {
+		t.Fatal(pageErr)
+	}
+	remaining, scanErr := deliveries.ListPendingAfter(ctx, "", 64)
+	if scanErr != nil || len(remaining) != 1 || remaining[0].ID != page[0].ID || !remaining[0].UpdatedAt.Equal(page[0].UpdatedAt) {
+		t.Fatalf("stalled delivery not recoverable: %+v %v", remaining, scanErr)
+	}
+	queued, lookupErr := deliveries.GetByID(ctx, page[1].ID)
+	if lookupErr != nil || queued.QueuedBuildID == nil {
+		t.Fatalf("later delivery did not queue: %+v %v", queued, lookupErr)
+	}
+	broken.PipelineYAML = "invalid"
+	if _, updateErr := jobs.Update(ctx, broken); updateErr != nil {
+		t.Fatal(updateErr)
+	}
 	if _, pageErr := server.recoverArtifactPage(ctx, "", 64); pageErr != nil {
 		t.Fatal(pageErr)
 	}

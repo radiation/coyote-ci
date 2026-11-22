@@ -127,6 +127,8 @@ func (s *JobService) RetryArtifactTriggerDelivery(ctx context.Context, deliveryI
 }
 
 func (s *JobService) processArtifactDelivery(ctx context.Context, claimed domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.artifactAttemptTimeout)
+	defer cancel()
 	current, err := s.artifactTriggerDeliveries.GetByID(ctx, claimed.ID)
 	if err != nil || current.QueuedBuildID != nil {
 		return current, err
@@ -165,6 +167,9 @@ func (s *JobService) recoverArtifactPage(ctx context.Context, after string, limi
 		return after, err
 	}
 	for _, delivery := range page {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return after, ctxErr
+		}
 		if _, processErr := s.processArtifactDelivery(ctx, delivery); processErr != nil {
 			log.Printf("artifact trigger recovery: delivery_id=%s err=%v", delivery.ID, processErr)
 		}
@@ -193,8 +198,12 @@ func (s *JobService) RunArtifactTriggerRecovery(ctx context.Context, interval ti
 	}
 }
 
+func artifactAttemptInterrupted(ctx context.Context, err error) bool {
+	return ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
 func (s *JobService) failArtifactTriggerDeliveryRetry(ctx context.Context, delivery domain.ArtifactTriggerDelivery, retryErr error) {
-	if s.artifactTriggerDeliveries == nil || retryErr == nil {
+	if s.artifactTriggerDeliveries == nil || retryErr == nil || artifactAttemptInterrupted(ctx, retryErr) {
 		return
 	}
 	_, _ = s.artifactTriggerDeliveries.FailPending(ctx, delivery.ID, delivery.UpdatedAt, retryErr.Error())

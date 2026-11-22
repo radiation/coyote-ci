@@ -51,6 +51,7 @@ var ErrArtifactTriggerDeliveryRetryNotSupported = errors.New("artifact trigger d
 type JobService struct {
 	jobRepo                   repository.JobRepository
 	artifactTriggerDeliveries repository.ArtifactTriggerDeliveryRepository
+	artifactAttemptTimeout    time.Duration
 	projects                  repository.ProjectRepository
 	registeredRepositories    repository.SCMRepositoryRegistrationRepository
 	managedImageConfigs       repository.JobManagedImageConfigRepository
@@ -59,7 +60,7 @@ type JobService struct {
 }
 
 func NewJobService(jobRepo repository.JobRepository, buildService *buildsvc.BuildService) *JobService {
-	return &JobService{jobRepo: jobRepo, buildService: buildService}
+	return &JobService{jobRepo: jobRepo, buildService: buildService, artifactAttemptTimeout: 2 * time.Minute}
 }
 
 func (s *JobService) WithProjectRepository(projects repository.ProjectRepository) *JobService {
@@ -764,6 +765,9 @@ func (s *JobService) queueArtifactTriggerDelivery(ctx context.Context, delivery 
 	artifactSizeBytes := artifact.SizeBytes
 	_, queueErr := s.createBuildForJobWithTrigger(ctx, consumerJob, &buildsvc.CreateBuildTriggerInput{
 		PersistArtifactBuild: func(ctx context.Context, plan repository.ArtifactBuildPlan) (domain.Build, error) {
+			if err := ctx.Err(); err != nil {
+				return domain.Build{}, err
+			}
 			plan.ConsumerUpdatedAt = consumerJob.UpdatedAt
 			created, err := s.artifactTriggerDeliveries.CreateArtifactBuild(ctx, delivery.ID, delivery.UpdatedAt, plan)
 			if err != nil && !errors.Is(err, repository.ErrArtifactBuildCommitUnknown) {
@@ -782,6 +786,9 @@ func (s *JobService) queueArtifactTriggerDelivery(ctx context.Context, delivery 
 		ArtifactChecksumSHA256: readStringPtr(artifact.ChecksumSHA256),
 	})
 	if queueErr != nil {
+		if artifactAttemptInterrupted(ctx, queueErr) {
+			return delivery, errors.Join(ctx.Err(), queueErr)
+		}
 		var updated domain.ArtifactTriggerDelivery
 		var updateErr error
 		if errors.Is(queueErr, repository.ErrArtifactBuildCommitUnknown) {

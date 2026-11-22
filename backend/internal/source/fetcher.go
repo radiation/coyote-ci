@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var refPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
@@ -99,6 +100,12 @@ func (g *GitFetcher) fetch(ctx context.Context, repoURL string, ref string, cred
 	return tmpDir, strings.TrimSpace(commitSHA), nil
 }
 
+func gitCommand(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = time.Second
+	return cmd
+}
+
 func gitCloneWithHTTPSCredential(ctx context.Context, repoURL string, dst string, credential HTTPSCredential) error {
 	env, cleanup, err := gitHTTPSCredentialEnv(credential)
 	if err != nil {
@@ -106,7 +113,7 @@ func gitCloneWithHTTPSCredential(ctx context.Context, repoURL string, dst string
 	}
 	defer cleanup()
 
-	cmd := exec.CommandContext(ctx, "git", "clone", "--", repoURL, dst)
+	cmd := gitCommand(ctx, "clone", "--", repoURL, dst)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -191,7 +198,7 @@ func IsAuthenticationFailure(err error) bool {
 }
 
 func gitClone(ctx context.Context, repoURL string, dst string) error {
-	cmd := exec.CommandContext(ctx, "git", "clone", "--", repoURL, dst)
+	cmd := gitCommand(ctx, "clone", "--", repoURL, dst)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
@@ -204,7 +211,7 @@ func gitCheckoutDetach(ctx context.Context, dir string, commitSHA string) error 
 		return errors.New("resolved commit is not a full SHA")
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "checkout", "--detach", commitSHA)
+	cmd := gitCommand(ctx, "checkout", "--detach", commitSHA)
 	if err := setGitDir(cmd, dir); err != nil {
 		return err
 	}
@@ -216,7 +223,7 @@ func gitCheckoutDetach(ctx context.Context, dir string, commitSHA string) error 
 }
 
 func gitRevParseHead(ctx context.Context, dir string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	cmd := gitCommand(ctx, "rev-parse", "HEAD")
 	if err := setGitDir(cmd, dir); err != nil {
 		return "", err
 	}
@@ -285,7 +292,7 @@ func localRefCandidates(ref string) []string {
 }
 
 func gitFetchRef(ctx context.Context, dir string, ref string, credential *HTTPSCredential) error {
-	cmd := exec.CommandContext(ctx, "git", "fetch", "origin", "--", ref)
+	cmd := gitCommand(ctx, "fetch", "origin", "--", ref)
 	if err := setGitDir(cmd, dir); err != nil {
 		return err
 	}
@@ -309,7 +316,7 @@ func gitFetchRef(ctx context.Context, dir string, ref string, credential *HTTPSC
 }
 
 func gitRevParseVerify(ctx context.Context, dir string, candidate string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", candidate)
+	cmd := gitCommand(ctx, "rev-parse", "--verify", candidate)
 	if err := setGitDir(cmd, dir); err != nil {
 		return "", err
 	}

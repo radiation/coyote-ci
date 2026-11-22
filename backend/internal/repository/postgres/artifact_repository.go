@@ -137,7 +137,8 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 			(id, artifact_id, consumer_job_id, producer_build_id, producer_project_id, producer_job_id, artifact_path, status, atomic_creation)
 		SELECT gen_random_uuid(), $1, j.id, b.id, j.project_id, b.job_id, $3, 'pending', true
 		FROM builds b
-		JOIN jobs j ON j.project_id::text = b.project_id AND j.id <> b.job_id
+		JOIN jobs producer ON producer.id = b.job_id AND producer.project_id::text = b.project_id
+		JOIN jobs j ON j.project_id = producer.project_id AND j.id <> producer.id
 		WHERE b.id = $2 AND b.trigger_kind IS DISTINCT FROM 'artifact' AND j.enabled
 		AND j.artifact_triggers @> jsonb_build_array(jsonb_build_object('ProducerJobID', b.job_id::text, 'Path', $3::text))`,
 		created.ID, created.BuildID, created.LogicalPath); intentErr != nil {

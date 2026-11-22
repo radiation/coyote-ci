@@ -50,6 +50,18 @@ func TestArtifactBuildTransaction(t *testing.T) {
 	})
 	exec(`UPDATE jobs SET artifact_triggers=jsonb_build_array(jsonb_build_object('ProducerJobID',$2::text,'Path','out')) WHERE project_id=$1`, project, upstream)
 	publisher := NewArtifactRepository(db)
+	t.Run("jobless text project", func(t *testing.T) {
+		buildID := createNotificationIntegrationBuild(t, db, context.Background())
+		exec(`UPDATE builds SET job_id=NULL, project_id='local-project' WHERE id=$1`, buildID)
+		_, publishErr := publisher.Create(ctx, domain.BuildArtifact{ID: uuid.NewString(), BuildID: buildID, LogicalPath: "out", StorageKey: "out", CreatedAt: now})
+		if publishErr != nil {
+			t.Fatal(publishErr)
+		}
+		deliveries, listErr := NewArtifactTriggerDeliveryRepository(db).ListByProducerBuildID(ctx, buildID)
+		if listErr != nil || len(deliveries) != 0 {
+			t.Fatalf("jobless publication deliveries: %+v, %v", deliveries, listErr)
+		}
+	})
 	publication := domain.BuildArtifact{ID: artifact, BuildID: producer, LogicalPath: "out", StorageKey: "out", SizeBytes: 1, CreatedAt: now}
 	constraint := "test_publication_" + fmt.Sprintf("%x", uuid.New())
 	exec(`ALTER TABLE artifact_trigger_deliveries ADD CONSTRAINT ` + constraint + ` CHECK(consumer_job_id <> '` + consumer + `') NOT VALID`)
