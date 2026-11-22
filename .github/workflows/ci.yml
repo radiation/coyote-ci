@@ -101,15 +101,15 @@ jobs:
             echo "No Go test packages found"
             exit 1
           fi
-          go test -covermode=atomic -coverprofile=coverage.out "${packages[@]}"
+          go test -covermode=atomic -coverpkg=./... -coverprofile=coverage.out "${packages[@]}"
 
-      - name: Run release and notification PostgreSQL tests with coverage
+      - name: Run PostgreSQL integration tests with coverage
         env:
           COYOTE_TEST_DATABASE_URL: postgres://postgres:coyote-test@localhost:5432/coyote_release_test?sslmode=disable
         run: |
           DATABASE_URL="$COYOTE_TEST_DATABASE_URL" go run ./cmd/migrate -dir db/migrations up
           go test -count=1 -v -race -covermode=atomic \
-            -coverpkg=./internal/repository/postgres,./internal/service/build,./internal/service/release \
+            -coverpkg=./... \
             -coverprofile=release-integration-coverage.out \
             ./internal/repository/postgres \
             -run '^(TestApplicationReleaseRepository_.*_Postgres|TestArtifactLabelRepository_ImmutableVersions_Postgres|TestNotificationPlan(Restart|Atomicity)Postgres|TestArtifactBuildTransaction)$'
