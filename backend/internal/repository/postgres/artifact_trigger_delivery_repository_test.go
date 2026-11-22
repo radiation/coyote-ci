@@ -85,23 +85,19 @@ func TestArtifactTriggerDeliveryRepository_CreateGetAndUpdate(t *testing.T) {
 	}
 
 	mock.ExpectQuery("UPDATE artifact_trigger_deliveries").WillReturnRows(sqlmock.NewRows(row).AddRow(
-		"delivery-1", "artifact-1", "job-1", "build-1", "project-1", "producer-1", "dist/app.tgz", queuedBuildID, nil, "queued", now, now,
+		"delivery-1", "artifact-1", "job-1", "build-1", "project-1", "producer-1", "dist/app.tgz", nil, errorMessage, "failed", now, now,
 	))
-	updated, err := repo.Update(context.Background(), domain.ArtifactTriggerDelivery{
-		ID:            "delivery-1",
-		QueuedBuildID: &queuedBuildID,
-		Status:        domain.ArtifactTriggerDeliveryStatusQueued,
-		UpdatedAt:     now,
-	})
+	updated, err := repo.FailPending(context.Background(), "delivery-1", now, errorMessage)
 	if err != nil {
 		t.Fatalf("update failed: %v", err)
 	}
-	if updated.Status != domain.ArtifactTriggerDeliveryStatusQueued {
-		t.Fatalf("expected queued status, got %q", updated.Status)
+	if updated.Status != domain.ArtifactTriggerDeliveryStatusFailed {
+		t.Fatalf("expected failed status, got %q", updated.Status)
 	}
 
 	mock.ExpectQuery("UPDATE artifact_trigger_deliveries").WillReturnError(sql.ErrNoRows)
-	_, err = repo.Update(context.Background(), domain.ArtifactTriggerDelivery{ID: "missing", Status: domain.ArtifactTriggerDeliveryStatusFailed})
+	mock.ExpectQuery("SELECT .*FROM artifact_trigger_deliveries").WillReturnError(sql.ErrNoRows)
+	_, err = repo.FailPending(context.Background(), "missing", now, errorMessage)
 	if !errors.Is(err, repository.ErrArtifactTriggerDeliveryNotFound) {
 		t.Fatalf("expected update not found, got %v", err)
 	}

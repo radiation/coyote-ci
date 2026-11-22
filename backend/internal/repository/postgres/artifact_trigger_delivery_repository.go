@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -27,8 +28,8 @@ func (r *ArtifactTriggerDeliveryRepository) ClaimFailedForRetry(ctx context.Cont
 		SET queued_build_id = NULL,
 			error_message = NULL,
 			status = $2,
-			updated_at = COALESCE($3, NOW())
-		WHERE id = $1 AND status = $4 AND queued_build_id IS NULL
+			updated_at = GREATEST(COALESCE($3, NOW()), updated_at + interval '1 microsecond')
+		WHERE id = $1 AND status = $4 AND queued_build_id IS NULL AND atomic_creation
 		RETURNING ` + artifactTriggerDeliveryColumns + `
 	`
 
@@ -53,9 +54,9 @@ func (r *ArtifactTriggerDeliveryRepository) ClaimFailedForRetry(ctx context.Cont
 func (r *ArtifactTriggerDeliveryRepository) Create(ctx context.Context, delivery domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error) {
 	const query = `
 		INSERT INTO artifact_trigger_deliveries (
-			id, artifact_id, consumer_job_id, producer_build_id, producer_project_id, producer_job_id, artifact_path, queued_build_id, error_message, status, created_at, updated_at
+			id, artifact_id, consumer_job_id, producer_build_id, producer_project_id, producer_job_id, artifact_path, queued_build_id, error_message, status, created_at, updated_at, atomic_creation
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()), COALESCE($12, NOW()))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()), COALESCE($12, NOW()), true)
 		RETURNING ` + artifactTriggerDeliveryColumns + `
 	`
 
@@ -148,31 +149,56 @@ func (r *ArtifactTriggerDeliveryRepository) ListByProducerBuildID(ctx context.Co
 	return result, nil
 }
 
-func (r *ArtifactTriggerDeliveryRepository) Update(ctx context.Context, delivery domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error) {
-	const query = `
-		UPDATE artifact_trigger_deliveries
-		SET queued_build_id = $2,
-			error_message = $3,
-			status = $4,
-			updated_at = COALESCE($5, NOW())
-		WHERE id = $1
-		RETURNING ` + artifactTriggerDeliveryColumns + `
-	`
+func (r *ArtifactTriggerDeliveryRepository) CreateArtifactBuild(ctx context.Context, id string, claim time.Time, plan repository.ArtifactBuildPlan) (domain.Build, error) {
+	return r.createArtifactBuild(ctx, id, claim, plan, (*sql.Tx).Commit)
+}
 
-	updated, err := scanArtifactTriggerDelivery(r.db.QueryRowContext(ctx, query,
-		delivery.ID,
-		delivery.QueuedBuildID,
-		delivery.ErrorMessage,
-		string(delivery.Status),
-		nullableTime(delivery.UpdatedAt),
-	))
+func (r *ArtifactTriggerDeliveryRepository) createArtifactBuild(ctx context.Context, id string, claim time.Time, plan repository.ArtifactBuildPlan, commit func(*sql.Tx) error) (domain.Build, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return domain.ArtifactTriggerDelivery{}, repository.ErrArtifactTriggerDeliveryNotFound
-		}
-		return domain.ArtifactTriggerDelivery{}, err
+		return domain.Build{}, err
 	}
-	return updated, nil
+	defer func() { _ = tx.Rollback() }()
+	delivery, err := scanArtifactTriggerDelivery(tx.QueryRowContext(ctx, `SELECT `+artifactTriggerDeliveryColumns+` FROM artifact_trigger_deliveries WHERE id=$1 AND atomic_creation FOR UPDATE`, id))
+	if err != nil {
+		return domain.Build{}, err
+	}
+	if delivery.Status == domain.ArtifactTriggerDeliveryStatusQueued && delivery.QueuedBuildID != nil {
+		return scanBuild(tx.QueryRowContext(ctx, `SELECT `+buildColumns+` FROM builds WHERE id=$1`, *delivery.QueuedBuildID))
+	}
+	if !plan.Matches(delivery, claim) {
+		return domain.Build{}, repository.ErrArtifactTriggerDeliveryRetryNotClaimable
+	}
+	var consumerID string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE id=$1 AND project_id=$2 AND enabled AND updated_at=$3 FOR NO KEY UPDATE`, delivery.ConsumerJobID, delivery.ProducerProjectID, plan.ConsumerUpdatedAt).Scan(&consumerID)
+	if err != nil {
+		return domain.Build{}, fmt.Errorf("validate artifact consumer: %w", err)
+	}
+	created, err := insertQueuedBuild(ctx, tx, plan.Build, plan.Steps)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	if _, jobsErr := insertExecutionJobs(ctx, tx, plan.Jobs); jobsErr != nil {
+		return domain.Build{}, jobsErr
+	}
+	if outputsErr := insertExecutionOutputs(ctx, tx, plan.Outputs); outputsErr != nil {
+		return domain.Build{}, outputsErr
+	}
+	if _, linkErr := tx.ExecContext(ctx, `UPDATE artifact_trigger_deliveries SET queued_build_id=$2,status='queued',error_message=NULL,updated_at=clock_timestamp() WHERE id=$1`, id, created.ID); linkErr != nil {
+		return domain.Build{}, linkErr
+	}
+	if commitErr := commit(tx); commitErr != nil {
+		return domain.Build{}, errors.Join(repository.ErrArtifactBuildCommitUnknown, commitErr)
+	}
+	return created, nil
+}
+
+func (r *ArtifactTriggerDeliveryRepository) FailPending(ctx context.Context, id string, claim time.Time, message string) (domain.ArtifactTriggerDelivery, error) {
+	delivery, err := scanArtifactTriggerDelivery(r.db.QueryRowContext(ctx, `UPDATE artifact_trigger_deliveries SET status='failed',error_message=$3,updated_at=GREATEST(clock_timestamp(),updated_at + interval '1 microsecond') WHERE id=$1 AND atomic_creation AND status='pending' AND queued_build_id IS NULL AND updated_at=$2 RETURNING `+artifactTriggerDeliveryColumns, id, claim, nilIfBlank(message)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return r.GetByID(ctx, id)
+	}
+	return delivery, err
 }
 
 func scanArtifactTriggerDelivery(scanner rowScanner) (domain.ArtifactTriggerDelivery, error) {

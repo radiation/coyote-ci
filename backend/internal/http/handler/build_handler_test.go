@@ -1826,7 +1826,7 @@ func TestBuildHandler_RetryArtifactTriggerDelivery(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	jobRepo := repositorymemory.NewJobRepository()
 	buildRepo := repositorymemory.NewBuildRepository()
-	deliveryRepo := repositorymemory.NewArtifactTriggerDeliveryRepository()
+	deliveryRepo := repositorymemory.NewArtifactBuildDeliveryRepository(jobRepo, buildRepo, repositorymemory.NewExecutionJobRepository(), repositorymemory.NewExecutionJobOutputRepository())
 	artifactRepo := &fakeArtifactRepo{artifactsByBuild: map[string][]domain.BuildArtifact{}}
 	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	buildService.SetArtifactPersistence(artifactRepo, nil, "")

@@ -30,12 +30,18 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(ctx context.Context, jobs []
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
+	defer func() { _ = tx.Rollback() }()
+	created, err := insertExecutionJobs(ctx, tx, jobs)
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return created, nil
+}
 
+func insertExecutionJobs(ctx context.Context, tx *sql.Tx, jobs []domain.ExecutionJob) ([]domain.ExecutionJob, error) {
 	const query = `
 		INSERT INTO build_jobs (
 			id, build_id, step_id, node_id, group_name, depends_on_node_ids, name, step_index, attempt_number, retry_of_job_id, lineage_root_job_id, status, queue_name, image, working_dir,
@@ -122,10 +128,6 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(ctx context.Context, jobs []
 			return nil, scanErr
 		}
 		out = append(out, created)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return nil, err
 	}
 
 	return out, nil

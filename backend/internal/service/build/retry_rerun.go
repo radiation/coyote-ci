@@ -266,23 +266,12 @@ func buildAttemptFromSource(source domain.Build, now time.Time, rerunFrom *int) 
 
 func cloneBuildTrigger(source domain.BuildTrigger) domain.BuildTrigger {
 	normalized := domain.NormalizeBuildTrigger(source)
-	return domain.BuildTrigger{
-		Kind:            normalized.Kind,
-		SCMProvider:     cloneStringPtr(normalized.SCMProvider),
-		EventType:       cloneStringPtr(normalized.EventType),
-		RepositoryOwner: cloneStringPtr(normalized.RepositoryOwner),
-		RepositoryName:  cloneStringPtr(normalized.RepositoryName),
-		RepositoryURL:   cloneStringPtr(normalized.RepositoryURL),
-		RawRef:          cloneStringPtr(normalized.RawRef),
-		Ref:             cloneStringPtr(normalized.Ref),
-		RefType:         cloneStringPtr(normalized.RefType),
-		RefName:         cloneStringPtr(normalized.RefName),
-		Deleted:         cloneBoolPtr(normalized.Deleted),
-		CommitSHA:       cloneStringPtr(normalized.CommitSHA),
-		DeliveryID:      cloneStringPtr(normalized.DeliveryID),
-		Actor:           cloneStringPtr(normalized.Actor),
-		PullRequest:     clonePullRequestSnapshot(normalized.PullRequest),
+	normalized.Deleted = cloneBoolPtr(source.Deleted)
+	if source.ArtifactSizeBytes != nil {
+		size := *source.ArtifactSizeBytes
+		normalized.ArtifactSizeBytes = &size
 	}
+	return normalized
 }
 
 func cloneStringPtr(value *string) *string {

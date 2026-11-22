@@ -42,7 +42,10 @@ func (r *ExecutionJobRepository) SetBuildRepository(builds repository.BuildRepos
 func (r *ExecutionJobRepository) CreateJobsForBuild(_ context.Context, jobs []domain.ExecutionJob) ([]domain.ExecutionJob, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.insertJobsLocked(jobs), nil
+}
 
+func (r *ExecutionJobRepository) insertJobsLocked(jobs []domain.ExecutionJob) []domain.ExecutionJob {
 	out := make([]domain.ExecutionJob, 0, len(jobs))
 	for _, job := range jobs {
 		job.AttemptNumber = normalizeAttemptNumber(job.AttemptNumber)
@@ -56,7 +59,7 @@ func (r *ExecutionJobRepository) CreateJobsForBuild(_ context.Context, jobs []do
 	}
 
 	r.sortBuildAndStepJobsLocked(jobs)
-	return out, nil
+	return out
 }
 
 func (r *ExecutionJobRepository) sortBuildAndStepJobsLocked(jobs []domain.ExecutionJob) {

@@ -146,16 +146,7 @@ func (s *JobService) failArtifactTriggerDeliveryRetry(ctx context.Context, deliv
 	if s.artifactTriggerDeliveries == nil || retryErr == nil {
 		return
 	}
-	message := strings.TrimSpace(retryErr.Error())
-	delivery.Status = domain.ArtifactTriggerDeliveryStatusFailed
-	delivery.QueuedBuildID = nil
-	delivery.UpdatedAt = time.Now().UTC()
-	if message == "" {
-		delivery.ErrorMessage = nil
-	} else {
-		delivery.ErrorMessage = &message
-	}
-	_, _ = s.artifactTriggerDeliveries.Update(ctx, delivery)
+	_, _ = s.artifactTriggerDeliveries.FailPending(ctx, delivery.ID, delivery.UpdatedAt, retryErr.Error())
 }
 
 func (s *JobService) artifactTriggerDeliveryView(ctx context.Context, delivery domain.ArtifactTriggerDelivery) (ArtifactTriggerDeliveryView, error) {

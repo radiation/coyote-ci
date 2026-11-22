@@ -142,16 +142,11 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 	}
 	build = domain.NormalizeBuildMetadata(build)
 
-	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
+	queuedBuild, err := s.persistPipelineBuild(ctx, build, steps, input.Trigger)
 	if err != nil {
 		return domain.Build{}, err
 	}
-	if err := s.createDurableJobsForBuild(ctx, queuedBuild, steps); err != nil {
-		log.Printf("WARNING: durable job creation failed for build_id=%s (build already persisted): %v", queuedBuild.ID, err)
-		return domain.Build{}, fmt.Errorf("create execution jobs for build %s: %w", queuedBuild.ID, err)
-	}
-	s.notifySCMBuildStatus(ctx, queuedBuild)
-	if s.managedImageRefresher != nil {
+	if queuedBuild.ID == build.ID && s.managedImageRefresher != nil {
 		refreshRef := strings.TrimSpace(input.CommitSHA)
 		if refreshRef == "" {
 			refreshRef = strings.TrimSpace(input.Ref)

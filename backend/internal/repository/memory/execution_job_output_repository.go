@@ -26,7 +26,10 @@ func NewExecutionJobOutputRepository() *ExecutionJobOutputRepository {
 func (r *ExecutionJobOutputRepository) CreateMany(_ context.Context, outputs []domain.ExecutionJobOutput) ([]domain.ExecutionJobOutput, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.insertOutputsLocked(outputs), nil
+}
 
+func (r *ExecutionJobOutputRepository) insertOutputsLocked(outputs []domain.ExecutionJobOutput) []domain.ExecutionJobOutput {
 	out := make([]domain.ExecutionJobOutput, 0, len(outputs))
 	for _, output := range outputs {
 		r.outputsByID[output.ID] = output
@@ -34,7 +37,7 @@ func (r *ExecutionJobOutputRepository) CreateMany(_ context.Context, outputs []d
 		r.outputsByJob[output.JobID] = append(r.outputsByJob[output.JobID], output.ID)
 		out = append(out, output)
 	}
-	return out, nil
+	return out
 }
 
 func (r *ExecutionJobOutputRepository) ListByBuildID(_ context.Context, buildID string) ([]domain.ExecutionJobOutput, error) {
