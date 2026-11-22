@@ -127,7 +127,21 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact domain.BuildAr
 		createdAt,
 	))
 	if err != nil {
+		if isUniqueViolation(err) {
+			return domain.BuildArtifact{}, repository.ErrArtifactConflict
+		}
 		return domain.BuildArtifact{}, err
+	}
+	if _, intentErr := tx.ExecContext(ctx, `
+		INSERT INTO artifact_trigger_deliveries
+			(id, artifact_id, consumer_job_id, producer_build_id, producer_project_id, producer_job_id, artifact_path, status, atomic_creation)
+		SELECT gen_random_uuid(), $1, j.id, b.id, j.project_id, b.job_id, $3, 'pending', true
+		FROM builds b
+		JOIN jobs j ON j.project_id::text = b.project_id AND j.id <> b.job_id
+		WHERE b.id = $2 AND b.trigger_kind IS DISTINCT FROM 'artifact' AND j.enabled
+		AND j.artifact_triggers @> jsonb_build_array(jsonb_build_object('ProducerJobID', b.job_id::text, 'Path', $3::text))`,
+		created.ID, created.BuildID, created.LogicalPath); intentErr != nil {
+		return domain.BuildArtifact{}, intentErr
 	}
 	if err := tx.Commit(); err != nil {
 		return domain.BuildArtifact{}, err

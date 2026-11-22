@@ -32,7 +32,7 @@ type WorkspaceHelperArtifactServiceConfig struct {
 	CapabilityAuthorizer WorkspacePrepareCapabilityAuthorizer
 	ExecutionJobs        workspacePrepareExecutionJobRepository
 	Builds               workspaceHelperCacheBuildRepository
-	Artifacts            repository.ArtifactRepository
+	Artifacts            repository.ArtifactPublicationRepository
 	Collector            *artifact.Collector
 	Provider             domain.StorageProvider
 }
@@ -41,7 +41,7 @@ type WorkspaceHelperArtifactService struct {
 	capabilities  WorkspacePrepareCapabilityAuthorizer
 	executionJobs workspacePrepareExecutionJobRepository
 	builds        workspaceHelperCacheBuildRepository
-	artifacts     repository.ArtifactRepository
+	artifacts     repository.ArtifactPublicationRepository
 	collector     *artifact.Collector
 	provider      domain.StorageProvider
 }

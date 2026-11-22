@@ -71,20 +71,19 @@ type BuildService struct {
 	materializedWorkspaces  map[string][]source.MaterializedWorkspace
 	materializedWorkspaceMu sync.Mutex
 
-	artifactRepo              repository.ArtifactRepository
-	executionOutputRepo       repository.ExecutionJobOutputRepository
-	artifactStore             artifact.Store
-	artifactStoreResolver     *artifact.StoreResolver
-	artifactCollector         *artifact.Collector
-	artifactWorkspaceRoot     string
-	artifactStorageProvider   domain.StorageProvider
-	stepCacheManager          *StepCacheManager
-	versionTagger             BuildVersionTagger
-	buildNotifier             BuildLifecycleNotifier
-	scmStatusReporter         BuildSCMStatusReporter
-	scmStatusDeliveryRepo     repository.SCMStatusDeliveryRepository
-	artifactTriggerDispatcher ArtifactTriggerDispatcher
-	releaseSnapshotter        ReleaseSnapshotter
+	artifactRepo            repository.ArtifactPublicationRepository
+	executionOutputRepo     repository.ExecutionJobOutputRepository
+	artifactStore           artifact.Store
+	artifactStoreResolver   *artifact.StoreResolver
+	artifactCollector       *artifact.Collector
+	artifactWorkspaceRoot   string
+	artifactStorageProvider domain.StorageProvider
+	stepCacheManager        *StepCacheManager
+	versionTagger           BuildVersionTagger
+	buildNotifier           BuildLifecycleNotifier
+	scmStatusReporter       BuildSCMStatusReporter
+	scmStatusDeliveryRepo   repository.SCMStatusDeliveryRepository
+	releaseSnapshotter      ReleaseSnapshotter
 
 	defaultExecutionImage string
 }
@@ -101,10 +100,6 @@ type BuildSCMStatusReporter interface {
 	NotifyBuildStatus(ctx context.Context, build domain.Build) error
 }
 
-type ArtifactTriggerDispatcher interface {
-	DispatchArtifactTriggers(ctx context.Context, build domain.Build, artifact domain.BuildArtifact) error
-}
-
 type ReleaseSnapshotter interface {
 	EnsureSnapshot(context.Context, domain.Build) error
 	FailBuildRelease(context.Context, domain.Build) error
@@ -113,28 +108,27 @@ type ReleaseSnapshotter interface {
 // BuildServiceConfig groups all optional dependencies for BuildService. Zero
 // values are safe — each field is only used when set.
 type BuildServiceConfig struct {
-	ExecutionJobRepo          repository.ExecutionJobRepository
-	ExecutionOutputRepo       repository.ExecutionJobOutputRepository
-	RepoFetcher               source.RepoFetcher
-	ManagedImageRefresher     ManagedImageRefresher
-	SourceResolver            source.WorkspaceSourceResolver
-	RepositoryCheckout        *RepositoryAwareCheckoutResolver
-	ArtifactRepo              repository.ArtifactRepository
-	ArtifactLabelRepo         repository.ArtifactLabelRepository
-	ArtifactResolver          *artifact.StoreResolver
-	ArtifactWorkspace         string
-	ExecutionWorkspace        string
-	WorkspaceRevisionRepo     repository.WorkspaceRevisionRepository
-	WorkspaceRevisionStore    workspacepkg.WorkspaceRevisionStore
-	DefaultImage              string
-	CacheStore                cachepkg.Store
-	CacheEntryRepo            repository.CacheEntryRepository
-	VersionTagger             BuildVersionTagger
-	BuildNotifier             BuildLifecycleNotifier
-	SCMStatusReporter         BuildSCMStatusReporter
-	SCMStatusDeliveryRepo     repository.SCMStatusDeliveryRepository
-	ArtifactTriggerDispatcher ArtifactTriggerDispatcher
-	ReleaseSnapshotter        ReleaseSnapshotter
+	ExecutionJobRepo       repository.ExecutionJobRepository
+	ExecutionOutputRepo    repository.ExecutionJobOutputRepository
+	RepoFetcher            source.RepoFetcher
+	ManagedImageRefresher  ManagedImageRefresher
+	SourceResolver         source.WorkspaceSourceResolver
+	RepositoryCheckout     *RepositoryAwareCheckoutResolver
+	ArtifactRepo           repository.ArtifactPublicationRepository
+	ArtifactLabelRepo      repository.ArtifactLabelRepository
+	ArtifactResolver       *artifact.StoreResolver
+	ArtifactWorkspace      string
+	ExecutionWorkspace     string
+	WorkspaceRevisionRepo  repository.WorkspaceRevisionRepository
+	WorkspaceRevisionStore workspacepkg.WorkspaceRevisionStore
+	DefaultImage           string
+	CacheStore             cachepkg.Store
+	CacheEntryRepo         repository.CacheEntryRepository
+	VersionTagger          BuildVersionTagger
+	BuildNotifier          BuildLifecycleNotifier
+	SCMStatusReporter      BuildSCMStatusReporter
+	SCMStatusDeliveryRepo  repository.SCMStatusDeliveryRepository
+	ReleaseSnapshotter     ReleaseSnapshotter
 }
 
 // NewBuildServiceFromConfig creates a fully-wired BuildService in one call.
@@ -159,7 +153,6 @@ func NewBuildServiceFromConfig(buildRepo repository.BuildRepository, stepRunner 
 	svc.buildNotifier = cfg.BuildNotifier
 	svc.scmStatusReporter = cfg.SCMStatusReporter
 	svc.scmStatusDeliveryRepo = cfg.SCMStatusDeliveryRepo
-	svc.artifactTriggerDispatcher = cfg.ArtifactTriggerDispatcher
 	svc.releaseSnapshotter = cfg.ReleaseSnapshotter
 	if cfg.ArtifactLabelRepo != nil {
 		type artifactLabelRepoAware interface {
@@ -230,7 +223,7 @@ func (s *BuildService) SetDefaultExecutionImage(image string) {
 }
 
 // SetArtifactPersistence configures build artifact persistence dependencies.
-func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactRepository, resolver *artifact.StoreResolver, workspaceRoot string) {
+func (s *BuildService) SetArtifactPersistence(repo repository.ArtifactPublicationRepository, resolver *artifact.StoreResolver, workspaceRoot string) {
 	s.artifactRepo = repo
 	s.artifactWorkspaceRoot = buildNormalizeWorkspaceRoot(workspaceRoot)
 	if resolver != nil {
@@ -266,10 +259,6 @@ func (s *BuildService) SetWorkspaceRevisionPublication(repo repository.Workspace
 
 func (s *BuildService) SetExecutionJobOutputRepository(repo repository.ExecutionJobOutputRepository) {
 	s.executionOutputRepo = repo
-}
-
-func (s *BuildService) SetArtifactTriggerDispatcher(dispatcher ArtifactTriggerDispatcher) {
-	s.artifactTriggerDispatcher = dispatcher
 }
 
 func (s *BuildService) SetStepCacheStore(store cachepkg.Store, entryRepo repository.CacheEntryRepository) {

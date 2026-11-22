@@ -23,7 +23,8 @@ func TestArtifactBuildTransaction(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT project_id,job_id FROM builds WHERE id=$1`, producer).Scan(&project, &upstream); err != nil {
 		t.Fatal(err)
 	}
-	consumer, artifact, pkg := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	consumer, artifact := uuid.NewString(), uuid.NewString()
+	pkg := md5UUID(upstream + "::out")
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	exec := func(query string, args ...any) {
 		t.Helper()
@@ -32,6 +33,8 @@ func TestArtifactBuildTransaction(t *testing.T) {
 		}
 	}
 	exec(`INSERT INTO jobs (id,project_id,name,repository_url,enabled,created_at,updated_at) VALUES ($1,$2,'consumer','https://example.invalid',true,$3,$3)`, consumer, project, now)
+	second := uuid.NewString()
+	exec(`INSERT INTO jobs (id,project_id,name,repository_url,created_at,updated_at) VALUES ($1,$2,'second','https://example.invalid',$3,$3)`, second, project, now)
 	t.Cleanup(func() {
 		cleanup := func(query, id string) {
 			t.Helper()
@@ -41,13 +44,91 @@ func TestArtifactBuildTransaction(t *testing.T) {
 		}
 		cleanup(`DELETE FROM builds WHERE job_id=$1`, consumer)
 		cleanup(`DELETE FROM jobs WHERE id=$1`, consumer)
+		cleanup(`DELETE FROM jobs WHERE id=$1`, second)
 		cleanup(`DELETE FROM build_artifacts WHERE id=$1`, artifact)
 		cleanup(`DELETE FROM artifact_packages WHERE id=$1`, pkg)
 	})
-	exec(`INSERT INTO artifact_packages(id,project_id,job_id,logical_path) VALUES($1,$2,$3,'out')`, pkg, project, upstream)
-	exec(`INSERT INTO build_artifacts(id,build_id,package_id,logical_path,storage_key,size_bytes) VALUES($1,$2,$3,'out','out',1)`, artifact, producer, pkg)
-	store := NewArtifactTriggerDeliveryRepository(db)
-	delivery, err := store.Create(ctx, domain.ArtifactTriggerDelivery{ID: uuid.NewString(), ArtifactID: artifact, ConsumerJobID: consumer, ProducerBuildID: producer, ProducerJobID: upstream, ProducerProjectID: project, ArtifactPath: "out", Status: domain.ArtifactTriggerDeliveryStatusPending})
+	exec(`UPDATE jobs SET artifact_triggers=jsonb_build_array(jsonb_build_object('ProducerJobID',$2::text,'Path','out')) WHERE project_id=$1`, project, upstream)
+	publisher := NewArtifactRepository(db)
+	publication := domain.BuildArtifact{ID: artifact, BuildID: producer, LogicalPath: "out", StorageKey: "out", SizeBytes: 1, CreatedAt: now}
+	constraint := "test_publication_" + fmt.Sprintf("%x", uuid.New())
+	exec(`ALTER TABLE artifact_trigger_deliveries ADD CONSTRAINT ` + constraint + ` CHECK(consumer_job_id <> '` + consumer + `') NOT VALID`)
+	_, rollbackErr := publisher.Create(ctx, publication)
+	exec(`ALTER TABLE artifact_trigger_deliveries DROP CONSTRAINT ` + constraint)
+	if rollbackErr == nil {
+		t.Fatal("expected publication rollback")
+	}
+	var residue int
+	if scanErr := db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM artifact_packages WHERE id=$1)+(SELECT count(*) FROM build_artifacts WHERE build_id=$2)+(SELECT count(*) FROM artifact_trigger_deliveries WHERE producer_build_id=$2)`, pkg, producer).Scan(&residue); scanErr != nil || residue != 0 {
+		t.Fatalf("publication not atomic: %d rows, %v", residue, scanErr)
+	}
+	results := make(chan error, 2)
+	for range 2 {
+		attempt := publication
+		attempt.ID = uuid.NewString()
+		go func() { _, publishErr := publisher.Create(ctx, attempt); results <- publishErr }()
+	}
+	firstErr, secondErr := <-results, <-results
+	if secondErr == nil {
+		firstErr, secondErr = secondErr, firstErr
+	}
+	if firstErr != nil || !errors.Is(secondErr, repository.ErrArtifactConflict) {
+		t.Fatalf("concurrent publication: %v, %v", firstErr, secondErr)
+	}
+	rows, readErr := publisher.ListByBuildID(ctx, producer)
+	if readErr != nil || len(rows) != 1 {
+		t.Fatalf("committed artifacts: %+v %v", rows, readErr)
+	}
+	artifact = rows[0].ID
+	restartedDB := openNotificationIntegrationDB(t)
+	t.Cleanup(func() { closeNotificationIntegrationDB(t, restartedDB) })
+	store := NewArtifactTriggerDeliveryRepository(restartedDB)
+	obligations, listErr := store.ListByProducerBuildID(ctx, producer)
+	if listErr != nil || len(obligations) != 2 {
+		t.Fatalf("fan-out: %+v, %v", obligations, listErr)
+	}
+	exec(`UPDATE jobs SET enabled=false,artifact_triggers='[]' WHERE project_id=$1`, project)
+	page := func(after string) []domain.ArtifactTriggerDelivery {
+		t.Helper()
+		items, pageErr := store.ListPendingAfter(ctx, after, 1)
+		if pageErr != nil {
+			t.Fatal(pageErr)
+		}
+		return items
+	}
+	if items := page(""); len(items) != 0 {
+		t.Fatalf("early publication eligible for recovery: %+v", items)
+	}
+	completion, beginErr := db.BeginTx(ctx, nil)
+	if beginErr != nil {
+		t.Fatal(beginErr)
+	}
+	defer func() { _ = completion.Rollback() }()
+	if _, updateErr := completion.ExecContext(ctx, `UPDATE builds SET status='success' WHERE id=$1`, producer); updateErr != nil {
+		t.Fatal(updateErr)
+	}
+	if items := page(""); len(items) != 0 {
+		t.Fatalf("observed uncommitted completion: %+v", items)
+	}
+	if commitErr := completion.Commit(); commitErr != nil {
+		t.Fatal(commitErr)
+	}
+	for _, status := range []domain.BuildStatus{domain.BuildStatusSuccess, domain.BuildStatusFailed, domain.BuildStatusCanceled} {
+		exec(`UPDATE builds SET status=$2 WHERE id=$1`, producer, status)
+		first := page("")
+		if len(first) != 1 || first[0].ID != obligations[0].ID && first[0].ID != obligations[1].ID {
+			t.Fatalf("first page for %s: %+v", status, first)
+		}
+		next := page(first[0].ID)
+		if len(next) != 1 || next[0].ID <= first[0].ID || len(page(next[0].ID)) != 0 {
+			t.Fatalf("second page for %s: %+v", status, next)
+		}
+	}
+	exec(`UPDATE artifact_trigger_deliveries SET atomic_creation=false WHERE producer_build_id=$1`, producer)
+	if items := page(""); len(items) != 0 {
+		t.Fatalf("legacy pending replayed: %+v", items)
+	}
+	delivery, err := store.GetByArtifactIDAndConsumerJobID(ctx, artifact, consumer)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -46,12 +46,16 @@ type ArtifactBuildListRepository interface {
 	ListByBuildID(ctx context.Context, buildID string) ([]domain.BuildArtifact, error)
 }
 
-// ArtifactRepository persists and queries build artifact metadata.
-type ArtifactRepository interface {
-	ArtifactBrowseRepository
-	ArtifactCatalogRepository
+// ArtifactPublicationRepository commits each new artifact and its publication-time trigger obligations together.
+type ArtifactPublicationRepository interface {
 	ArtifactBuildListRepository
 	Create(ctx context.Context, artifact domain.BuildArtifact) (domain.BuildArtifact, error)
 	GetByID(ctx context.Context, buildID string, artifactID string) (domain.BuildArtifact, error)
+}
+
+type ArtifactRepository interface {
+	ArtifactBrowseRepository
+	ArtifactCatalogRepository
+	ArtifactPublicationRepository
 	ListByStepID(ctx context.Context, stepID string) ([]domain.BuildArtifact, error)
 }

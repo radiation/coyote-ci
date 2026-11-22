@@ -112,13 +112,10 @@ func main() {
 	workspaceRevisionRepo := repositorypostgres.NewWorkspaceRevisionRepository(db)
 	executionJobOutputRepo := repositorypostgres.NewExecutionJobOutputRepository(db)
 	artifactRepo := repositorypostgres.NewArtifactRepository(db)
-	artifactTriggerDeliveryRepo := repositorypostgres.NewArtifactTriggerDeliveryRepository(db)
 	cacheEntryRepo := repositorypostgres.NewCacheEntryRepository(db)
 	workerRepo := repositorypostgres.NewWorkerRepository(db)
 	jobRepo := repositorypostgres.NewJobRepository(db)
-	jobManagedImageConfigRepo := repositorypostgres.NewJobManagedImageConfigRepository(db)
 	projectRepo := repositorypostgres.NewProjectRepository(db)
-	sourceCredentialRepo := repositorypostgres.NewSourceCredentialRepository(db)
 	scmConnectionRepo := repositorypostgres.NewSCMConnectionRepository(db)
 	scmRepositoryRegistrationRepo := repositorypostgres.NewSCMRepositoryRegistrationRepository(db)
 	userRepo := repositorypostgres.NewUserRepository(db)
@@ -191,11 +188,6 @@ func main() {
 		ArtifactWorkspace:   cfg.ExecutionWorkspaceRoot,
 		ReleaseSnapshotter:  applicationReleaseService,
 	}, workspaceRevisionRepo, workspaceRevisionStore))
-	jobService := service.NewJobService(jobRepo, buildService).
-		WithProjectRepository(projectRepo).
-		WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo).
-		WithArtifactTriggerDeliveryRepository(artifactTriggerDeliveryRepo)
-	buildService.SetArtifactTriggerDispatcher(jobService)
 	leaseDuration := time.Duration(cfg.StepLeaseSeconds) * time.Second
 	workerService := workersvc.NewExecutionWorkerServiceWithLease(buildService, defaultWorkerID(), leaseDuration)
 	workerService.SetWorkerRepository(workerRepo)

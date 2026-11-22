@@ -34,6 +34,7 @@ func (plan ArtifactBuildPlan) Matches(delivery domain.ArtifactTriggerDelivery, c
 }
 
 type ArtifactTriggerDeliveryRepository interface {
+	ListPendingAfter(ctx context.Context, after string, limit int) ([]domain.ArtifactTriggerDelivery, error)
 	CreateArtifactBuild(context.Context, string, time.Time, ArtifactBuildPlan) (domain.Build, error)
 	FailPending(context.Context, string, time.Time, string) (domain.ArtifactTriggerDelivery, error)
 	ClaimFailedForRetry(ctx context.Context, id string, updatedAt time.Time) (domain.ArtifactTriggerDelivery, error)

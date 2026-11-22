@@ -11,10 +11,15 @@ import (
 
 // ArtifactRepository is an in-memory implementation of repository.ArtifactRepository.
 type ArtifactRepository struct {
-	mu        sync.RWMutex
-	artifacts []domain.BuildArtifact
-	builds    map[string]domain.Build
-	packages  map[string]string
+	mu         sync.RWMutex
+	artifacts  []domain.BuildArtifact
+	builds     map[string]domain.Build
+	packages   map[string]string
+	deliveries *ArtifactTriggerDeliveryRepository
+}
+
+func NewPublishingArtifactRepository(deliveries *ArtifactTriggerDeliveryRepository) *ArtifactRepository {
+	return &ArtifactRepository{deliveries: deliveries, builds: make(map[string]domain.Build)}
 }
 
 func NewArtifactRepository() *ArtifactRepository {
@@ -37,6 +42,9 @@ func (r *ArtifactRepository) Create(_ context.Context, artifact domain.BuildArti
 	defer r.mu.Unlock()
 
 	for _, existing := range r.artifacts {
+		if existing.ID == artifact.ID {
+			return domain.BuildArtifact{}, repository.ErrArtifactConflict
+		}
 		if existing.BuildID != artifact.BuildID || existing.LogicalPath != artifact.LogicalPath {
 			continue
 		}
@@ -48,6 +56,37 @@ func (r *ArtifactRepository) Create(_ context.Context, artifact domain.BuildArti
 		if existing.StepID == nil && artifact.StepID == nil {
 			return domain.BuildArtifact{}, repository.ErrArtifactConflict
 		}
+	}
+	if deliveries := r.deliveries; deliveries != nil {
+		deliveries.mu.Lock()
+		defer deliveries.mu.Unlock()
+		deliveries.consumers.mu.RLock()
+		defer deliveries.consumers.mu.RUnlock()
+		deliveries.builds.mu.RLock()
+		defer deliveries.builds.mu.RUnlock()
+		producer, ok := deliveries.builds.builds[artifact.BuildID]
+		if !ok {
+			return domain.BuildArtifact{}, repository.ErrArtifactNotFound
+		}
+		var pending []domain.ArtifactTriggerDelivery
+		for _, job := range deliveries.consumers.jobs {
+			if producer.JobID == nil || job.ID == *producer.JobID || producer.Trigger.Kind == domain.BuildTriggerKindArtifact || !job.Enabled || job.ProjectID != producer.ProjectID {
+				continue
+			}
+			for _, trigger := range domain.NormalizeJobArtifactTriggers(job.ArtifactTriggers) {
+				if trigger.ProducerJobID == *producer.JobID && trigger.Path == artifact.LogicalPath {
+					if _, exists := deliveries.index[artifactTriggerDeliveryKey(artifact.ID, job.ID)]; exists {
+						return domain.BuildArtifact{}, repository.ErrArtifactTriggerDeliveryDuplicate
+					}
+					pending = append(pending, domain.ArtifactTriggerDelivery{ProducerProjectID: producer.ProjectID, ProducerBuildID: producer.ID, ProducerJobID: *producer.JobID, ConsumerJobID: job.ID, ArtifactID: artifact.ID, ArtifactPath: artifact.LogicalPath, Status: domain.ArtifactTriggerDeliveryStatusPending})
+					break
+				}
+			}
+		}
+		for _, delivery := range pending {
+			deliveries.insertLocked(delivery)
+		}
+		r.builds[producer.ID] = producer
 	}
 	if artifact.PackageID == "" {
 		artifact.PackageID = r.packageIDLocked(artifact.BuildID, artifact.LogicalPath)

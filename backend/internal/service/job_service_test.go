@@ -622,14 +622,43 @@ func TestArtifactDeliveryPreparationFailureRacesCommit(t *testing.T) {
 	}
 }
 
-func TestJobService_DispatchArtifactTriggers_QueuesOncePerArtifactAndConsumer(t *testing.T) {
+type recoveryScanProbe struct {
+	repository.ArtifactTriggerDeliveryRepository
+	scans  int
+	cancel context.CancelFunc
+}
+
+func (probe *recoveryScanProbe) ListPendingAfter(_ context.Context, after string, limit int) ([]domain.ArtifactTriggerDelivery, error) {
+	probe.scans++
+	if probe.scans == 1 {
+		return nil, errors.New("temporary scan failure")
+	}
+	probe.cancel()
+	return nil, nil
+}
+
+func TestArtifactRecoveryContinuesAfterScanFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	probe := &recoveryScanProbe{cancel: cancel}
+	server := NewJobService(nil, nil).WithArtifactTriggerDeliveryRepository(probe)
+	if after, err := server.recoverArtifactPage(ctx, "previous-id", 64); err == nil || after != "previous-id" {
+		t.Fatalf("lost scan position: %s %v", after, err)
+	}
+	probe.scans = 0
+	server.RunArtifactTriggerRecovery(ctx, time.Millisecond)
+	if probe.scans != 2 || !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("scans=%d, context=%v", probe.scans, ctx.Err())
+	}
+}
+
+func TestJobService_RecoverArtifactTriggers_QueuesOncePerArtifactAndConsumer(t *testing.T) {
 	ctx := context.Background()
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
 	deliveryRepo := memory.NewArtifactBuildDeliveryRepository(jobRepo, buildRepo, memory.NewExecutionJobRepository(), memory.NewExecutionJobOutputRepository())
 	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobService := NewJobService(jobRepo, buildService).WithArtifactTriggerDeliveryRepository(deliveryRepo)
-	buildService.SetArtifactTriggerDispatcher(jobService)
 
 	now := time.Now().UTC()
 	producerJob, err := jobRepo.Create(ctx, domain.Job{
@@ -687,11 +716,39 @@ func TestJobService_DispatchArtifactTriggers_QueuesOncePerArtifactAndConsumer(t 
 		SizeBytes:   42,
 		CreatedAt:   now,
 	}
-	if dispatchErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact); dispatchErr != nil {
-		t.Fatalf("dispatch artifact triggers failed: %v", dispatchErr)
+	publisher := memory.NewPublishingArtifactRepository(deliveryRepo)
+	buildService.SetArtifactPersistence(publisher, nil, "")
+	if _, publishErr := publisher.Create(ctx, artifact); publishErr != nil {
+		t.Fatal(publishErr)
 	}
-	if secondDispatchErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact); secondDispatchErr != nil {
-		t.Fatalf("dispatch artifact triggers second call failed: %v", secondDispatchErr)
+	if cursor, pageErr := jobService.recoverArtifactPage(ctx, "", 1); pageErr != nil || cursor != "" {
+		t.Fatalf("nonterminal producer visible: %s %v", cursor, pageErr)
+	}
+	pending, getErr := deliveryRepo.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, consumerJob.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if _, earlyErr := jobService.processArtifactDelivery(ctx, pending); !errors.Is(earlyErr, ErrArtifactTriggerDeliveryPendingRetryDeferred) {
+		t.Fatalf("nonterminal producer processed: %v", earlyErr)
+	}
+	stale := pending
+	stale.UpdatedAt = stale.UpdatedAt.Add(-time.Second)
+	if _, staleErr := jobService.processArtifactDelivery(ctx, stale); !errors.Is(staleErr, repository.ErrArtifactTriggerDeliveryRetryNotClaimable) {
+		t.Fatalf("stale claim: %v", staleErr)
+	}
+	consumerJob.Enabled = false
+	consumerJob.ArtifactTriggers = nil
+	if _, updateErr := jobRepo.Update(ctx, consumerJob); updateErr != nil {
+		t.Fatal(updateErr)
+	}
+	if _, completeErr := buildRepo.UpdateStatus(ctx, producerBuild.ID, domain.BuildStatusSuccess, nil); completeErr != nil {
+		t.Fatal(completeErr)
+	}
+	if cursor, pageErr := jobService.recoverArtifactPage(ctx, "", 1); pageErr != nil || cursor == "" {
+		t.Fatalf("terminal producer not recovered: %s %v", cursor, pageErr)
+	}
+	if cursor, pageErr := jobService.recoverArtifactPage(ctx, "", 1); pageErr != nil || cursor != "" {
+		t.Fatalf("replayed satisfied delivery: %s %v", cursor, pageErr)
 	}
 
 	builds, err := buildService.ListBuildsByJobID(ctx, consumerJob.ID)
@@ -717,22 +774,28 @@ func TestJobService_DispatchArtifactTriggers_QueuesOncePerArtifactAndConsumer(t 
 	if delivery.QueuedBuildID == nil || *delivery.QueuedBuildID != builds[0].ID {
 		t.Fatalf("expected queued build id %q, got %#v", builds[0].ID, delivery.QueuedBuildID)
 	}
-	producerJob.ArtifactTriggers = consumerJob.ArtifactTriggers
+	producerJob.ArtifactTriggers = []domain.JobArtifactTrigger{{ProducerJobID: producerJob.ID, Path: "another"}}
 	if _, updateErr := jobRepo.Update(ctx, producerJob); updateErr != nil {
 		t.Fatal(updateErr)
 	}
-	if selfErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact); selfErr != nil {
+	artifact.ID, artifact.LogicalPath = "self", "another"
+	if _, selfErr := publisher.Create(ctx, artifact); selfErr != nil {
 		t.Fatal(selfErr)
 	}
 	if _, lookupErr := deliveryRepo.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, producerJob.ID); !errors.Is(lookupErr, repository.ErrArtifactTriggerDeliveryNotFound) {
 		t.Fatalf("self trigger: %v", lookupErr)
 	}
-	producerBuild.Trigger.Kind = domain.BuildTriggerKindArtifact
-	artifact.ID = "chain-artifact"
-	if chainErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact); chainErr != nil {
+	consumerJob.Enabled = true
+	consumerJob.ArtifactTriggers = []domain.JobArtifactTrigger{{ProducerJobID: consumerJob.ID, Path: "another"}}
+	producerJob.ArtifactTriggers = consumerJob.ArtifactTriggers
+	if _, updateErr := jobRepo.Update(ctx, producerJob); updateErr != nil {
+		t.Fatal(updateErr)
+	}
+	artifact.ID, artifact.BuildID = "chain-artifact", builds[0].ID
+	if _, chainErr := publisher.Create(ctx, artifact); chainErr != nil {
 		t.Fatal(chainErr)
 	}
-	if _, lookupErr := deliveryRepo.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, consumerJob.ID); !errors.Is(lookupErr, repository.ErrArtifactTriggerDeliveryNotFound) {
+	if _, lookupErr := deliveryRepo.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, producerJob.ID); !errors.Is(lookupErr, repository.ErrArtifactTriggerDeliveryNotFound) {
 		t.Fatalf("chained trigger: %v", lookupErr)
 	}
 }
@@ -768,7 +831,24 @@ func TestJobService_UpdateJob_InvalidArtifactTriggersAreNotSilentlyDropped(t *te
 	}
 }
 
-func TestJobService_DispatchArtifactTriggers_QueuesManagedImageConfiguredRepoJob(t *testing.T) {
+func publishAndProcessTestArtifact(ctx context.Context, svc *JobService, builds *memory.BuildRepository, deliveries *memory.ArtifactTriggerDeliveryRepository, consumer string, artifact domain.BuildArtifact) error {
+	publisher := memory.NewPublishingArtifactRepository(deliveries)
+	svc.buildService.SetArtifactPersistence(publisher, nil, "")
+	if _, err := publisher.Create(ctx, artifact); err != nil {
+		return err
+	}
+	if _, err := builds.UpdateStatus(ctx, artifact.BuildID, domain.BuildStatusFailed, nil); err != nil {
+		return err
+	}
+	delivery, err := deliveries.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, consumer)
+	if err != nil {
+		return err
+	}
+	_, err = svc.processArtifactDelivery(ctx, delivery)
+	return err
+}
+
+func TestJobService_RecoverArtifactTriggers_QueuesManagedImageConfiguredRepoJob(t *testing.T) {
 	ctx := context.Background()
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
@@ -790,7 +870,6 @@ func TestJobService_DispatchArtifactTriggers_QueuesManagedImageConfiguredRepoJob
 	jobService := NewJobService(jobRepo, buildService).
 		WithArtifactTriggerDeliveryRepository(deliveryRepo).
 		WithManagedImageConfigRepository(configRepo, credentialRepo)
-	buildService.SetArtifactTriggerDispatcher(jobService)
 
 	_, err := credentialRepo.Create(ctx, domain.SourceCredential{
 		ID:        "cred-1",
@@ -864,7 +943,7 @@ func TestJobService_DispatchArtifactTriggers_QueuesManagedImageConfiguredRepoJob
 		t.Fatalf("create producer build failed: %v", err)
 	}
 
-	err = jobService.DispatchArtifactTriggers(ctx, producerBuild, domain.BuildArtifact{
+	err = publishAndProcessTestArtifact(ctx, jobService, buildRepo, deliveryRepo, consumerJob.ID, domain.BuildArtifact{
 		ID:          "artifact-1",
 		BuildID:     producerBuild.ID,
 		LogicalPath: "dist/app.tgz",
@@ -881,11 +960,11 @@ func TestJobService_DispatchArtifactTriggers_QueuesManagedImageConfiguredRepoJob
 	}
 }
 
-func TestJobService_DispatchArtifactTriggers_QueueFailureMarksDeliveryFailed(t *testing.T) {
+func TestJobService_RecoverArtifactTriggers_QueueFailureMarksDeliveryFailed(t *testing.T) {
 	ctx := context.Background()
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	deliveryRepo := memory.NewArtifactTriggerDeliveryRepository()
+	deliveryRepo := memory.NewArtifactBuildDeliveryRepository(jobRepo, buildRepo, memory.NewExecutionJobRepository(), memory.NewExecutionJobOutputRepository())
 	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobService := NewJobService(jobRepo, buildService).WithArtifactTriggerDeliveryRepository(deliveryRepo)
 
@@ -939,7 +1018,7 @@ func TestJobService_DispatchArtifactTriggers_QueueFailureMarksDeliveryFailed(t *
 	}
 
 	artifact := domain.BuildArtifact{ID: "artifact-1", BuildID: producerBuild.ID, LogicalPath: "dist/app.tgz", CreatedAt: now}
-	dispatchErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact)
+	dispatchErr := publishAndProcessTestArtifact(ctx, jobService, buildRepo, deliveryRepo, consumerJob.ID, artifact)
 	if !errors.Is(dispatchErr, buildsvc.ErrRepoFetcherNotConfigured) {
 		t.Fatalf("expected repo fetcher error, got %v", dispatchErr)
 	}
@@ -959,7 +1038,7 @@ func TestJobService_DispatchArtifactTriggers_QueueFailureMarksDeliveryFailed(t *
 	}
 }
 
-func TestJobService_DispatchArtifactTriggers_RetriesFailedDelivery(t *testing.T) {
+func TestJobService_RecoverArtifactTriggers_RetriesFailedDelivery(t *testing.T) {
 	ctx := context.Background()
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
@@ -1024,7 +1103,7 @@ func TestJobService_DispatchArtifactTriggers_RetriesFailedDelivery(t *testing.T)
 	}
 
 	artifact := domain.BuildArtifact{ID: "artifact-1", BuildID: producerBuild.ID, LogicalPath: "dist/app.tgz", CreatedAt: now}
-	firstDispatchErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact)
+	firstDispatchErr := publishAndProcessTestArtifact(ctx, jobService, buildRepo, deliveryRepo, consumerJob.ID, artifact)
 	if !errors.Is(firstDispatchErr, buildsvc.ErrRepoFetcherNotConfigured) {
 		t.Fatalf("expected repo fetcher error on first dispatch, got %v", firstDispatchErr)
 	}
@@ -1038,7 +1117,7 @@ func TestJobService_DispatchArtifactTriggers_RetriesFailedDelivery(t *testing.T)
 	}
 
 	buildService.SetRepoFetcher(&fakeServiceRepoFetcher{localPath: repoDir, commitSHA: "abc123"})
-	secondDispatchErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact)
+	_, secondDispatchErr := jobService.RetryArtifactTriggerDelivery(ctx, failedDelivery.ID)
 	if secondDispatchErr != nil {
 		t.Fatalf("expected retry dispatch to succeed, got %v", secondDispatchErr)
 	}
@@ -1089,6 +1168,9 @@ func TestJobService_RetryArtifactTriggerDelivery(t *testing.T) {
 		t.Fatalf("create consumer job failed: %v", err)
 	}
 	producerBuild, err := buildRepo.CreateQueuedBuild(ctx, domain.Build{ID: "build-upstream", ProjectID: "project-1", JobID: &producerJob.ID, Status: domain.BuildStatusQueued, CreatedAt: now, Trigger: domain.BuildTrigger{Kind: domain.BuildTriggerKindManual}}, nil)
+	if _, completeErr := buildRepo.UpdateStatus(ctx, producerBuild.ID, domain.BuildStatusFailed, nil); completeErr != nil {
+		t.Fatal(completeErr)
+	}
 	if err != nil {
 		t.Fatalf("create producer build failed: %v", err)
 	}
@@ -1183,6 +1265,9 @@ func TestJobService_RetryArtifactTriggerDelivery_ErrorPaths(t *testing.T) {
 			t.Fatalf("create consumer job failed: %v", err)
 		}
 		producerBuild, err := buildRepo.CreateQueuedBuild(ctx, domain.Build{ID: "build-upstream", ProjectID: "project-1", JobID: &producerJob.ID, Status: domain.BuildStatusQueued, CreatedAt: now, Trigger: domain.BuildTrigger{Kind: domain.BuildTriggerKindManual}}, nil)
+		if _, completeErr := buildRepo.UpdateStatus(ctx, producerBuild.ID, domain.BuildStatusCanceled, nil); completeErr != nil {
+			t.Fatal(completeErr)
+		}
 		if err != nil {
 			t.Fatalf("create producer build failed: %v", err)
 		}

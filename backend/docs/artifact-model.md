@@ -13,4 +13,9 @@ This repository currently uses four related artifact concepts:
 Two intentional constraints for the current design:
 
 - Artifact packages now have first-class storage so immutable versions and mutable channels can be modeled separately without overloading target-level tags.
+
+- Both worker collection and authorized Kubernetes helper uploads commit artifact metadata and pending trigger deliveries in one transaction. Blob upload alone is not publication. A metadata failure can leave unreferenced bytes in the store.
+- Enabled consumers in the same project match an exact logical path and producer job at publication. Self triggers and artifact-trigger chains are excluded. Later trigger edits affect future publications, not committed deliveries. Consumers use their current pipeline when processed.
+- The server scans pending atomic deliveries at startup and every ten seconds, up to 64 per page in delivery-ID order. Success, failure, and cancellation all release the producer gate. Definite failures retain operator retry; ambiguous legacy deliveries are not replayed. No historical scan or backfill runs.
+- Rollout: drain and stop all old workers and servers before enabling new writers. Apply through migration 61, then start the updated servers and workers. Do not run mixed versions: old publishers can still commit metadata without obligations.
 - Mutable aliases such as `latest`, `stable`, or `prod` are modeled as artifact channels with movement history rather than mutable version tags.

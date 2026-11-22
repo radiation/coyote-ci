@@ -21,6 +21,7 @@ This file is a navigational summary of the main domain relationships. Use it to 
 
 - Artifact instances are the concrete outputs produced by one build.
 - A trigger delivery identifies one artifact/consumer pair. For deliveries created under schema 60's atomic protocol, its queued link, consumer build number, build, steps, execution jobs, dependencies, and declared outputs commit together. Build reruns copy provenance but do not acquire or replace that link.
+- Worker collection and Kubernetes helper uploads freeze matching consumer membership in the artifact metadata transaction. Server recovery scans only pending atomic deliveries with terminal producers; see `backend/docs/artifact-model.md` for rollout and retry semantics.
 - Cut over server and worker writers together. Existing unlinked deliveries lack proof that no build committed: leave them untouched for manual inspection. Publication-to-delivery intent and automatic pending-delivery recovery are separate from build creation.
 - Logical artifacts or packages are the stable browse/release identity for those outputs, usually grouped by job plus logical artifact path.
 - Artifact versions are immutable version assignments for one logical artifact and point at one concrete artifact instance.
