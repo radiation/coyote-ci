@@ -757,7 +757,7 @@ func TestScopedAPITokenRouteEnforcement(t *testing.T) {
 	retryArtifactRepo := &authzFakeArtifactRepo{artifactsByBuild: map[string][]domain.BuildArtifact{}}
 	retryBuildRepo := repositorymemory.NewBuildRepository()
 	retryJobRepo := repositorymemory.NewJobRepository()
-	retryDeliveryRepo := repositorymemory.NewArtifactTriggerDeliveryRepository()
+	retryDeliveryRepo := repositorymemory.NewArtifactBuildDeliveryRepository(retryJobRepo, retryBuildRepo, repositorymemory.NewExecutionJobRepository(), repositorymemory.NewExecutionJobOutputRepository())
 	retryBuildService := buildsvc.NewBuildService(retryBuildRepo, nil, logs.NewNoopSink())
 	retryBuildService.SetArtifactPersistence(retryArtifactRepo, nil, "")
 	retryJobService := service.NewJobService(retryJobRepo, retryBuildService).WithArtifactTriggerDeliveryRepository(retryDeliveryRepo)

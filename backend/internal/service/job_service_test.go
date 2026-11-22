@@ -536,11 +536,97 @@ func TestJobService_GetRegisteredRepositoriesByIDs(t *testing.T) {
 	}
 }
 
+type interruptedArtifactDeliveryStore struct {
+	repository.ArtifactTriggerDeliveryRepository
+	failing chan struct{}
+	resume  chan struct{}
+}
+
+func (store interruptedArtifactDeliveryStore) FailPending(ctx context.Context, id string, claim time.Time, message string) (domain.ArtifactTriggerDelivery, error) {
+	close(store.failing)
+	select {
+	case <-store.resume:
+	case <-ctx.Done():
+		return domain.ArtifactTriggerDelivery{}, ctx.Err()
+	}
+	return store.ArtifactTriggerDeliveryRepository.FailPending(ctx, id, claim, message)
+}
+
+func (store interruptedArtifactDeliveryStore) CreateArtifactBuild(ctx context.Context, id string, claim time.Time, plan repository.ArtifactBuildPlan) (domain.Build, error) {
+	_, err := store.ArtifactTriggerDeliveryRepository.CreateArtifactBuild(ctx, id, claim, plan)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	return domain.Build{}, repository.ErrArtifactBuildCommitUnknown
+}
+
+func TestArtifactDeliveryPreparationFailureRacesCommit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	consumers, builds, jobs, outputs := memory.NewJobRepository(), memory.NewBuildRepository(), memory.NewExecutionJobRepository(), memory.NewExecutionJobOutputRepository()
+	store := interruptedArtifactDeliveryStore{memory.NewArtifactBuildDeliveryRepository(consumers, builds, jobs, outputs), make(chan struct{}), make(chan struct{})}
+	buildService := buildsvc.NewBuildService(builds, nil, nil)
+	buildService.SetExecutionJobRepository(jobs)
+	buildService.SetExecutionJobOutputRepository(outputs)
+	svc := NewJobService(consumers, buildService).WithArtifactTriggerDeliveryRepository(store)
+	consumer, err := consumers.Create(ctx, domain.Job{ID: "consumer", ProjectID: "project", Enabled: true, UpdatedAt: time.Now(), RepositoryURL: "https://example.invalid/repo", DefaultRef: "main", PipelineYAML: "version: 1\nsteps:\n  - name: consume\n    run: make\nartifacts:\n  paths: [out]\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := "producer"
+	producer := domain.Build{ID: "producer-build", ProjectID: "project", JobID: &upstream}
+	artifact := domain.BuildArtifact{ID: "artifact", LogicalPath: "out", BuildID: producer.ID}
+	claim, err := store.Create(ctx, domain.ArtifactTriggerDelivery{ID: "claim", Status: domain.ArtifactTriggerDeliveryStatusPending, ArtifactID: artifact.ID, ArtifactPath: artifact.LogicalPath, ConsumerJobID: consumer.ID, ProducerBuildID: producer.ID, ProducerJobID: upstream, ProducerProjectID: producer.ProjectID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := consumer
+	bad.PipelineYAML = "[invalid"
+	failed := make(chan error, 1)
+	go func() {
+		_, queueErr := svc.queueArtifactTriggerDelivery(ctx, claim, producer, artifact, bad)
+		failed <- queueErr
+	}()
+	select {
+	case <-store.failing:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	current, queueErr := svc.queueArtifactTriggerDelivery(ctx, claim, producer, artifact, consumer)
+	close(store.resume)
+	if queueErr != nil || current.QueuedBuildID == nil {
+		t.Fatalf("recover acknowledgment: %+v %v", current, queueErr)
+	}
+	if lateErr := <-failed; lateErr != nil {
+		t.Fatal(lateErr)
+	}
+	buildID := *current.QueuedBuildID
+	linked, existingErr := store.ArtifactTriggerDeliveryRepository.CreateArtifactBuild(ctx, claim.ID, claim.UpdatedAt, repository.ArtifactBuildPlan{})
+	if existingErr != nil || linked.ID != buildID {
+		t.Fatalf("expected existing memory build: %+v %v", linked, existingErr)
+	}
+	declared, outputErr := outputs.ListByBuildID(ctx, buildID)
+	if outputErr != nil || len(declared) != 1 || declared[0].DeclaredPath != "out" {
+		t.Fatalf("missing output: %+v %v", declared, outputErr)
+	}
+	if _, _, cancelErr := builds.CancelBuild(ctx, buildID, "rerun", time.Now()); cancelErr != nil {
+		t.Fatal(cancelErr)
+	}
+	rerun, rerunErr := buildService.RerunBuild(ctx, buildID)
+	if rerunErr != nil || rerun.ID == buildID || rerun.Trigger.ArtifactID == nil || *rerun.Trigger.ArtifactID != claim.ArtifactID {
+		t.Fatalf("artifact rerun: %+v %v", rerun, rerunErr)
+	}
+	result, retryErr := svc.RetryArtifactTriggerDelivery(ctx, claim.ID)
+	if retryErr != nil || result.Result != "already_satisfied" || *result.View.Delivery.QueuedBuildID != buildID {
+		t.Fatalf("delivery retry: %+v %v", result, retryErr)
+	}
+}
+
 func TestJobService_DispatchArtifactTriggers_QueuesOncePerArtifactAndConsumer(t *testing.T) {
 	ctx := context.Background()
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	deliveryRepo := memory.NewArtifactTriggerDeliveryRepository()
+	deliveryRepo := memory.NewArtifactBuildDeliveryRepository(jobRepo, buildRepo, memory.NewExecutionJobRepository(), memory.NewExecutionJobOutputRepository())
 	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	jobService := NewJobService(jobRepo, buildService).WithArtifactTriggerDeliveryRepository(deliveryRepo)
 	buildService.SetArtifactTriggerDispatcher(jobService)
@@ -631,6 +717,24 @@ func TestJobService_DispatchArtifactTriggers_QueuesOncePerArtifactAndConsumer(t 
 	if delivery.QueuedBuildID == nil || *delivery.QueuedBuildID != builds[0].ID {
 		t.Fatalf("expected queued build id %q, got %#v", builds[0].ID, delivery.QueuedBuildID)
 	}
+	producerJob.ArtifactTriggers = consumerJob.ArtifactTriggers
+	if _, updateErr := jobRepo.Update(ctx, producerJob); updateErr != nil {
+		t.Fatal(updateErr)
+	}
+	if selfErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact); selfErr != nil {
+		t.Fatal(selfErr)
+	}
+	if _, lookupErr := deliveryRepo.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, producerJob.ID); !errors.Is(lookupErr, repository.ErrArtifactTriggerDeliveryNotFound) {
+		t.Fatalf("self trigger: %v", lookupErr)
+	}
+	producerBuild.Trigger.Kind = domain.BuildTriggerKindArtifact
+	artifact.ID = "chain-artifact"
+	if chainErr := jobService.DispatchArtifactTriggers(ctx, producerBuild, artifact); chainErr != nil {
+		t.Fatal(chainErr)
+	}
+	if _, lookupErr := deliveryRepo.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, consumerJob.ID); !errors.Is(lookupErr, repository.ErrArtifactTriggerDeliveryNotFound) {
+		t.Fatalf("chained trigger: %v", lookupErr)
+	}
 }
 
 func TestJobService_UpdateJob_InvalidArtifactTriggersAreNotSilentlyDropped(t *testing.T) {
@@ -668,7 +772,7 @@ func TestJobService_DispatchArtifactTriggers_QueuesManagedImageConfiguredRepoJob
 	ctx := context.Background()
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	deliveryRepo := memory.NewArtifactTriggerDeliveryRepository()
+	deliveryRepo := memory.NewArtifactBuildDeliveryRepository(jobRepo, buildRepo, memory.NewExecutionJobRepository(), memory.NewExecutionJobOutputRepository())
 	configRepo := memory.NewJobManagedImageConfigRepository()
 	credentialRepo := memory.NewSourceCredentialRepository()
 	refresher := &fakeServiceManagedImageRefresher{}
@@ -859,7 +963,7 @@ func TestJobService_DispatchArtifactTriggers_RetriesFailedDelivery(t *testing.T)
 	ctx := context.Background()
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	deliveryRepo := memory.NewArtifactTriggerDeliveryRepository()
+	deliveryRepo := memory.NewArtifactBuildDeliveryRepository(jobRepo, buildRepo, memory.NewExecutionJobRepository(), memory.NewExecutionJobOutputRepository())
 	repoDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(repoDir, ".coyote"), 0o755); err != nil {
 		t.Fatalf("mkdir repo dir: %v", err)
@@ -969,7 +1073,7 @@ func TestJobService_RetryArtifactTriggerDelivery(t *testing.T) {
 	ctx := context.Background()
 	jobRepo := memory.NewJobRepository()
 	buildRepo := memory.NewBuildRepository()
-	deliveryRepo := memory.NewArtifactTriggerDeliveryRepository()
+	deliveryRepo := memory.NewArtifactBuildDeliveryRepository(jobRepo, buildRepo, memory.NewExecutionJobRepository(), memory.NewExecutionJobOutputRepository())
 	artifactRepo := &fakeJobServiceArtifactRepo{}
 	buildService := buildsvc.NewBuildService(buildRepo, nil, nil)
 	buildService.SetArtifactPersistence(artifactRepo, nil, "")

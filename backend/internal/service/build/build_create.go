@@ -12,6 +12,7 @@ import (
 
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/pipeline"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
 type CreateBuildInput struct {
@@ -211,6 +212,25 @@ func (s *BuildService) CreateBuildFromPipeline(ctx context.Context, input Create
 		return domain.Build{}, triggerErr
 	}
 
+	return s.persistPipelineBuild(ctx, build, steps, input.Trigger)
+}
+
+func (s *BuildService) persistPipelineBuild(ctx context.Context, build domain.Build, steps []domain.BuildStep, trigger *CreateBuildTriggerInput) (domain.Build, error) {
+	if trigger != nil && trigger.PersistArtifactBuild != nil {
+		jobs, err := s.executionPlanner.Plan(build, steps, s.resolveExecutionImage(build))
+		if err != nil {
+			return domain.Build{}, err
+		}
+		outputs, err := s.declaredOutputsForBuild(build, jobs)
+		if err != nil {
+			return domain.Build{}, err
+		}
+		created, err := trigger.PersistArtifactBuild(ctx, repository.ArtifactBuildPlan{Build: build, Steps: steps, Jobs: jobs, Outputs: outputs})
+		if err == nil && created.ID == build.ID {
+			s.notifySCMBuildStatus(ctx, created)
+		}
+		return created, err
+	}
 	queuedBuild, err := s.buildRepo.CreateQueuedBuild(ctx, build, steps)
 	if err != nil {
 		return domain.Build{}, err

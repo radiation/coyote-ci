@@ -110,14 +110,16 @@ func (r *BuildRepository) CancelBuild(_ context.Context, id string, reason strin
 func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Build, steps []domain.BuildStep) (domain.Build, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.createQueuedBuildLocked(build, steps)
+}
 
+func (r *BuildRepository) createQueuedBuildLocked(build domain.Build, steps []domain.BuildStep) (domain.Build, error) {
 	if build.ID == "" {
 		build.ID = uuid.NewString()
 	}
 	if build.AttemptNumber <= 0 {
 		build.AttemptNumber = 1
 	}
-	r.assignBuildNumberLocked(&build)
 	build.Priority = domain.NormalizePriority(build.Priority)
 	build.Trigger = domain.NormalizeBuildTrigger(build.Trigger)
 	build = domain.NormalizeBuildMetadata(build)
@@ -126,6 +128,7 @@ func (r *BuildRepository) CreateQueuedBuild(_ context.Context, build domain.Buil
 	}
 
 	now := time.Now().UTC()
+	r.assignBuildNumberLocked(&build)
 	build.Status = domain.BuildStatusQueued
 	build.CurrentStepIndex = 0
 	build.ErrorMessage = nil

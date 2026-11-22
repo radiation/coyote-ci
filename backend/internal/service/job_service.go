@@ -822,15 +822,7 @@ func (s *JobService) dispatchArtifactTriggerToJob(ctx context.Context, producerB
 				}
 				return claimErr
 			}
-			claimed.ProducerBuildID = producerBuild.ID
-			claimed.ProducerProjectID = producerBuild.ProjectID
-			claimed.ProducerJobID = producerJobID
-			claimed.ArtifactPath = artifact.LogicalPath
-			claimed.UpdatedAt = now
-			created, err = s.artifactTriggerDeliveries.Update(ctx, claimed)
-			if err != nil {
-				return err
-			}
+			created = claimed
 		} else {
 			return err
 		}
@@ -841,7 +833,15 @@ func (s *JobService) dispatchArtifactTriggerToJob(ctx context.Context, producerB
 
 func (s *JobService) queueArtifactTriggerDelivery(ctx context.Context, delivery domain.ArtifactTriggerDelivery, producerBuild domain.Build, artifact domain.BuildArtifact, consumerJob domain.Job) (domain.ArtifactTriggerDelivery, error) {
 	artifactSizeBytes := artifact.SizeBytes
-	queuedBuild, queueErr := s.createBuildForJobWithTrigger(ctx, consumerJob, &buildsvc.CreateBuildTriggerInput{
+	_, queueErr := s.createBuildForJobWithTrigger(ctx, consumerJob, &buildsvc.CreateBuildTriggerInput{
+		PersistArtifactBuild: func(ctx context.Context, plan repository.ArtifactBuildPlan) (domain.Build, error) {
+			plan.ConsumerUpdatedAt = consumerJob.UpdatedAt
+			created, err := s.artifactTriggerDeliveries.CreateArtifactBuild(ctx, delivery.ID, delivery.UpdatedAt, plan)
+			if err != nil && !errors.Is(err, repository.ErrArtifactBuildCommitUnknown) {
+				return domain.Build{}, errors.Join(repository.ErrArtifactBuildNotCommitted, err)
+			}
+			return created, err
+		},
 		Kind:                   string(domain.BuildTriggerKindArtifact),
 		ProducerProjectID:      producerBuild.ProjectID,
 		ProducerJobID:          strings.TrimSpace(readStringPtr(producerBuild.JobID)),
@@ -853,22 +853,20 @@ func (s *JobService) queueArtifactTriggerDelivery(ctx context.Context, delivery 
 		ArtifactChecksumSHA256: readStringPtr(artifact.ChecksumSHA256),
 	})
 	if queueErr != nil {
-		message := queueErr.Error()
-		delivery.Status = domain.ArtifactTriggerDeliveryStatusFailed
-		delivery.ErrorMessage = &message
-		delivery.UpdatedAt = time.Now().UTC()
-		updated, updateErr := s.artifactTriggerDeliveries.Update(ctx, delivery)
+		var updated domain.ArtifactTriggerDelivery
+		var updateErr error
+		if errors.Is(queueErr, repository.ErrArtifactBuildCommitUnknown) {
+			updated, updateErr = s.artifactTriggerDeliveries.GetByID(ctx, delivery.ID)
+		} else {
+			updated, updateErr = s.artifactTriggerDeliveries.FailPending(ctx, delivery.ID, delivery.UpdatedAt, queueErr.Error())
+		}
 		if updateErr != nil {
-			return domain.ArtifactTriggerDelivery{}, updateErr
+			return domain.ArtifactTriggerDelivery{}, errors.Join(queueErr, updateErr)
+		}
+		if updated.Status == domain.ArtifactTriggerDeliveryStatusQueued && updated.QueuedBuildID != nil {
+			return updated, nil
 		}
 		return updated, queueErr
 	}
-	delivery.Status = domain.ArtifactTriggerDeliveryStatusQueued
-	delivery.QueuedBuildID = &queuedBuild.ID
-	delivery.UpdatedAt = time.Now().UTC()
-	updated, err := s.artifactTriggerDeliveries.Update(ctx, delivery)
-	if err != nil {
-		return domain.ArtifactTriggerDelivery{}, err
-	}
-	return updated, nil
+	return s.artifactTriggerDeliveries.GetByID(ctx, delivery.ID)
 }

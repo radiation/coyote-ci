@@ -212,12 +212,19 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 	if err != nil {
 		return domain.Build{}, err
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
+	defer func() { _ = tx.Rollback() }()
+	created, err := insertQueuedBuild(ctx, tx, build, steps)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return domain.Build{}, err
+	}
+	return created, nil
+}
 
+func insertQueuedBuild(ctx context.Context, tx *sql.Tx, build domain.Build, steps []domain.BuildStep) (domain.Build, error) {
+	var err error
 	const createQuery = `
 		WITH observed_build_number AS (
 			UPDATE jobs
@@ -257,10 +264,6 @@ func (r *BuildRepository) CreateQueuedBuild(ctx context.Context, build domain.Bu
 		if err = insertSteps(ctx, tx, build.ID, steps); err != nil {
 			return domain.Build{}, err
 		}
-	}
-
-	if err = tx.Commit(); err != nil {
-		return domain.Build{}, err
 	}
 
 	return build, nil

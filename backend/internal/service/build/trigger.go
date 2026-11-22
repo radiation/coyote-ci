@@ -1,8 +1,14 @@
 package build
 
-import "github.com/radiation/coyote-ci/backend/internal/domain"
+import (
+	"context"
+
+	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository"
+)
 
 type CreateBuildTriggerInput struct {
+	PersistArtifactBuild   func(context.Context, repository.ArtifactBuildPlan) (domain.Build, error) `json:"-"`
 	Kind                   string
 	SCMProvider            string
 	EventType              string

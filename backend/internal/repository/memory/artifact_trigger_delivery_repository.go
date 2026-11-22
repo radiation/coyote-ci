@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -17,6 +18,73 @@ type ArtifactTriggerDeliveryRepository struct {
 	mu         sync.RWMutex
 	deliveries map[string]domain.ArtifactTriggerDelivery
 	index      map[string]string
+	consumers  *JobRepository
+	builds     *BuildRepository
+	jobs       *ExecutionJobRepository
+	outputs    *ExecutionJobOutputRepository
+}
+
+func NewArtifactBuildDeliveryRepository(consumers *JobRepository, builds *BuildRepository, jobs *ExecutionJobRepository, outputs *ExecutionJobOutputRepository) *ArtifactTriggerDeliveryRepository {
+	r := NewArtifactTriggerDeliveryRepository()
+	r.consumers, r.builds, r.jobs, r.outputs = consumers, builds, jobs, outputs
+	return r
+}
+
+func (r *ArtifactTriggerDeliveryRepository) CreateArtifactBuild(_ context.Context, id string, claim time.Time, plan repository.ArtifactBuildPlan) (domain.Build, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delivery, ok := r.deliveries[id]
+	if !ok {
+		return domain.Build{}, repository.ErrArtifactTriggerDeliveryNotFound
+	}
+	if r.consumers == nil || r.builds == nil || r.jobs == nil || r.outputs == nil {
+		return domain.Build{}, errors.New("artifact build repositories not configured")
+	}
+	r.consumers.mu.RLock()
+	defer r.consumers.mu.RUnlock()
+	r.jobs.mu.Lock()
+	defer r.jobs.mu.Unlock()
+	r.builds.mu.Lock()
+	defer r.builds.mu.Unlock()
+	r.outputs.mu.Lock()
+	defer r.outputs.mu.Unlock()
+	if delivery.Status == domain.ArtifactTriggerDeliveryStatusQueued && delivery.QueuedBuildID != nil {
+		linked, found := r.builds.builds[*delivery.QueuedBuildID]
+		if !found {
+			return domain.Build{}, repository.ErrBuildNotFound
+		}
+		return cloneBuildApplicationVersion(linked), nil
+	}
+	consumer := r.consumers.jobs[delivery.ConsumerJobID]
+	if !plan.Matches(delivery, claim) || !consumer.Enabled || consumer.ProjectID != delivery.ProducerProjectID || !consumer.UpdatedAt.Equal(plan.ConsumerUpdatedAt) {
+		return domain.Build{}, repository.ErrArtifactTriggerDeliveryRetryNotClaimable
+	}
+	created, err := r.builds.createQueuedBuildLocked(plan.Build, plan.Steps)
+	if err != nil {
+		return domain.Build{}, err
+	}
+	r.jobs.insertJobsLocked(plan.Jobs)
+	r.outputs.insertOutputsLocked(plan.Outputs)
+	delivery.QueuedBuildID, delivery.ErrorMessage, delivery.UpdatedAt, delivery.Status = &created.ID, nil, time.Now().UTC(), domain.ArtifactTriggerDeliveryStatusQueued
+	r.deliveries[id] = delivery
+	return created, nil
+}
+
+func (r *ArtifactTriggerDeliveryRepository) FailPending(_ context.Context, id string, claim time.Time, message string) (domain.ArtifactTriggerDelivery, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delivery, ok := r.deliveries[id]
+	if !ok {
+		return delivery, repository.ErrArtifactTriggerDeliveryNotFound
+	}
+	if delivery.Status == domain.ArtifactTriggerDeliveryStatusPending && delivery.QueuedBuildID == nil && delivery.UpdatedAt.Equal(claim) {
+		delivery.Status, delivery.ErrorMessage, delivery.UpdatedAt = domain.ArtifactTriggerDeliveryStatusFailed, &message, nextDeliveryTimestamp(delivery.UpdatedAt, time.Now().UTC())
+		if strings.TrimSpace(message) == "" {
+			delivery.ErrorMessage = nil
+		}
+		r.deliveries[id] = delivery
+	}
+	return delivery, nil
 }
 
 func NewArtifactTriggerDeliveryRepository() *ArtifactTriggerDeliveryRepository {
@@ -44,9 +112,16 @@ func (r *ArtifactTriggerDeliveryRepository) ClaimFailedForRetry(_ context.Contex
 	delivery.Status = domain.ArtifactTriggerDeliveryStatusPending
 	delivery.QueuedBuildID = nil
 	delivery.ErrorMessage = nil
-	delivery.UpdatedAt = now
+	delivery.UpdatedAt = nextDeliveryTimestamp(delivery.UpdatedAt, now)
 	r.deliveries[delivery.ID] = delivery
 	return delivery, nil
+}
+
+func nextDeliveryTimestamp(previous, now time.Time) time.Time {
+	if !now.After(previous) {
+		return previous.Add(time.Microsecond)
+	}
+	return now
 }
 
 func (r *ArtifactTriggerDeliveryRepository) Create(_ context.Context, delivery domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error) {
@@ -104,17 +179,6 @@ func (r *ArtifactTriggerDeliveryRepository) ListByProducerBuildID(_ context.Cont
 	})
 
 	return out, nil
-}
-
-func (r *ArtifactTriggerDeliveryRepository) Update(_ context.Context, delivery domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, ok := r.deliveries[delivery.ID]; !ok {
-		return domain.ArtifactTriggerDelivery{}, repository.ErrArtifactTriggerDeliveryNotFound
-	}
-	r.deliveries[delivery.ID] = delivery
-	return delivery, nil
 }
 
 func artifactTriggerDeliveryKey(artifactID string, consumerJobID string) string {

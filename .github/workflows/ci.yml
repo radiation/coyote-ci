@@ -112,7 +112,7 @@ jobs:
             -coverpkg=./internal/repository/postgres,./internal/service/build,./internal/service/release \
             -coverprofile=release-integration-coverage.out \
             ./internal/repository/postgres \
-            -run '^(TestApplicationReleaseRepository_.*_Postgres|TestArtifactLabelRepository_ImmutableVersions_Postgres|TestNotificationPlan(Restart|Atomicity)Postgres)$'
+            -run '^(TestApplicationReleaseRepository_.*_Postgres|TestArtifactLabelRepository_ImmutableVersions_Postgres|TestNotificationPlan(Restart|Atomicity)Postgres|TestArtifactBuildTransaction)$'
 
       - name: Verify coverage files
         working-directory: backend

@@ -57,15 +57,12 @@ func TestArtifactTriggerDeliveryRepository_CreateDuplicateGetAndUpdate(t *testin
 		t.Fatalf("expected delivery %q from get by id, got %#v", created.ID, byID)
 	}
 
-	queuedBuildID := "build-2"
-	created.Status = domain.ArtifactTriggerDeliveryStatusQueued
-	created.QueuedBuildID = &queuedBuildID
-	updated, err := repo.Update(context.Background(), created)
+	updated, err := repo.FailPending(context.Background(), created.ID, created.UpdatedAt, "prepare failed")
 	if err != nil {
 		t.Fatalf("update failed: %v", err)
 	}
-	if updated.QueuedBuildID == nil || *updated.QueuedBuildID != queuedBuildID {
-		t.Fatalf("expected queued build id %q, got %#v", queuedBuildID, updated.QueuedBuildID)
+	if updated.QueuedBuildID != nil || updated.Status != domain.ArtifactTriggerDeliveryStatusFailed {
+		t.Fatalf("expected unlinked failed delivery, got %+v", updated)
 	}
 
 	_, err = repo.GetByArtifactIDAndConsumerJobID(context.Background(), "missing", "job-1")
@@ -73,7 +70,7 @@ func TestArtifactTriggerDeliveryRepository_CreateDuplicateGetAndUpdate(t *testin
 		t.Fatalf("expected not found, got %v", err)
 	}
 
-	_, err = repo.Update(context.Background(), domain.ArtifactTriggerDelivery{ID: "missing"})
+	_, err = repo.FailPending(context.Background(), "missing", created.UpdatedAt, "failed")
 	if !errors.Is(err, repository.ErrArtifactTriggerDeliveryNotFound) {
 		t.Fatalf("expected update not found, got %v", err)
 	}

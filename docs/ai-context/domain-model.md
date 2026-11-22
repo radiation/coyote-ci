@@ -20,6 +20,8 @@ This file is a navigational summary of the main domain relationships. Use it to 
 ## Artifacts, versions, and releases
 
 - Artifact instances are the concrete outputs produced by one build.
+- A trigger delivery identifies one artifact/consumer pair. For deliveries created under schema 60's atomic protocol, its queued link, consumer build number, build, steps, execution jobs, dependencies, and declared outputs commit together. Build reruns copy provenance but do not acquire or replace that link.
+- Cut over server and worker writers together. Existing unlinked deliveries lack proof that no build committed: leave them untouched for manual inspection. Publication-to-delivery intent and automatic pending-delivery recovery are separate from build creation.
 - Logical artifacts or packages are the stable browse/release identity for those outputs, usually grouped by job plus logical artifact path.
 - Artifact versions are immutable version assignments for one logical artifact and point at one concrete artifact instance.
 - Channels or labels are mutable aliases such as `latest`, `stable`, or `prod`; artifact-backed version/channel data is surfaced through the compatibility `VersionTag` read model.

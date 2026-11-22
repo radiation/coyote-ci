@@ -22,13 +22,6 @@ func (r *ExecutionJobOutputRepository) CreateMany(ctx context.Context, outputs [
 		return []domain.ExecutionJobOutput{}, nil
 	}
 
-	const query = `
-		INSERT INTO build_job_outputs (
-			id, job_id, build_id, name, kind, declared_path, destination_uri, content_type, size_bytes, digest, status, created_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-	`
-
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -37,6 +30,22 @@ func (r *ExecutionJobOutputRepository) CreateMany(ctx context.Context, outputs [
 		_ = tx.Rollback()
 	}()
 
+	if err = insertExecutionOutputs(ctx, tx, outputs); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return outputs, nil
+}
+
+func insertExecutionOutputs(ctx context.Context, tx *sql.Tx, outputs []domain.ExecutionJobOutput) error {
+	const query = `
+		INSERT INTO build_job_outputs (
+			id, job_id, build_id, name, kind, declared_path, destination_uri, content_type, size_bytes, digest, status, created_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`
 	for _, output := range outputs {
 		if _, execErr := tx.ExecContext(ctx, query,
 			output.ID,
@@ -52,14 +61,10 @@ func (r *ExecutionJobOutputRepository) CreateMany(ctx context.Context, outputs [
 			string(output.Status),
 			output.CreatedAt,
 		); execErr != nil {
-			return nil, execErr
+			return execErr
 		}
 	}
-
-	if err = tx.Commit(); err != nil {
-		return nil, err
-	}
-	return outputs, nil
+	return nil
 }
 
 func (r *ExecutionJobOutputRepository) ListByBuildID(ctx context.Context, buildID string) ([]domain.ExecutionJobOutput, error) {
