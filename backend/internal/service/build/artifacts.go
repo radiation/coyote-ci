@@ -27,43 +27,43 @@ func (s *BuildService) runPostCompletionSideEffects(ctx context.Context, request
 		return nil
 	}
 
+	var logErrors []error
+	writeProgress := func(line string) {
+		if logErr := s.writeSystemExecutionLogLine(ctx, request, appender, line); logErr != nil {
+			logErrors = append(logErrors, logErr)
+		}
+	}
 	artifactPaths := []string{}
 	if s.artifactRepo != nil && s.artifactCollector != nil && strings.TrimSpace(s.artifactWorkspaceRoot) != "" {
-		if emitErr := s.writeSystemExecutionLogLine(ctx, request, appender, "Collecting artifacts"); emitErr != nil {
-			return emitErr
-		}
+		writeProgress("Collecting artifacts")
 
 		var artifactErr error
 		artifactPaths, artifactErr = s.collectArtifactsIfTerminal(ctx, request.BuildID)
 		if artifactErr != nil {
-			_ = s.writeSystemExecutionLogLine(ctx, request, appender, "Artifact collection failed")
-			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine("artifact collection failed"))
-			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine(artifactErr.Error()))
-			return artifactErr
+			writeProgress("Artifact collection failed")
+			writeProgress(formatFailureReasonLine("artifact collection failed"))
+			writeProgress(formatFailureReasonLine(artifactErr.Error()))
+			return errors.Join(artifactErr, errors.Join(logErrors...))
 		}
 	}
 
 	var tagErr error
 	if build.Status == domain.BuildStatusSuccess {
-		if emitErr := s.writeSystemExecutionLogLine(ctx, request, appender, "Assigning version tags"); emitErr != nil {
-			return emitErr
-		}
+		writeProgress("Assigning version tags")
 		tagErr = s.tagBuildOutputs(ctx, build, moveChannels)
 		if tagErr != nil {
-			_ = s.writeSystemExecutionLogLine(ctx, request, appender, "Automatic version tagging failed")
-			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine("automatic version tagging failed"))
-			_ = s.writeSystemExecutionLogLine(ctx, request, appender, formatFailureReasonLine(tagErr.Error()))
+			writeProgress("Automatic version tagging failed")
+			writeProgress(formatFailureReasonLine("automatic version tagging failed"))
+			writeProgress(formatFailureReasonLine(tagErr.Error()))
 		}
 	}
 
-	if emitErr := s.writeSystemExecutionLogLine(ctx, request, appender, "Finalizing build"); emitErr != nil {
-		return emitErr
-	}
+	writeProgress("Finalizing build")
 
 	summaryErr := s.writeTerminalBuildSummary(ctx, request, appender, artifactPaths)
 	cleanupErr := s.cleanupExecutionIfTerminal(ctx, request.BuildID)
 
-	return errors.Join(summaryErr, cleanupErr, tagErr)
+	return errors.Join(tagErr, summaryErr, cleanupErr, errors.Join(logErrors...))
 }
 
 func (s *BuildService) writeTerminalBuildSummary(ctx context.Context, request runner.RunStepRequest, appender logs.StepLogChunkAppender, artifactPaths []string) error {

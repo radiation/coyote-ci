@@ -828,6 +828,74 @@ func TestBuildService_RunStep_CollectsArtifactsBeforeCleanup(t *testing.T) {
 	}
 }
 
+type selectiveLogFailureSink struct {
+	fakeLogSink
+	failures map[string]error
+}
+
+func (s *selectiveLogFailureSink) WriteStepLog(ctx context.Context, buildID, stepName, line string) error {
+	if writeErr := s.failures[line]; writeErr != nil {
+		return writeErr
+	}
+	return s.fakeLogSink.WriteStepLog(ctx, buildID, stepName, line)
+}
+
+func TestBuildService_RunStep_PostCompletionLogFailures(t *testing.T) {
+	ctx := context.Background()
+	workspaceRoot := t.TempDir()
+	buildID, jobID, claim := "build-1", "job-1", "claim-1"
+	workspacePath := filepath.Join(workspaceRoot, buildID)
+	if mkdirErr := os.Mkdir(workspacePath, 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(workspacePath, "app"), []byte("output"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	pipelineYAML := "version: 1\nsteps:\n  - name: build\n    run: make build\nartifacts:\n  - path: app\n    version:\n      template: 0.1.{build_number}\n      channel: latest\n"
+	repo := memoryrepo.NewBuildRepository()
+	build := domain.Build{ID: buildID, JobID: &jobID, BuildNumber: 1, PipelineConfigYAML: &pipelineYAML}
+	steps := []domain.BuildStep{{ID: "step-1", BuildID: buildID, Name: "build", Status: domain.BuildStepStatusRunning, ClaimToken: &claim}}
+	if _, createErr := repo.CreateQueuedBuild(ctx, build, steps); createErr != nil {
+		t.Fatal(createErr)
+	}
+	if _, startErr := repo.UpdateStatus(ctx, buildID, domain.BuildStatusRunning, nil); startErr != nil {
+		t.Fatal(startErr)
+	}
+	sink := &selectiveLogFailureSink{failures: map[string]error{
+		"Collecting artifacts":   errors.New("collection progress log"),
+		"Assigning version tags": errors.New("tag progress log"),
+		"Finalizing build":       errors.New("finalization progress log"),
+	}}
+	runner := &fakeBuildScopedRunner{fakeRunner: fakeRunner{result: steprunner.RunStepResult{Status: steprunner.RunStepStatusSuccess}}}
+	artifactRepo := &fakeArtifactRepository{}
+	tagger := &fakeBuildVersionTagger{}
+	svc := NewBuildService(repo, runner, sink)
+	svc.SetArtifactPersistence(artifactRepo, testStoreResolver(artifact.NewFilesystemStore(t.TempDir())), workspaceRoot)
+	svc.versionTagger = tagger
+	request := steprunner.RunStepRequest{BuildID: buildID, StepName: "build", ClaimToken: claim, Command: "make"}
+	result, report, err := svc.RunStep(ctx, request)
+	if err != nil || report.CompletionOutcome != repository.StepCompletionCompleted || !report.BuildBecameSuccessful {
+		t.Fatalf("expected committed success, got report=%+v err=%v", report, err)
+	}
+	for line, wantErr := range sink.failures {
+		if !errors.Is(report.SideEffectErr, wantErr) {
+			t.Errorf("missing error for %q: %v", line, report.SideEffectErr)
+		}
+	}
+	if len(artifactRepo.artifacts[buildID]) != 1 || tagger.calls != 2 || tagger.input.Version != "latest" || runner.cleanupCalls != 1 {
+		t.Fatalf("expected publication, version, channel, and cleanup: artifacts=%v tagger=%+v cleanup=%d", artifactRepo.artifacts, tagger, runner.cleanupCalls)
+	}
+	executionContext := StepExecutionContext{ExecutionRequest: request}
+	runner.called = false
+	replay, replayErr := NewStepCompletionManager(svc).CompleteExecution(ctx, executionContext, result, NewExecutionLogManager(svc, executionContext))
+	if replayErr != nil || replay.CompletionOutcome != repository.StepCompletionDuplicateTerminal || !errors.Is(replay.SideEffectErr, sink.failures["Finalizing build"]) {
+		t.Fatalf("expected duplicate completion with diagnostic error: report=%+v err=%v", replay, replayErr)
+	}
+	if runner.called || len(artifactRepo.artifacts[buildID]) != 1 || tagger.calls != 3 || tagger.input.Kind != string(domain.VersionTagKindVersion) {
+		t.Fatalf("replay must not rerun command, duplicate artifact, or move channel: ran=%t artifacts=%v tagger=%+v", runner.called, artifactRepo.artifacts, tagger)
+	}
+}
+
 func TestBuildService_RunStep_MissingArtifactPathsDoNotFailBuild(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	buildID := "build-terminal"
@@ -958,16 +1026,18 @@ func TestBuildService_RunStep_SkipsCleanupWhenArtifactCollectionFails(t *testing
 		steps: []domain.BuildStep{{StepIndex: 0, Name: "step-1", Status: domain.BuildStepStatusRunning, ClaimToken: &claimToken}},
 	}
 
-	logSink := &fakeLogSink{}
+	storeErr := errors.New("store unavailable")
+	logErr := errors.New("failed to log collection progress")
+	logSink := &selectiveLogFailureSink{failures: map[string]error{"Collecting artifacts": logErr}}
 	svc := NewBuildService(repo, runner, logSink)
-	svc.SetArtifactPersistence(&fakeArtifactRepository{}, testStoreResolver(&failingStore{err: errors.New("store unavailable")}), workspaceRoot)
+	svc.SetArtifactPersistence(&fakeArtifactRepository{}, testStoreResolver(&failingStore{err: storeErr}), workspaceRoot)
 
 	_, report, err := svc.RunStep(context.Background(), steprunner.RunStepRequest{BuildID: buildID, StepIndex: 0, StepName: "step-1", ClaimToken: claimToken, Command: "echo", Args: []string{"ok"}})
 	if err != nil {
 		t.Fatalf("expected run to succeed, got %v", err)
 	}
-	if report.SideEffectErr == nil {
-		t.Fatal("expected side effect error from artifact collection failure")
+	if !errors.Is(report.SideEffectErr, storeErr) || !errors.Is(report.SideEffectErr, logErr) {
+		t.Fatalf("expected collection and logging errors, got %v", report.SideEffectErr)
 	}
 	assertMessagesContain(t, logSink.lines,
 		"Artifact collection failed",
