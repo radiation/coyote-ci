@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -107,6 +108,95 @@ func TestApplicationReleaseRepository_FinalizationAndPromotionTransactions_Postg
 		})
 		assertApplicationChannelState(t, db, release, "stable", 1)
 	})
+}
+
+type gatedReleaseRecoveryRepository struct {
+	*ApplicationReleaseRepository
+	readyID string
+	arrived chan<- struct{}
+	proceed <-chan struct{}
+	cancel  context.CancelFunc
+}
+
+func (r *gatedReleaseRecoveryRepository) Reconcile(ctx context.Context, id string) (domain.ApplicationRelease, error) {
+	if id == r.readyID {
+		r.arrived <- struct{}{}
+		select {
+		case <-r.proceed:
+		case <-ctx.Done():
+			return domain.ApplicationRelease{}, ctx.Err()
+		}
+		defer r.cancel()
+	}
+	return r.ApplicationReleaseRepository.Reconcile(ctx, id)
+}
+
+func TestApplicationReleaseRepository_RecoveryPagination_Postgres(t *testing.T) {
+	db := openNotificationIntegrationDB(t)
+	t.Cleanup(func() { closeNotificationIntegrationDB(t, db) })
+	ctx := context.Background()
+	repo := NewApplicationReleaseRepository(db)
+	var releases []domain.ApplicationRelease
+	for index := 0; index < 101; index++ {
+		release := createApplicationReleaseIntegrationFixture(t, db, "latest")
+		if _, err := db.ExecContext(ctx, `UPDATE application_releases SET created_at='2000-01-01T00:00:00Z' WHERE id=$1`, release.ID); err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, release)
+	}
+	sort.Slice(releases, func(left, right int) bool { return releases[left].ID < releases[right].ID })
+	ready := releases[100]
+	for _, blocked := range releases[:100] {
+		addReleaseArtifactOutput(t, db, blocked, "missing", "missing.bin")
+	}
+
+	first, err := repo.ListPending(ctx, nil, 100)
+	if err != nil || len(first) != 100 {
+		t.Fatalf("first page size=%d error=%v", len(first), err)
+	}
+	for index, release := range first {
+		if release.ID != releases[index].ID {
+			t.Fatalf("page[%d]=%s, want %s", index, release.ID, releases[index].ID)
+		}
+	}
+	arrived, proceed := make(chan struct{}, 2), make(chan struct{})
+	deadline, stop := context.WithTimeout(ctx, 30*time.Second)
+	var workers sync.WaitGroup
+	defer func() { stop(); workers.Wait() }()
+	for instance := 0; instance < 2; instance++ {
+		runCtx, cancel := context.WithCancel(deadline)
+		gated := &gatedReleaseRecoveryRepository{repo, ready.ID, arrived, proceed, cancel}
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			defer cancel()
+			releasesvc.NewRecoveryService(releasesvc.NewService(gated), time.Millisecond).Run(runCtx)
+		}()
+	}
+	for instance := 0; instance < 2; instance++ {
+		select {
+		case <-arrived:
+		case <-deadline.Done():
+			t.Fatal("both automatic recovery loops did not reach the 101st release")
+		}
+	}
+	close(proceed)
+	workers.Wait()
+	assertApplicationChannelState(t, db, ready, "latest", 1)
+	completed, getErr := repo.GetByID(ctx, ready.ID)
+	if getErr != nil || completed.Status != domain.ApplicationReleaseStatusComplete {
+		t.Fatalf("ready release status=%s error=%v", completed.Status, getErr)
+	}
+	for _, blocked := range releases[:100] {
+		pending, pendingErr := repo.GetByID(ctx, blocked.ID)
+		if pendingErr != nil || pending.Status != domain.ApplicationReleaseStatusPending || len(pending.Outputs) != 1 || pending.Outputs[0].Status != "pending" {
+			t.Fatalf("blocked release %s: %+v error=%v", blocked.ID, pending, pendingErr)
+		}
+	}
+	page, pageErr := repo.ListPending(ctx, &repository.PendingReleaseCursor{CreatedAt: completed.CreatedAt, ID: ready.ID}, 1)
+	if pageErr != nil || (len(page) != 0 && !page[0].CreatedAt.After(completed.CreatedAt)) {
+		t.Fatalf("page after completed cursor row=%v error=%v", page, pageErr)
+	}
 }
 
 func createApplicationReleaseIntegrationFixture(t *testing.T, db *sql.DB, autoChannel string) domain.ApplicationRelease {

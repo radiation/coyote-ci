@@ -3,6 +3,7 @@ package release
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,6 +18,41 @@ func TestRecoveryService_RunReconcilesPendingBeforeCancellation(t *testing.T) {
 	NewRecoveryService(NewService(repo), time.Millisecond).Run(ctx)
 	if len(repo.reconciledIDs) != 1 || repo.reconciledIDs[0] != "release-1" {
 		t.Fatalf("reconciled IDs = %#v, want release-1", repo.reconciledIDs)
+	}
+}
+
+func TestRecoveryService_AdvancesRetriesAndWraps(t *testing.T) {
+	ctx := context.Background()
+	repo := &releaseRepositoryFake{reconcileErrs: map[string]error{"100": errors.New("unavailable")}}
+	stamp := time.Unix(1, 0)
+	for index := 100; index > 0; index-- {
+		repo.pending = append(repo.pending, domain.ApplicationRelease{ID: fmt.Sprintf("%03d", index), CreatedAt: stamp})
+	}
+	repo.pending = append(repo.pending, domain.ApplicationRelease{ID: "000", CreatedAt: stamp.Add(time.Second)})
+	recovery := NewRecoveryService(NewService(repo), time.Second)
+	after := recovery.reconcile(ctx, nil)
+	if after == nil || after.ID != "100" || !after.CreatedAt.Equal(stamp) || len(repo.reconciledIDs) != 100 || repo.reconciledIDs[0] != "001" {
+		t.Fatalf("first page: cursor=%v examined=%v", after, repo.reconciledIDs)
+	}
+	repo.listErr = errors.New("database unavailable")
+	if next, err := recovery.service.reconcilePendingPage(ctx, after, 100); next != after || !errors.Is(err, repo.listErr) {
+		t.Fatalf("listing failure: cursor=%v error=%v", next, err)
+	}
+	repo.listErr = nil
+	repo.pending = repo.pending[1:]
+	repo.reconciledIDs = nil
+	after = recovery.reconcile(ctx, after)
+	if after != nil || len(repo.reconciledIDs) != 1 || repo.reconciledIDs[0] != "000" {
+		t.Fatalf("short page after cursor row disappeared: cursor=%v examined=%v", after, repo.reconciledIDs)
+	}
+	repo.reconciledIDs = nil
+	after = recovery.reconcile(ctx, after)
+	if after == nil || after.ID != "000" || len(repo.reconciledIDs) != 100 || repo.reconciledIDs[0] != "001" {
+		t.Fatalf("wrapped page: cursor=%v examined=%v", after, repo.reconciledIDs)
+	}
+	repo.reconciledIDs = nil
+	if next := recovery.reconcile(ctx, after); next != nil || len(repo.reconciledIDs) != 0 {
+		t.Fatalf("empty page: cursor=%v examined=%v", next, repo.reconciledIDs)
 	}
 }
 

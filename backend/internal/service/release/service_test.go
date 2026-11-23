@@ -3,6 +3,7 @@ package release
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ type releaseRepositoryFake struct {
 	created       domain.ApplicationRelease
 	promoteErr    error
 	pending       []domain.ApplicationRelease
+	listErr       error
 	reconcileErr  error
 	reconciled    domain.ApplicationRelease
 	reconcileErrs map[string]error
@@ -39,8 +41,29 @@ func (f *releaseRepositoryFake) GetByID(context.Context, string) (domain.Applica
 	}
 	return f.getByID, nil
 }
-func (f *releaseRepositoryFake) ListPending(context.Context, int) ([]domain.ApplicationRelease, error) {
-	return f.pending, nil
+func (f *releaseRepositoryFake) ListPending(_ context.Context, after *repository.PendingReleaseCursor, limit int) ([]domain.ApplicationRelease, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var page []domain.ApplicationRelease
+	for _, release := range f.pending {
+		if after == nil || release.CreatedAt.After(after.CreatedAt) || (release.CreatedAt.Equal(after.CreatedAt) && release.ID > after.ID) {
+			page = append(page, release)
+		}
+	}
+	sort.Slice(page, func(left, right int) bool {
+		if page[left].CreatedAt.Equal(page[right].CreatedAt) {
+			return page[left].ID < page[right].ID
+		}
+		return page[left].CreatedAt.Before(page[right].CreatedAt)
+	})
+	if limit <= 0 {
+		limit = 100
+	}
+	if len(page) > limit {
+		page = page[:limit]
+	}
+	return page, nil
 }
 func (f *releaseRepositoryFake) Reconcile(_ context.Context, id string) (domain.ApplicationRelease, error) {
 	f.reconciledIDs = append(f.reconciledIDs, id)

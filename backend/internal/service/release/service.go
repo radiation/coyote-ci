@@ -103,9 +103,14 @@ func (s *Service) Reconcile(ctx context.Context, releaseID string) (domain.Appli
 }
 
 func (s *Service) ReconcilePending(ctx context.Context, limit int) error {
-	pending, err := s.releases.ListPending(ctx, limit)
+	_, err := s.reconcilePendingPage(ctx, nil, limit)
+	return err
+}
+
+func (s *Service) reconcilePendingPage(ctx context.Context, after *repository.PendingReleaseCursor, limit int) (*repository.PendingReleaseCursor, error) {
+	pending, err := s.releases.ListPending(ctx, after, limit)
 	if err != nil {
-		return err
+		return after, fmt.Errorf("list pending releases: %w", err)
 	}
 	var reconcileErrors []error
 	for _, release := range pending {
@@ -113,7 +118,12 @@ func (s *Service) ReconcilePending(ctx context.Context, limit int) error {
 			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile release %s: %w", release.ID, reconcileErr))
 		}
 	}
-	return errors.Join(reconcileErrors...)
+	var next *repository.PendingReleaseCursor
+	if limit > 0 && len(pending) == limit {
+		last := pending[len(pending)-1]
+		next = &repository.PendingReleaseCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+	}
+	return next, errors.Join(reconcileErrors...)
 }
 
 func (s *Service) FailBuildRelease(ctx context.Context, build domain.Build) error {
