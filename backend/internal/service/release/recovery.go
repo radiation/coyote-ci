@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"time"
+
+	"github.com/radiation/coyote-ci/backend/internal/repository"
 )
 
 type RecoveryService struct {
@@ -19,7 +21,7 @@ func (s *RecoveryService) Run(ctx context.Context) {
 	if s == nil || s.service == nil {
 		return
 	}
-	s.reconcile(ctx)
+	after := s.reconcile(ctx, nil)
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 	for {
@@ -27,13 +29,15 @@ func (s *RecoveryService) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.reconcile(ctx)
+			after = s.reconcile(ctx, after)
 		}
 	}
 }
 
-func (s *RecoveryService) reconcile(ctx context.Context) {
-	if err := s.service.ReconcilePending(ctx, 100); err != nil {
+func (s *RecoveryService) reconcile(ctx context.Context, after *repository.PendingReleaseCursor) *repository.PendingReleaseCursor {
+	next, err := s.service.reconcilePendingPage(ctx, after, 100)
+	if err != nil {
 		log.Printf("WARNING: application release recovery failed: %v", err)
 	}
+	return next
 }

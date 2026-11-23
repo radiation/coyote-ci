@@ -26,7 +26,7 @@ func (*legacyReleaseRepository) GetByBuildID(context.Context, string) (domain.Ap
 func (*legacyReleaseRepository) GetByID(context.Context, string) (domain.ApplicationRelease, error) {
 	return domain.ApplicationRelease{}, repository.ErrApplicationReleaseNotFound
 }
-func (*legacyReleaseRepository) ListPending(context.Context, int) ([]domain.ApplicationRelease, error) {
+func (*legacyReleaseRepository) ListPending(context.Context, *repository.PendingReleaseCursor, int) ([]domain.ApplicationRelease, error) {
 	return nil, nil
 }
 func (*legacyReleaseRepository) Reconcile(context.Context, string) (domain.ApplicationRelease, error) {

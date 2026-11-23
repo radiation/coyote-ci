@@ -76,11 +76,17 @@ func (r *ApplicationReleaseRepository) get(ctx context.Context, queryer applicat
 	return release, nil
 }
 
-func (r *ApplicationReleaseRepository) ListPending(ctx context.Context, limit int) ([]domain.ApplicationRelease, error) {
+func (r *ApplicationReleaseRepository) ListPending(ctx context.Context, after *repository.PendingReleaseCursor, limit int) ([]domain.ApplicationRelease, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT `+applicationReleaseColumns+` FROM application_releases WHERE status='pending' ORDER BY created_at LIMIT $1`, limit)
+	query := `SELECT ` + applicationReleaseColumns + ` FROM application_releases WHERE status='pending'`
+	args := []any{limit}
+	if after != nil {
+		query += ` AND (created_at, id) > ($2, $3)`
+		args = append(args, after.CreatedAt, after.ID)
+	}
+	rows, err := r.db.QueryContext(ctx, query+` ORDER BY created_at, id LIMIT $1`, args...)
 	if err != nil {
 		return nil, err
 	}

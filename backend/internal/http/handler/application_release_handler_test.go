@@ -77,7 +77,7 @@ func (r *applicationReleaseHandlerRepository) GetByID(_ context.Context, release
 	}
 	return r.release, nil
 }
-func (r *applicationReleaseHandlerRepository) ListPending(context.Context, int) ([]domain.ApplicationRelease, error) {
+func (r *applicationReleaseHandlerRepository) ListPending(context.Context, *repository.PendingReleaseCursor, int) ([]domain.ApplicationRelease, error) {
 	return nil, nil
 }
 func (r *applicationReleaseHandlerRepository) Reconcile(context.Context, string) (domain.ApplicationRelease, error) {
