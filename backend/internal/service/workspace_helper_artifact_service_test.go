@@ -3,13 +3,126 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
 	"github.com/radiation/coyote-ci/backend/internal/repository"
+	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
+	buildsvc "github.com/radiation/coyote-ci/backend/internal/service/build"
 )
+
+type stalledArtifactFetcher struct{ t *testing.T }
+
+func (fetcher stalledArtifactFetcher) Fetch(ctx context.Context, _, _ string) (string, string, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		fetcher.t.Fatal("artifact fetch has no deadline")
+	}
+	<-ctx.Done()
+	return "", "", errors.New("git clone interrupted")
+}
+
+func TestWorkspaceHelperArtifactPublicationRecovery(t *testing.T) {
+	ctx := context.Background()
+	harness := newWorkspaceHelperArtifactHarness(t)
+	jobs, builds := memory.NewJobRepository(), memory.NewBuildRepository()
+	deliveries := memory.NewArtifactBuildDeliveryRepository(jobs, builds, memory.NewExecutionJobRepository(), memory.NewExecutionJobOutputRepository())
+	publisher := memory.NewPublishingArtifactRepository(deliveries)
+	harness.service.artifacts = publisher
+	upstream := "upstream"
+	producer := domain.Build{ID: harness.build.ID, JobID: &upstream, ProjectID: "project"}
+	if _, err := builds.CreateQueuedBuild(ctx, producer, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"first", "second", "disabled", "foreign", "different-path"} {
+		consumer := domain.Job{ID: id, Name: id, ProjectID: producer.ProjectID, Enabled: id != "disabled", RepositoryURL: "https://example.invalid", DefaultRef: "main", PipelineYAML: "version: 1\nsteps:\n  - name: consume\n    run: true\n", ArtifactTriggers: []domain.JobArtifactTrigger{{ProducerJobID: upstream, Path: "shared/output.txt"}}}
+		if id == "foreign" {
+			consumer.ProjectID = "other"
+		}
+		if id == "different-path" {
+			consumer.ArtifactTriggers[0].Path = "shared/*.txt"
+		}
+		if _, err := jobs.Create(ctx, consumer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upload := func(pod string) error {
+		return harness.service.Upload(ctx, "token", harness.job.ID, pod, "", "shared/output.txt", true, strings.NewReader("shared"))
+	}
+	if err := upload("wrong-pod"); err == nil {
+		t.Fatal("unauthorized upload accepted")
+	}
+	if rows, err := publisher.ListByBuildID(ctx, producer.ID); err != nil || len(rows) != 0 {
+		t.Fatalf("unauthorized metadata: %+v %v", rows, err)
+	}
+	for range 2 {
+		if err := upload("pod-uid"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := builds.UpdateStatus(ctx, producer.ID, domain.BuildStatusCanceled, nil); err != nil {
+		t.Fatal(err)
+	}
+	page, err := deliveries.ListPendingAfter(ctx, "", 64)
+	if err != nil || len(page) != 2 {
+		t.Fatalf("expected two matching consumers: %+v %v", page, err)
+	}
+	broken, err := jobs.GetByID(ctx, page[0].ConsumerJobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := ".coyote/pipeline.yml"
+	broken.PipelineYAML, broken.PipelinePath = "", &path
+	if _, updateErr := jobs.Update(ctx, broken); updateErr != nil {
+		t.Fatal(updateErr)
+	}
+	buildService := buildsvc.NewBuildService(builds, nil, nil)
+	buildService.SetArtifactPersistence(publisher, nil, "")
+	server := NewJobService(jobs, buildService).WithArtifactTriggerDeliveryRepository(deliveries)
+	server.artifactAttemptTimeout = 100 * time.Millisecond
+	buildService.SetRepoFetcher(stalledArtifactFetcher{t})
+	if _, pageErr := server.recoverArtifactPage(ctx, "", 64); pageErr != nil {
+		t.Fatal(pageErr)
+	}
+	remaining, scanErr := deliveries.ListPendingAfter(ctx, "", 64)
+	if scanErr != nil || len(remaining) != 1 || remaining[0].ID != page[0].ID || !remaining[0].UpdatedAt.Equal(page[0].UpdatedAt) {
+		t.Fatalf("stalled delivery not recoverable: %+v %v", remaining, scanErr)
+	}
+	queued, lookupErr := deliveries.GetByID(ctx, page[1].ID)
+	if lookupErr != nil || queued.QueuedBuildID == nil {
+		t.Fatalf("later delivery did not queue: %+v %v", queued, lookupErr)
+	}
+	broken.PipelineYAML = "invalid"
+	if _, updateErr := jobs.Update(ctx, broken); updateErr != nil {
+		t.Fatal(updateErr)
+	}
+	if _, pageErr := server.recoverArtifactPage(ctx, "", 64); pageErr != nil {
+		t.Fatal(pageErr)
+	}
+	for index, candidate := range page {
+		current, getErr := deliveries.GetByID(ctx, candidate.ID)
+		if getErr != nil || index == 0 && current.Status != domain.ArtifactTriggerDeliveryStatusFailed || index == 1 && current.QueuedBuildID == nil {
+			t.Fatalf("delivery %d: %+v %v", index, current, getErr)
+		}
+	}
+	linked, processErr := server.processArtifactDelivery(ctx, page[1])
+	if processErr != nil || linked.QueuedBuildID == nil {
+		t.Fatalf("satisfied delivery: %+v %v", linked, processErr)
+	}
+	producer.ID = "rerun"
+	if _, createErr := builds.CreateQueuedBuild(ctx, producer, nil); createErr != nil {
+		t.Fatal(createErr)
+	}
+	if _, publishErr := publisher.Create(ctx, domain.BuildArtifact{ID: "rerun-artifact", BuildID: producer.ID, LogicalPath: "shared/output.txt", CreatedAt: time.Now()}); publishErr != nil {
+		t.Fatal(publishErr)
+	}
+	if rows, listErr := deliveries.ListByProducerBuildID(ctx, producer.ID); listErr != nil || len(rows) != 2 || rows[0].ArtifactID == page[0].ArtifactID {
+		t.Fatalf("rerun obligations: %+v %v", rows, listErr)
+	}
+}
 
 func TestWorkspaceHelperArtifactServiceTerminalPlanIncludesBuildWideScopes(t *testing.T) {
 	harness := newWorkspaceHelperArtifactHarness(t)

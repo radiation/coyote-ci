@@ -10,6 +10,18 @@ import (
 	"testing"
 )
 
+func TestGitFetcherRestrictsTransports(t *testing.T) {
+	t.Setenv("GIT_ALLOW_PROTOCOL", "https:unapproved")
+	for _, repository := range []string{"unapproved://example.invalid/repo", "file:///nonexistent"} {
+		for _, credential := range []*HTTPSCredential{nil, {Username: "user", Password: "test"}} {
+			_, _, err := NewGitFetcher().fetch(context.Background(), repository, "main", credential)
+			if err == nil || !strings.Contains(err.Error(), "not allowed") {
+				t.Fatalf("fetch %s (with credentials: %t): expected transport rejection, got %v", repository, credential != nil, err)
+			}
+		}
+	}
+}
+
 func TestGitFetcher_Fetch(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found in PATH")

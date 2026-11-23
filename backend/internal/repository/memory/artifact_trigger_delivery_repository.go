@@ -56,7 +56,7 @@ func (r *ArtifactTriggerDeliveryRepository) CreateArtifactBuild(_ context.Contex
 		return cloneBuildApplicationVersion(linked), nil
 	}
 	consumer := r.consumers.jobs[delivery.ConsumerJobID]
-	if !plan.Matches(delivery, claim) || !consumer.Enabled || consumer.ProjectID != delivery.ProducerProjectID || !consumer.UpdatedAt.Equal(plan.ConsumerUpdatedAt) {
+	if !plan.Matches(delivery, claim) || consumer.ProjectID != delivery.ProducerProjectID || !consumer.UpdatedAt.Equal(plan.ConsumerUpdatedAt) {
 		return domain.Build{}, repository.ErrArtifactTriggerDeliveryRetryNotClaimable
 	}
 	created, err := r.builds.createQueuedBuildLocked(plan.Build, plan.Steps)
@@ -92,6 +92,24 @@ func NewArtifactTriggerDeliveryRepository() *ArtifactTriggerDeliveryRepository {
 		deliveries: map[string]domain.ArtifactTriggerDelivery{},
 		index:      map[string]string{},
 	}
+}
+
+func (r *ArtifactTriggerDeliveryRepository) ListPendingAfter(_ context.Context, after string, limit int) ([]domain.ArtifactTriggerDelivery, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.builds == nil {
+		return nil, errors.New("artifact build repositories not configured")
+	}
+	r.builds.mu.RLock()
+	defer r.builds.mu.RUnlock()
+	var pending []domain.ArtifactTriggerDelivery
+	for _, delivery := range r.deliveries {
+		if delivery.ID > after && delivery.Status == domain.ArtifactTriggerDeliveryStatusPending && delivery.QueuedBuildID == nil && domain.IsTerminalBuildStatus(r.builds.builds[delivery.ProducerBuildID].Status) {
+			pending = append(pending, delivery)
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].ID < pending[j].ID })
+	return pending[:min(len(pending), limit)], nil
 }
 
 func (r *ArtifactTriggerDeliveryRepository) ClaimFailedForRetry(_ context.Context, id string, updatedAt time.Time) (domain.ArtifactTriggerDelivery, error) {
@@ -132,6 +150,10 @@ func (r *ArtifactTriggerDeliveryRepository) Create(_ context.Context, delivery d
 	if _, exists := r.index[key]; exists {
 		return domain.ArtifactTriggerDelivery{}, repository.ErrArtifactTriggerDeliveryDuplicate
 	}
+	return r.insertLocked(delivery), nil
+}
+
+func (r *ArtifactTriggerDeliveryRepository) insertLocked(delivery domain.ArtifactTriggerDelivery) domain.ArtifactTriggerDelivery {
 	if delivery.ID == "" {
 		delivery.ID = uuid.NewString()
 	}
@@ -143,8 +165,8 @@ func (r *ArtifactTriggerDeliveryRepository) Create(_ context.Context, delivery d
 		delivery.UpdatedAt = delivery.CreatedAt
 	}
 	r.deliveries[delivery.ID] = delivery
-	r.index[key] = delivery.ID
-	return delivery, nil
+	r.index[artifactTriggerDeliveryKey(delivery.ArtifactID, delivery.ConsumerJobID)] = delivery.ID
+	return delivery
 }
 
 func (r *ArtifactTriggerDeliveryRepository) GetByArtifactIDAndConsumerJobID(_ context.Context, artifactID string, consumerJobID string) (domain.ArtifactTriggerDelivery, error) {

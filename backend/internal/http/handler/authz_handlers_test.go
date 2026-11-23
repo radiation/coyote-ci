@@ -776,6 +776,9 @@ func TestScopedAPITokenRouteEnforcement(t *testing.T) {
 	if createErr != nil {
 		t.Fatalf("create retry producer build failed: %v", createErr)
 	}
+	if _, completeErr := retryBuildRepo.UpdateStatus(ctx, retryProducerBuild.ID, domain.BuildStatusSuccess, nil); completeErr != nil {
+		t.Fatal(completeErr)
+	}
 	if _, createErr := retryArtifactRepo.Create(ctx, domain.BuildArtifact{ID: "artifact-retry-1", BuildID: retryProducerBuild.ID, Name: "app.tgz", LogicalPath: "dist/app.tgz", SizeBytes: 42, CreatedAt: fixture.now}); createErr != nil {
 		t.Fatalf("create retry artifact failed: %v", createErr)
 	}

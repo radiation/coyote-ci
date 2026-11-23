@@ -185,13 +185,19 @@ type ConfigSource interface {
 	Load() (data []byte, sourcePath string, err error)
 }
 
-// FileSource loads pipeline config from a file path.
+// FileSource loads a repository-relative pipeline config beneath Root.
 type FileSource struct {
+	Root string
 	Path string
 }
 
 func (fs FileSource) Load() ([]byte, string, error) {
-	data, err := os.ReadFile(fs.Path)
+	root, err := os.OpenRoot(fs.Root)
+	if err != nil {
+		return nil, fs.Path, fmt.Errorf("opening pipeline config root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	data, err := root.ReadFile(fs.Path)
 	if err != nil {
 		return nil, fs.Path, fmt.Errorf("reading pipeline config %s: %w", fs.Path, err)
 	}

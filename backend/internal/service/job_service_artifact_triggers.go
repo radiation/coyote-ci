@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -114,26 +115,9 @@ func (s *JobService) RetryArtifactTriggerDelivery(ctx context.Context, deliveryI
 		return RetryArtifactTriggerDeliveryResult{}, err
 	}
 
-	consumerJob, err := s.jobRepo.GetByID(ctx, claimed.ConsumerJobID)
+	updated, err := s.processArtifactDelivery(ctx, claimed)
 	if err != nil {
-		s.failArtifactTriggerDeliveryRetry(ctx, claimed, err)
 		return RetryArtifactTriggerDeliveryResult{}, err
-	}
-	artifacts, err := s.buildService.GetBuildArtifacts(ctx, claimed.ProducerBuildID)
-	if err != nil {
-		s.failArtifactTriggerDeliveryRetry(ctx, claimed, err)
-		return RetryArtifactTriggerDeliveryResult{}, err
-	}
-	artifact, ok := artifactTriggerArtifactByID(artifacts, claimed.ArtifactID)
-	if !ok {
-		s.failArtifactTriggerDeliveryRetry(ctx, claimed, buildsvc.ErrArtifactNotFound)
-		return RetryArtifactTriggerDeliveryResult{}, buildsvc.ErrArtifactNotFound
-	}
-	producerJobID := strings.TrimSpace(claimed.ProducerJobID)
-	producerBuild := domain.Build{ID: claimed.ProducerBuildID, ProjectID: claimed.ProducerProjectID, JobID: &producerJobID}
-	updated, queueErr := s.queueArtifactTriggerDelivery(ctx, claimed, producerBuild, artifact, consumerJob)
-	if queueErr != nil {
-		return RetryArtifactTriggerDeliveryResult{}, queueErr
 	}
 	view, err := s.artifactTriggerDeliveryView(ctx, updated)
 	if err != nil {
@@ -142,8 +126,84 @@ func (s *JobService) RetryArtifactTriggerDelivery(ctx context.Context, deliveryI
 	return RetryArtifactTriggerDeliveryResult{Result: "retried", Message: "queued downstream build", View: view}, nil
 }
 
+func (s *JobService) processArtifactDelivery(ctx context.Context, claimed domain.ArtifactTriggerDelivery) (domain.ArtifactTriggerDelivery, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.artifactAttemptTimeout)
+	defer cancel()
+	current, err := s.artifactTriggerDeliveries.GetByID(ctx, claimed.ID)
+	if err != nil || current.QueuedBuildID != nil {
+		return current, err
+	}
+	if current.Status != domain.ArtifactTriggerDeliveryStatusPending || !current.UpdatedAt.Equal(claimed.UpdatedAt) {
+		return current, repository.ErrArtifactTriggerDeliveryRetryNotClaimable
+	}
+	producerBuild, err := s.buildService.GetBuild(ctx, claimed.ProducerBuildID)
+	if err != nil {
+		return current, err
+	}
+	if !domain.IsTerminalBuildStatus(producerBuild.Status) {
+		return current, ErrArtifactTriggerDeliveryPendingRetryDeferred
+	}
+	consumerJob, err := s.jobRepo.GetByID(ctx, claimed.ConsumerJobID)
+	if err != nil {
+		s.failArtifactTriggerDeliveryRetry(ctx, claimed, err)
+		return current, err
+	}
+	artifacts, err := s.buildService.GetBuildArtifacts(ctx, claimed.ProducerBuildID)
+	if err != nil {
+		s.failArtifactTriggerDeliveryRetry(ctx, claimed, err)
+		return current, err
+	}
+	artifact, ok := artifactTriggerArtifactByID(artifacts, claimed.ArtifactID)
+	if !ok {
+		s.failArtifactTriggerDeliveryRetry(ctx, claimed, buildsvc.ErrArtifactNotFound)
+		return current, buildsvc.ErrArtifactNotFound
+	}
+	return s.queueArtifactTriggerDelivery(ctx, claimed, producerBuild, artifact, consumerJob)
+}
+
+func (s *JobService) recoverArtifactPage(ctx context.Context, after string, limit int) (string, error) {
+	page, err := s.artifactTriggerDeliveries.ListPendingAfter(ctx, after, limit)
+	if err != nil {
+		return after, err
+	}
+	for _, delivery := range page {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return after, ctxErr
+		}
+		if _, processErr := s.processArtifactDelivery(ctx, delivery); processErr != nil {
+			log.Printf("artifact trigger recovery: delivery_id=%s err=%v", delivery.ID, processErr)
+		}
+	}
+	if len(page) == limit {
+		return page[len(page)-1].ID, nil
+	}
+	return "", nil
+}
+
+func (s *JobService) RunArtifactTriggerRecovery(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var after string
+	for ctx.Err() == nil {
+		var err error
+		after, err = s.recoverArtifactPage(ctx, after, 64)
+		if err != nil {
+			log.Printf("artifact trigger discovery: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func artifactAttemptInterrupted(ctx context.Context, err error) bool {
+	return ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
 func (s *JobService) failArtifactTriggerDeliveryRetry(ctx context.Context, delivery domain.ArtifactTriggerDelivery, retryErr error) {
-	if s.artifactTriggerDeliveries == nil || retryErr == nil {
+	if s.artifactTriggerDeliveries == nil || retryErr == nil || artifactAttemptInterrupted(ctx, retryErr) {
 		return
 	}
 	_, _ = s.artifactTriggerDeliveries.FailPending(ctx, delivery.ID, delivery.UpdatedAt, retryErr.Error())

@@ -1844,6 +1844,9 @@ func TestBuildHandler_RetryArtifactTriggerDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create producer build failed: %v", err)
 	}
+	if _, completeErr := buildRepo.UpdateStatus(ctx, producerBuild.ID, domain.BuildStatusFailed, nil); completeErr != nil {
+		t.Fatal(completeErr)
+	}
 	if _, createArtifactErr := artifactRepo.Create(ctx, domain.BuildArtifact{ID: "artifact-1", BuildID: producerBuild.ID, Name: "app.tgz", LogicalPath: "dist/app.tgz", SizeBytes: 42, CreatedAt: now}); createArtifactErr != nil {
 		t.Fatalf("create artifact failed: %v", createArtifactErr)
 	}
@@ -1932,6 +1935,9 @@ func TestBuildHandler_RetryArtifactTriggerDeliveryErrorPaths(t *testing.T) {
 		producerBuild, err := buildRepo.CreateQueuedBuild(ctx, domain.Build{ID: "build-upstream", ProjectID: "project-1", JobID: &producerJob.ID, Status: domain.BuildStatusQueued, CreatedAt: now, Trigger: domain.BuildTrigger{Kind: domain.BuildTriggerKindManual}}, nil)
 		if err != nil {
 			t.Fatalf("create producer build failed: %v", err)
+		}
+		if _, completeErr := buildRepo.UpdateStatus(ctx, producerBuild.ID, domain.BuildStatusCanceled, nil); completeErr != nil {
+			t.Fatal(completeErr)
 		}
 		if _, createArtifactErr := artifactRepo.Create(ctx, domain.BuildArtifact{ID: "artifact-1", BuildID: producerBuild.ID, Name: "app.tgz", LogicalPath: "dist/app.tgz", SizeBytes: 42, CreatedAt: now}); createArtifactErr != nil {
 			t.Fatalf("create artifact failed: %v", createArtifactErr)

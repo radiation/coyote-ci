@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -355,6 +356,35 @@ steps:
 			t.Errorf("expected effective pipeline_path, got %v", build.PipelinePath)
 		}
 	})
+
+	t.Run("missing checkout preserves pipeline not found error", func(t *testing.T) {
+		svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+		svc.SetRepoFetcher(&fakeRepoFetcher{localPath: filepath.Join(t.TempDir(), "missing")})
+		_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{ProjectID: "proj-1", RepoURL: "https://example.invalid/repo", Ref: "main"})
+		if !errors.Is(err, ErrPipelineFileNotFound) {
+			t.Fatalf("expected ErrPipelineFileNotFound, got %v", err)
+		}
+	})
+
+	for _, linkedPath := range []string{".coyote", pipelineFilePath} {
+		t.Run("rejects external symlink at "+linkedPath, func(t *testing.T) {
+			outside := setupTempRepo(t, validYAML)
+			checkout := t.TempDir()
+			link := filepath.Join(checkout, linkedPath)
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(outside, linkedPath), link); err != nil {
+				t.Fatal(err)
+			}
+			svc := NewBuildService(&fakeBuildRepository{}, nil, nil)
+			svc.SetRepoFetcher(&fakeRepoFetcher{localPath: checkout, commitSHA: "abc123"})
+			_, err := svc.CreateBuildFromRepo(context.Background(), CreateRepoBuildInput{ProjectID: "proj-1", RepoURL: "https://example.invalid/repo", Ref: "main"})
+			if err == nil || !strings.Contains(err.Error(), "loading pipeline file") {
+				t.Fatalf("expected external config read to be rejected, got %v", err)
+			}
+		})
+	}
 
 	t.Run("out of range priority is rejected", func(t *testing.T) {
 		tmpDir := setupTempRepo(t, validYAML)

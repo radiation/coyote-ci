@@ -125,13 +125,24 @@ func (r *ArtifactTriggerDeliveryRepository) ListByProducerBuildID(ctx context.Co
 		ORDER BY created_at ASC, id ASC
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, strings.TrimSpace(producerBuildID))
+	return scanArtifactTriggerDeliveries(r.db.QueryContext(ctx, query, strings.TrimSpace(producerBuildID)))
+}
+
+func (r *ArtifactTriggerDeliveryRepository) ListPendingAfter(ctx context.Context, after string, limit int) ([]domain.ArtifactTriggerDelivery, error) {
+	return scanArtifactTriggerDeliveries(r.db.QueryContext(ctx, `SELECT `+artifactTriggerDeliveryColumns+`
+		FROM artifact_trigger_deliveries WHERE atomic_creation AND status='pending' AND queued_build_id IS NULL
+		AND id > COALESCE(NULLIF($1,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid)
+		AND EXISTS (SELECT 1 FROM builds WHERE id=producer_build_id AND status IN ('success','failed','canceled'))
+		ORDER BY id LIMIT $2`, after, limit))
+}
+
+func scanArtifactTriggerDeliveries(rows *sql.Rows, err error) (result []domain.ArtifactTriggerDelivery, resultErr error) {
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
-		if closeErr := rows.Close(); closeErr != nil && err == nil {
-			err = closeErr
+		if closeErr := rows.Close(); closeErr != nil && resultErr == nil {
+			resultErr = closeErr
 		}
 	}()
 
@@ -170,7 +181,7 @@ func (r *ArtifactTriggerDeliveryRepository) createArtifactBuild(ctx context.Cont
 		return domain.Build{}, repository.ErrArtifactTriggerDeliveryRetryNotClaimable
 	}
 	var consumerID string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE id=$1 AND project_id=$2 AND enabled AND updated_at=$3 FOR NO KEY UPDATE`, delivery.ConsumerJobID, delivery.ProducerProjectID, plan.ConsumerUpdatedAt).Scan(&consumerID)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE id=$1 AND project_id=$2 AND updated_at=$3 FOR NO KEY UPDATE`, delivery.ConsumerJobID, delivery.ProducerProjectID, plan.ConsumerUpdatedAt).Scan(&consumerID)
 	if err != nil {
 		return domain.Build{}, fmt.Errorf("validate artifact consumer: %w", err)
 	}

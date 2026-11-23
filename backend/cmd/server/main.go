@@ -255,7 +255,6 @@ func main() {
 		WithSCMRepositoryRegistrationRepository(scmRepositoryRegistrationRepo).
 		WithManagedImageConfigRepository(jobManagedImageConfigRepo, sourceCredentialRepo).
 		WithArtifactTriggerDeliveryRepository(artifactTriggerDeliveryRepo)
-	buildService.SetArtifactTriggerDispatcher(jobService)
 	sourceCredentialService := service.NewSourceCredentialService(sourceCredentialRepo)
 	scmAdminService := service.NewSCMAdminService(scmConnectionRepo, scmRepositoryRegistrationRepo)
 	notificationService := service.NewNotificationService(notificationSubscriptionRepo).
@@ -431,6 +430,7 @@ func main() {
 	go releasesvc.NewRecoveryService(applicationReleaseService, 10*time.Second).Run(ctx)
 	server := &nethttp.Server{Addr: addr, Handler: mux}
 	var wg sync.WaitGroup
+	wg.Go(func() { jobService.RunArtifactTriggerRecovery(ctx, 10*time.Second) })
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

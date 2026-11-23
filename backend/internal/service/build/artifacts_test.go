@@ -2,7 +2,6 @@ package build
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,17 +11,8 @@ import (
 
 	artifactpkg "github.com/radiation/coyote-ci/backend/internal/artifact"
 	"github.com/radiation/coyote-ci/backend/internal/domain"
+	"github.com/radiation/coyote-ci/backend/internal/repository/memory"
 )
-
-type failingArtifactTriggerDispatcher struct {
-	err   error
-	calls int
-}
-
-func (d *failingArtifactTriggerDispatcher) DispatchArtifactTriggers(_ context.Context, _ domain.Build, _ domain.BuildArtifact) error {
-	d.calls++
-	return d.err
-}
 
 type fakeArtifactStore struct{}
 
@@ -258,7 +248,7 @@ artifacts:
 	}
 }
 
-func TestCollectAndPersistArtifacts_DispatchFailureDoesNotFailCollection(t *testing.T) {
+func TestCollectAndPersistArtifacts_PublishesCollectedFile(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	artifactPath := filepath.Join(workspaceRoot, "dist", "app.tgz")
 	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
@@ -269,25 +259,32 @@ func TestCollectAndPersistArtifacts_DispatchFailureDoesNotFailCollection(t *test
 	}
 
 	jobID := "job-upstream"
-	buildRepo := &fakeBuildRepository{build: domain.Build{
+	ctx := context.Background()
+	buildRepo := memory.NewBuildRepository()
+	jobs := memory.NewJobRepository()
+	deliveries := memory.NewArtifactBuildDeliveryRepository(jobs, buildRepo, memory.NewExecutionJobRepository(), memory.NewExecutionJobOutputRepository())
+	if _, err := jobs.Create(ctx, domain.Job{ID: "consumer", ProjectID: "project-1", Enabled: true, ArtifactTriggers: []domain.JobArtifactTrigger{{ProducerJobID: jobID, Path: "dist/app.tgz"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := buildRepo.CreateQueuedBuild(ctx, domain.Build{
 		ID:        "build-1",
 		ProjectID: "project-1",
 		JobID:     &jobID,
 		Status:    domain.BuildStatusSuccess,
 		CreatedAt: time.Now().UTC(),
 		Trigger:   domain.BuildTrigger{Kind: domain.BuildTriggerKindManual},
-	}}
-	artifactRepo := &fakeArtifactRepository{}
-	dispatcher := &failingArtifactTriggerDispatcher{err: errors.New("downstream queue failed")}
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	artifactRepo := memory.NewPublishingArtifactRepository(deliveries)
 	svc := NewBuildService(buildRepo, nil, nil)
 	svc.artifactRepo = artifactRepo
 	svc.artifactCollector = artifactpkg.NewCollector(&fakeArtifactStore{})
 	svc.artifactWorkspaceRoot = workspaceRoot
-	svc.artifactTriggerDispatcher = dispatcher
 
 	collected, err := svc.collectAndPersistArtifacts(context.Background(), "build-1", nil, domain.StorageProviderFilesystem, workspaceRoot, []domain.ArtifactDeclaration{{Path: "dist/app.tgz"}}, map[string]struct{}{}, map[string]struct{}{})
 	if err != nil {
-		t.Fatalf("expected dispatch failure to be non-fatal, got %v", err)
+		t.Fatal(err)
 	}
 	if len(collected) != 1 || collected[0] != "dist/app.tgz" {
 		t.Fatalf("expected collected artifact path, got %+v", collected)
@@ -297,14 +294,15 @@ func TestCollectAndPersistArtifacts_DispatchFailureDoesNotFailCollection(t *test
 		t.Fatalf("list artifacts failed: %v", listErr)
 	}
 	if len(artifacts) != 1 {
-		t.Fatalf("expected persisted artifact despite dispatch failure, got %d", len(artifacts))
+		t.Fatalf("expected one persisted artifact, got %d", len(artifacts))
 	}
-	if dispatcher.calls != 1 {
-		t.Fatalf("expected one dispatch attempt, got %d", dispatcher.calls)
+	delivery, lookupErr := deliveries.GetByArtifactIDAndConsumerJobID(ctx, artifacts[0].ID, "consumer")
+	if lookupErr != nil || delivery.Status != domain.ArtifactTriggerDeliveryStatusPending {
+		t.Fatalf("publication obligation: %+v %v", delivery, lookupErr)
 	}
 }
 
-func TestCollectAndPersistArtifacts_FetchesBuildOnceForMultipleDispatches(t *testing.T) {
+func TestCollectAndPersistArtifacts_PublishesMultipleFiles(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	artifactPaths := []string{
 		filepath.Join(workspaceRoot, "dist", "app-a.tgz"),
@@ -329,12 +327,10 @@ func TestCollectAndPersistArtifacts_FetchesBuildOnceForMultipleDispatches(t *tes
 		Trigger:   domain.BuildTrigger{Kind: domain.BuildTriggerKindManual},
 	}}
 	artifactRepo := &fakeArtifactRepository{}
-	dispatcher := &failingArtifactTriggerDispatcher{}
 	svc := NewBuildService(buildRepo, nil, nil)
 	svc.artifactRepo = artifactRepo
 	svc.artifactCollector = artifactpkg.NewCollector(&fakeArtifactStore{})
 	svc.artifactWorkspaceRoot = workspaceRoot
-	svc.artifactTriggerDispatcher = dispatcher
 
 	collected, err := svc.collectAndPersistArtifacts(context.Background(), "build-1", nil, domain.StorageProviderFilesystem, workspaceRoot, []domain.ArtifactDeclaration{{Path: "dist/app-a.tgz"}, {Path: "dist/app-b.tgz"}}, map[string]struct{}{}, map[string]struct{}{})
 	if err != nil {
@@ -343,11 +339,8 @@ func TestCollectAndPersistArtifacts_FetchesBuildOnceForMultipleDispatches(t *tes
 	if len(collected) != 2 {
 		t.Fatalf("expected two collected artifact paths, got %+v", collected)
 	}
-	if buildRepo.getCalls != 1 {
-		t.Fatalf("expected one build lookup for dispatch reuse, got %d", buildRepo.getCalls)
-	}
-	if dispatcher.calls != 2 {
-		t.Fatalf("expected dispatch per artifact, got %d", dispatcher.calls)
+	if buildRepo.getCalls != 0 {
+		t.Fatalf("unexpected post-publication producer lookup: %d", buildRepo.getCalls)
 	}
 }
 

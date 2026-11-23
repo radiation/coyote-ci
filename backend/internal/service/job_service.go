@@ -51,6 +51,7 @@ var ErrArtifactTriggerDeliveryRetryNotSupported = errors.New("artifact trigger d
 type JobService struct {
 	jobRepo                   repository.JobRepository
 	artifactTriggerDeliveries repository.ArtifactTriggerDeliveryRepository
+	artifactAttemptTimeout    time.Duration
 	projects                  repository.ProjectRepository
 	registeredRepositories    repository.SCMRepositoryRegistrationRepository
 	managedImageConfigs       repository.JobManagedImageConfigRepository
@@ -59,7 +60,7 @@ type JobService struct {
 }
 
 func NewJobService(jobRepo repository.JobRepository, buildService *buildsvc.BuildService) *JobService {
-	return &JobService{jobRepo: jobRepo, buildService: buildService}
+	return &JobService{jobRepo: jobRepo, buildService: buildService, artifactAttemptTimeout: 2 * time.Minute}
 }
 
 func (s *JobService) WithProjectRepository(projects repository.ProjectRepository) *JobService {
@@ -760,81 +761,13 @@ func (s *JobService) buildRepositoryIdentity(ctx context.Context, job domain.Job
 	return identity, nil
 }
 
-func (s *JobService) DispatchArtifactTriggers(ctx context.Context, build domain.Build, artifact domain.BuildArtifact) error {
-	if s.artifactTriggerDeliveries == nil || s.buildService == nil || build.Trigger.Kind == domain.BuildTriggerKindArtifact {
-		return nil
-	}
-	if build.JobID == nil || strings.TrimSpace(*build.JobID) == "" {
-		return nil
-	}
-
-	producerJobID := strings.TrimSpace(*build.JobID)
-	jobs, err := s.jobRepo.ListByProjectID(ctx, build.ProjectID)
-	if err != nil {
-		return err
-	}
-	for _, job := range jobs {
-		if !job.Enabled || strings.TrimSpace(job.ID) == "" || job.ID == producerJobID {
-			continue
-		}
-		for _, triggerConfig := range domain.NormalizeJobArtifactTriggers(job.ArtifactTriggers) {
-			if triggerConfig.ProducerJobID != producerJobID || triggerConfig.Path != artifact.LogicalPath {
-				continue
-			}
-			if dispatchErr := s.dispatchArtifactTriggerToJob(ctx, build, artifact, job); dispatchErr != nil {
-				return dispatchErr
-			}
-			break
-		}
-	}
-	return nil
-}
-
-func (s *JobService) dispatchArtifactTriggerToJob(ctx context.Context, producerBuild domain.Build, artifact domain.BuildArtifact, consumerJob domain.Job) error {
-	now := time.Now().UTC()
-	producerJobID := strings.TrimSpace(readStringPtr(producerBuild.JobID))
-	delivery := domain.ArtifactTriggerDelivery{
-		ID:                uuid.NewString(),
-		ArtifactID:        artifact.ID,
-		ConsumerJobID:     consumerJob.ID,
-		ProducerBuildID:   producerBuild.ID,
-		ProducerProjectID: producerBuild.ProjectID,
-		ProducerJobID:     producerJobID,
-		ArtifactPath:      artifact.LogicalPath,
-		Status:            domain.ArtifactTriggerDeliveryStatusPending,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-	}
-	created, err := s.artifactTriggerDeliveries.Create(ctx, delivery)
-	if err != nil {
-		if errors.Is(err, repository.ErrArtifactTriggerDeliveryDuplicate) {
-			existing, getErr := s.artifactTriggerDeliveries.GetByArtifactIDAndConsumerJobID(ctx, artifact.ID, consumerJob.ID)
-			if getErr != nil {
-				return getErr
-			}
-			if existing.Status != domain.ArtifactTriggerDeliveryStatusFailed {
-				return nil
-			}
-			claimed, claimErr := s.artifactTriggerDeliveries.ClaimFailedForRetry(ctx, existing.ID, now)
-			if claimErr != nil {
-				if errors.Is(claimErr, repository.ErrArtifactTriggerDeliveryRetryNotClaimable) {
-					return nil
-				}
-				return claimErr
-			}
-			created = claimed
-		} else {
-			return err
-		}
-	}
-	_, err = s.queueArtifactTriggerDelivery(ctx, created, producerBuild, artifact, consumerJob)
-	return err
-}
-
 func (s *JobService) queueArtifactTriggerDelivery(ctx context.Context, delivery domain.ArtifactTriggerDelivery, producerBuild domain.Build, artifact domain.BuildArtifact, consumerJob domain.Job) (domain.ArtifactTriggerDelivery, error) {
 	artifactSizeBytes := artifact.SizeBytes
 	_, queueErr := s.createBuildForJobWithTrigger(ctx, consumerJob, &buildsvc.CreateBuildTriggerInput{
 		PersistArtifactBuild: func(ctx context.Context, plan repository.ArtifactBuildPlan) (domain.Build, error) {
+			if err := ctx.Err(); err != nil {
+				return domain.Build{}, err
+			}
 			plan.ConsumerUpdatedAt = consumerJob.UpdatedAt
 			created, err := s.artifactTriggerDeliveries.CreateArtifactBuild(ctx, delivery.ID, delivery.UpdatedAt, plan)
 			if err != nil && !errors.Is(err, repository.ErrArtifactBuildCommitUnknown) {
@@ -853,6 +786,9 @@ func (s *JobService) queueArtifactTriggerDelivery(ctx context.Context, delivery 
 		ArtifactChecksumSHA256: readStringPtr(artifact.ChecksumSHA256),
 	})
 	if queueErr != nil {
+		if artifactAttemptInterrupted(ctx, queueErr) {
+			return delivery, errors.Join(ctx.Err(), queueErr)
+		}
 		var updated domain.ArtifactTriggerDelivery
 		var updateErr error
 		if errors.Is(queueErr, repository.ErrArtifactBuildCommitUnknown) {

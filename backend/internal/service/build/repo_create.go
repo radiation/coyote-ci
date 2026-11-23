@@ -67,12 +67,12 @@ func (s *BuildService) CreateBuildFromRepo(ctx context.Context, input CreateRepo
 		}
 	}()
 
-	absPipelinePath, effectivePipelinePath, err := resolveRepoPipelinePath(localPath, input.PipelinePath)
+	_, effectivePipelinePath, err := resolveRepoPipelinePath(localPath, input.PipelinePath)
 	if err != nil {
 		return domain.Build{}, err
 	}
 
-	src := pipeline.FileSource{Path: absPipelinePath}
+	src := pipeline.FileSource{Root: localPath, Path: effectivePipelinePath}
 	yamlData, _, err := src.Load()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

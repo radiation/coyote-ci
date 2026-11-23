@@ -160,6 +160,7 @@ func TestArtifactRepository_Create(t *testing.T) {
 		WithArgs("artifact-1", "build-1", packageID, &stepID, "coyote-ci-server", "dist/output.zip", "generic", "build-1/dist/output.zip", "filesystem", int64(10), &contentType, &checksum, targetPlatform, now).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "build_id", "package_id", "step_id", "artifact_name", "logical_path", "artifact_type", "storage_key", "storage_provider", "size_bytes", "content_type", "checksum_sha256", "target_platform", "created_at"}).
 			AddRow("artifact-1", "build-1", packageID, &stepID, "coyote-ci-server", "dist/output.zip", "generic", "build-1/dist/output.zip", "filesystem", int64(10), contentType, checksum, targetPlatform, now))
+	mock.ExpectExec("INSERT INTO artifact_trigger_deliveries").WithArgs("artifact-1", "build-1", "dist/output.zip").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	artifact, err := repo.Create(context.Background(), domain.BuildArtifact{
@@ -222,6 +223,7 @@ func TestArtifactRepository_Create_ZeroCreatedAtUsesDatabaseNow(t *testing.T) {
 		WithArgs("artifact-1", "build-1", packageID, nil, nil, "dist/output.zip", nil, "build-1/dist/output.zip", "filesystem", int64(10), nil, nil, "", nil).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "build_id", "package_id", "step_id", "artifact_name", "logical_path", "artifact_type", "storage_key", "storage_provider", "size_bytes", "content_type", "checksum_sha256", "target_platform", "created_at"}).
 			AddRow("artifact-1", "build-1", packageID, nil, nil, "dist/output.zip", nil, "build-1/dist/output.zip", "filesystem", int64(10), nil, nil, "", now))
+	mock.ExpectExec("INSERT INTO artifact_trigger_deliveries").WithArgs("artifact-1", "build-1", "dist/output.zip").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
 	artifact, err := repo.Create(context.Background(), domain.BuildArtifact{
