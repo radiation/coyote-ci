@@ -108,6 +108,16 @@ func TestPushAuthForCredential_ValidationUsernameAndCleanup(t *testing.T) {
 	}
 }
 
+func TestWritebackRestrictsTransports(t *testing.T) {
+	t.Setenv("GIT_ALLOW_PROTOCOL", "https:unapproved")
+	for _, remote := range []string{"unapproved://example.invalid/repo", "file:///nonexistent"} {
+		err := runGitWithEnv(context.Background(), t.TempDir(), []string{"GIT_TERMINAL_PROMPT=0"}, "ls-remote", "--", remote)
+		if err == nil || !strings.Contains(err.Error(), "not allowed") {
+			t.Fatalf("expected transport rejection for %s, got %v", remote, err)
+		}
+	}
+}
+
 func TestWritebackRedactionAndPathHelpers(t *testing.T) {
 	if isMissingRemoteBranchError(nil) {
 		t.Fatal("nil error should not be a missing remote branch")

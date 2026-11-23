@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -102,18 +103,24 @@ func (g *GitFetcher) fetch(ctx context.Context, repoURL string, ref string, cred
 
 func gitCommand(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
+	protocols := []string{"file", "git", "http", "https", "ssh"}
+	if configured, ok := os.LookupEnv("GIT_ALLOW_PROTOCOL"); ok {
+		allowed := strings.Split(configured, ":")
+		protocols = slices.DeleteFunc(protocols, func(protocol string) bool { return !slices.Contains(allowed, protocol) })
+	}
+	cmd.Env = append(os.Environ(), "GIT_ALLOW_PROTOCOL="+strings.Join(protocols, ":"))
 	cmd.WaitDelay = time.Second
 	return cmd
 }
 
 func gitCloneWithHTTPSCredential(ctx context.Context, repoURL string, dst string, credential HTTPSCredential) error {
-	env, cleanup, err := gitHTTPSCredentialEnv(credential)
+	cmd := gitCommand(ctx, "clone", "--", repoURL, dst)
+	env, cleanup, err := gitHTTPSCredentialEnv(cmd.Env, credential)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	cmd := gitCommand(ctx, "clone", "--", repoURL, dst)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -122,7 +129,7 @@ func gitCloneWithHTTPSCredential(ctx context.Context, repoURL string, dst string
 	return nil
 }
 
-func gitHTTPSCredentialEnv(credential HTTPSCredential) ([]string, func(), error) {
+func gitHTTPSCredentialEnv(env []string, credential HTTPSCredential) ([]string, func(), error) {
 	username := strings.TrimSpace(credential.Username)
 	password := strings.TrimSpace(credential.Password)
 	if username == "" || password == "" {
@@ -132,7 +139,7 @@ func gitHTTPSCredentialEnv(credential HTTPSCredential) ([]string, func(), error)
 	if err != nil {
 		return nil, nil, err
 	}
-	return append(os.Environ(),
+	return append(env,
 			"GIT_TERMINAL_PROMPT=0",
 			"GIT_ASKPASS="+askPassPath,
 			"COYOTE_GIT_ASKPASS_USERNAME="+username,
@@ -299,7 +306,7 @@ func gitFetchRef(ctx context.Context, dir string, ref string, credential *HTTPSC
 	var cleanup func()
 	var err error
 	if credential != nil {
-		cmd.Env, cleanup, err = gitHTTPSCredentialEnv(*credential)
+		cmd.Env, cleanup, err = gitHTTPSCredentialEnv(cmd.Env, *credential)
 		if err != nil {
 			return err
 		}

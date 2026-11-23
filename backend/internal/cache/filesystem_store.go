@@ -64,11 +64,8 @@ func (s *FilesystemStore) Restore(_ context.Context, key string, destinationRoot
 		return RestoreResult{}, fmt.Errorf("cache entry is not an archive file: %s", archivePath)
 	}
 
-	if mkdirErr := os.MkdirAll(destinationRoot, 0o755); mkdirErr != nil {
-		return RestoreResult{}, mkdirErr
-	}
-	if err := extractTarGz(archivePath, destinationRoot); err != nil {
-		return RestoreResult{}, err
+	if extractErr := extractTarGz(archivePath, destinationRoot); extractErr != nil {
+		return RestoreResult{}, extractErr
 	}
 
 	now := time.Now().UTC()
@@ -412,6 +409,15 @@ func extractTarGz(srcArchivePath string, destinationRoot string) error {
 	}
 	defer func() { _ = gz.Close() }()
 
+	if mkdirErr := os.MkdirAll(destinationRoot, 0o755); mkdirErr != nil {
+		return mkdirErr
+	}
+	root, err := os.OpenRoot(destinationRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+
 	reader := tar.NewReader(gz)
 	for {
 		header, err := reader.Next()
@@ -422,21 +428,21 @@ func extractTarGz(srcArchivePath string, destinationRoot string) error {
 			return err
 		}
 
-		target, err := safeExtractPath(destinationRoot, header.Name)
+		target, err := safeExtractPath(header.Name)
 		if err != nil {
 			return err
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				return err
+			if mkdirErr := root.MkdirAll(target, 0o755); mkdirErr != nil {
+				return mkdirErr
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
+			if mkdirErr := root.MkdirAll(filepath.Dir(target), 0o755); mkdirErr != nil {
+				return mkdirErr
 			}
-			dst, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(header.Mode))
+			dst, err := root.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(header.Mode).Perm())
 			if err != nil {
 				return err
 			}
@@ -453,23 +459,12 @@ func extractTarGz(srcArchivePath string, destinationRoot string) error {
 	}
 }
 
-func safeExtractPath(destinationRoot string, entryName string) (string, error) {
-	cleaned := filepath.Clean(strings.ReplaceAll(entryName, "\\", "/"))
-	if cleaned == "." || cleaned == "" {
-		return filepath.Clean(destinationRoot), nil
+func safeExtractPath(entryName string) (string, error) {
+	name := strings.ReplaceAll(entryName, "\\", "/")
+	if !filepath.IsLocal(name) || strings.Contains("/"+name+"/", "/../") || (len(name) >= 2 && name[1] == ':') {
+		return "", fmt.Errorf("archive entry escapes destination: %q", entryName)
 	}
-	if strings.HasPrefix(cleaned, "../") || cleaned == ".." {
-		return "", fmt.Errorf("archive entry escapes destination: %s", entryName)
-	}
-	full := filepath.Join(destinationRoot, cleaned)
-	rel, err := filepath.Rel(filepath.Clean(destinationRoot), full)
-	if err != nil {
-		return "", err
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("archive entry escapes destination: %s", entryName)
-	}
-	return full, nil
+	return filepath.Clean(name), nil
 }
 
 func fileDigestAndSize(path string) (string, int64, error) {

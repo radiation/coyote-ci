@@ -168,24 +168,66 @@ func TestFilesystemStore_ValidationAndExtractionEdges(t *testing.T) {
 		t.Fatalf("resolve unsupported archive path: %v", resolveErr)
 	}
 	writeUnsupportedTarArchive(t, unsupportedPath)
+	if _, restoreErr := store.Restore(ctx, "unsupported", unsupportedPath); restoreErr == nil || !errors.Is(restoreErr, syscall.ENOTDIR) && !errors.Is(restoreErr, os.ErrExist) {
+		t.Fatalf("expected restore to reject a non-directory destination, got %v", restoreErr)
+	}
 	if _, err := store.Restore(ctx, "unsupported", t.TempDir()); err == nil || !strings.Contains(err.Error(), "unsupported tar entry type") {
 		t.Fatalf("expected unsupported tar entry error, got %v", err)
 	}
 
-	root := t.TempDir()
-	for _, entry := range []string{"", ".", "nested/file.txt"} {
-		path, err := safeExtractPath(root, entry)
+	for _, entry := range []string{".", "nested/file.txt"} {
+		path, err := safeExtractPath(entry)
 		if err != nil {
 			t.Fatalf("safe extract path %q failed: %v", entry, err)
 		}
-		if !strings.HasPrefix(path, filepath.Clean(root)) {
-			t.Fatalf("expected %q to stay under %q", path, root)
+		if path != filepath.FromSlash(entry) {
+			t.Fatalf("unexpected relative path %q for %q", path, entry)
 		}
 	}
-	for _, entry := range []string{"../escape", `..\escape`} {
-		if _, err := safeExtractPath(root, entry); err == nil || !strings.Contains(err.Error(), "escapes destination") {
+	for _, entry := range []string{"", "../escape", `..\escape`, "nested/../file", "/absolute", `C:\absolute`, `\\host\share`} {
+		if _, err := safeExtractPath(entry); err == nil || !strings.Contains(err.Error(), "escapes destination") {
 			t.Fatalf("expected escape error for %q, got %v", entry, err)
 		}
+	}
+}
+
+func TestRestoreConfinesDestinationSymlinks(t *testing.T) {
+	store := NewFilesystemStore(t.TempDir())
+	source := t.TempDir()
+	if err := os.Mkdir(filepath.Join(source, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "nested", "file"), []byte("cached"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save(context.Background(), "fixture", source); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []string{"nested", "nested/file"} {
+		t.Run(entry, func(t *testing.T) {
+			destination, outside := t.TempDir(), t.TempDir()
+			marker := filepath.Join(outside, "file")
+			if err := os.WriteFile(marker, []byte("original"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			linkTarget := outside
+			if entry == "nested/file" {
+				linkTarget = marker
+				if err := os.Mkdir(filepath.Join(destination, "nested"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(linkTarget, filepath.Join(destination, entry)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Restore(context.Background(), "fixture", destination); err == nil {
+				t.Fatal("expected restore to reject outside symlink")
+			}
+			content, err := os.ReadFile(marker)
+			if err != nil || string(content) != "original" {
+				t.Fatalf("outside file changed: %q, %v", content, err)
+			}
+		})
 	}
 }
 
