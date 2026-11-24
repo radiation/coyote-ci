@@ -45,7 +45,7 @@ export function DashboardPage() {
   return (
     <div className="page-content page-dashboard">
       <PageHeader
-        title="Dashboard"
+        title="Overview"
         actions={
           <>
             <Link className="secondary-button" to="/projects">
@@ -58,10 +58,7 @@ export function DashboardPage() {
         }
       />
 
-      <section
-        className="dashboard-summary-grid"
-        aria-label="Dashboard summary"
-      >
+      <section className="dashboard-summary-grid" aria-label="Overview summary">
         <SummaryCard
           title="Projects"
           value={projectsLoading ? "Loading…" : String(projects?.length ?? 0)}

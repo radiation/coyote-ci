@@ -84,7 +84,7 @@ describe("DashboardPage", () => {
   it("renders accessible projects and recent activity", async () => {
     renderPage();
 
-    expect(screen.getByText("Dashboard")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Overview" })).toBeTruthy();
 
     await waitFor(() => {
       const projectLinks = screen.getAllByRole("link", { name: "Platform" });

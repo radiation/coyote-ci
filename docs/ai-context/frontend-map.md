@@ -8,7 +8,8 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 
 - `frontend/src/App.tsx`: app bootstrap, readiness gate, auth provider, query client, and router mount.
 - `frontend/src/routes/router.tsx`: route-to-page map. Start here when a change is route-specific.
-- `frontend/src/components/Layout.tsx`: shared frame for routed pages.
+- `frontend/src/components/Layout.tsx`: owns auth-aware navigation. Overview uses `/dashboard`; Projects groups the project directory and All jobs; Activity groups Builds, Queue, and Workers; Artifacts keeps its existing browser; Settings opens Profile and filters its secondary links by identity. Anonymous navigation remains Projects only.
+- `frontend/src/components/AppShell.tsx`: matches the current pathname to primary and secondary navigation without rewriting URLs. Changing the navigation hierarchy does not require moving the underlying routes.
 
 ## Pages and routes
 

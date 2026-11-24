@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { Layout } from "./Layout";
@@ -37,7 +43,7 @@ function installMatchMedia(initialMatches: boolean) {
   });
 }
 
-function renderLayout(navigate = vi.fn()) {
+function renderLayout(initialEntry = "/artifacts", navigate = vi.fn()) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -48,11 +54,12 @@ function renderLayout(navigate = vi.fn()) {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthProvider navigate={navigate}>
-          <MemoryRouter initialEntries={["/artifacts"]}>
+          <MemoryRouter initialEntries={[initialEntry]}>
             <Routes>
               <Route element={<Layout />}>
                 <Route path="/artifacts" element={<div>Artifacts page</div>} />
                 <Route path="/projects" element={<div>Projects page</div>} />
+                <Route path="*" element={<div>Destination</div>} />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -104,13 +111,9 @@ describe("Layout", () => {
       expect(screen.getByLabelText("Application version")).toHaveTextContent(
         `Coyote CI ${__COYOTE_VERSION__}`,
       );
-      expect(screen.getByRole("link", { name: "Profile" })).toBeTruthy();
       expect(
-        screen.getByRole("link", { name: "My notifications" }),
-      ).toBeTruthy();
-      expect(screen.queryByRole("link", { name: "My API Tokens" })).toBeNull();
-      expect(screen.getByRole("link", { name: "Notifications" })).toBeTruthy();
-      expect(screen.getByRole("link", { name: "Users" })).toBeTruthy();
+        screen.queryByRole("navigation", { name: "Settings views" }),
+      ).toBeNull();
     });
 
     fireEvent.click(toggle);
@@ -134,7 +137,7 @@ describe("Layout", () => {
         global_role: "user",
       },
     });
-    renderLayout();
+    renderLayout("/settings/profile");
 
     await waitFor(() => {
       expect(
@@ -145,6 +148,63 @@ describe("Layout", () => {
       expect(screen.getByRole("link", { name: "My API Tokens" })).toBeTruthy();
     });
   });
+
+  it.each([
+    ["/builds", "Activity", "Builds", "page"],
+    ["/builds/run-1?step=0#step-0", "Activity", "Builds", "location"],
+    ["/queue?project_id=1", "Activity", "Queue", "page"],
+    ["/workers", "Activity", "Workers", "page"],
+    ["/projects/p1", "Projects", "Project directory", "location"],
+    ["/projects/public/builds/b1", "Projects", "Project directory", "location"],
+    ["/jobs/new", "Projects", "All jobs", "location"],
+    ["/jobs/j1", "Projects", "All jobs", "location"],
+    ["/settings/users", "Settings", "Users", "page"],
+  ])(
+    "resolves navigation on direct entry to %s",
+    async (url, section, view, marker) => {
+      renderLayout(url);
+      const primary = within(
+        await screen.findByRole("navigation", { name: "Primary" }),
+      );
+      expect(
+        primary
+          .getAllByRole("link")
+          .map((link) => [link.textContent, link.getAttribute("href")]),
+      ).toEqual([
+        ["Overview", "/dashboard"],
+        ["Projects", "/projects"],
+        ["Activity", "/builds"],
+        ["Artifacts", "/artifacts"],
+        ["Settings", "/settings/profile"],
+      ]);
+      expect(
+        primary.getByRole("link", { name: section, current: "location" }),
+      ).toBeTruthy();
+      const secondary = within(
+        screen.getByRole("navigation", { name: `${section} views` }),
+      );
+      const names =
+        section === "Activity"
+          ? ["Builds", "Queue", "Workers"]
+          : section === "Projects"
+            ? ["Project directory", "All jobs"]
+            : [
+                "Profile",
+                "My notifications",
+                "Credentials",
+                "Notifications",
+                "Users",
+              ];
+      expect(
+        secondary.getAllByRole("link").map((link) => link.textContent),
+      ).toEqual(names);
+      const link = secondary.getByRole("link", { name: view });
+      expect(link).toHaveAttribute("aria-current", marker);
+      link.focus();
+      expect(link).toHaveFocus();
+      expect(link.tabIndex).toBe(0);
+    },
+  );
 
   it("allows anonymous visitors through the public shell and shows sign-in", async () => {
     mockedGetAuthConfig.mockResolvedValue({
@@ -165,6 +225,9 @@ describe("Layout", () => {
     expect(screen.queryByRole("link", { name: "Queue" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Workers" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Users" })).toBeNull();
+
+    expect(screen.getAllByRole("navigation")).toHaveLength(1);
+    expect(screen.queryByRole("link", { name: "All jobs" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(navigate).toHaveBeenCalledWith("/auth/login");

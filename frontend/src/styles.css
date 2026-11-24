@@ -2963,6 +2963,16 @@ h3 {
     position: static;
   }
 
+  .sidebar-section {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .sidebar-section-label {
+    flex-basis: 100%;
+  }
+
   .artifact-card-heading,
   .artifact-build-card-header,
   .artifact-version-header,
