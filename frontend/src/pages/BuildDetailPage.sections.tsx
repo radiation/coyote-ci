@@ -1,8 +1,9 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { BuildArtifactsSection } from "../components/BuildArtifactsSection";
 import { StatusBadge } from "../components/StatusBadge";
-import { StepList } from "../components/StepList";
+import { StepDetails, StepList } from "../components/StepList";
+import { StepLogPanel } from "../components/StepLogPanel";
 import { VersionTagEditor } from "../components/VersionTagEditor";
 import type { Build, BuildArtifact, BuildStep } from "../types";
 import {
@@ -119,101 +120,6 @@ function stepSummaryText(
 
 function displayStepNumber(stepIndex: number): number {
   return stepIndex + 1;
-}
-
-function stepLogLinkClassName(step: BuildStep): string {
-  if (step.status === "failed") {
-    return "build-log-link is-failed";
-  }
-
-  if (step.status === "running") {
-    return "build-log-link is-running";
-  }
-
-  if (step.status === "pending") {
-    return "build-log-link is-pending";
-  }
-
-  return "build-log-link";
-}
-
-type LogStepGroup = {
-  key: string;
-  label: string;
-  steps: BuildStep[];
-};
-
-function normalizeLogGroupLabel(groupName: string | null | undefined): string {
-  const trimmed = groupName?.trim();
-  return trimmed ? trimmed : "Ungrouped";
-}
-
-function groupLogSteps(steps: BuildStep[]): LogStepGroup[] {
-  const groups = new Map<string, LogStepGroup>();
-
-  for (const step of steps) {
-    const label = normalizeLogGroupLabel(step.group_name);
-    const existing = groups.get(label);
-
-    if (existing) {
-      existing.steps.push(step);
-      continue;
-    }
-
-    groups.set(label, {
-      key: label,
-      label,
-      steps: [step],
-    });
-  }
-
-  return Array.from(groups.values());
-}
-
-function logGroupSummaryText(steps: BuildStep[]): string {
-  const counts = {
-    success: 0,
-    failed: 0,
-    running: 0,
-    pending: 0,
-    canceled: 0,
-  };
-
-  for (const step of steps) {
-    counts[step.status] += 1;
-  }
-
-  const stepSummary = `${steps.length} step${steps.length === 1 ? "" : "s"}`;
-
-  if (counts.failed > 0) {
-    return `${stepSummary} · ${counts.failed} failed`;
-  }
-
-  if (counts.running > 0) {
-    return `${stepSummary} · ${counts.running} running`;
-  }
-
-  if (counts.pending === steps.length) {
-    return `${stepSummary} · pending`;
-  }
-
-  if (counts.pending > 0) {
-    return `${stepSummary} · ${counts.pending} pending`;
-  }
-
-  if (counts.canceled === steps.length) {
-    return `${stepSummary} · canceled`;
-  }
-
-  if (counts.canceled > 0) {
-    return `${stepSummary} · ${counts.canceled} canceled`;
-  }
-
-  if (counts.success > 0) {
-    return `${stepSummary} · ${counts.success} succeeded`;
-  }
-
-  return stepSummary;
 }
 
 function currentStepSummaryLabel(
@@ -548,118 +454,128 @@ export function ExecutionSummaryPanel({
   );
 }
 
-export function StepTimelinePanel({
+const stepTabs = ["Logs", "Details", "Outputs"] as const;
+
+export function InvestigationWorkspace({
   build,
   steps,
-  stepsLoading,
-  stepsError,
-  openStepIndex,
-  onOpenStepChange,
+  selected,
+  explicit,
+  onSelect,
+  loading,
+  error,
+  outputs,
 }: {
   build: Build;
-  steps: BuildStep[] | undefined;
-  stepsLoading: boolean;
-  stepsError: unknown;
-  openStepIndex: number | null;
-  onOpenStepChange: (stepIndex: number | null) => void;
+  steps: BuildStep[];
+  selected?: BuildStep;
+  explicit: boolean;
+  onSelect: (index: number) => void;
+  loading: boolean;
+  error: unknown;
+  outputs: ReactNode;
 }) {
+  const [tab, setTab] = useState<(typeof stepTabs)[number]>("Logs");
+  const [expanded, setExpanded] = useState(false);
+  const expandControl = useRef<HTMLButtonElement>(null);
+  const tabs = useRef<HTMLDivElement>(null);
+  function collapse() {
+    setExpanded(false);
+    expandControl.current?.focus();
+  }
   return (
-    <section className="detail-panel">
-      <div className="dashboard-panel-header">
-        <div>
-          <h3>Execution timeline</h3>
-        </div>
+    <section
+      aria-label="Build investigation"
+      className={`investigation${expanded ? " is-expanded" : ""}`}
+      onKeyDown={(event) => {
+        if (expanded && event.key === "Escape") collapse();
+      }}
+    >
+      <div className="investigation-bar">
+        <h3>Execution</h3>
+        <button
+          ref={expandControl}
+          type="button"
+          aria-pressed={expanded}
+          onClick={() => (expanded ? collapse() : setExpanded(true))}
+        >
+          {expanded ? "Collapse workspace" : "Expand workspace"}
+        </button>
       </div>
-      {stepsLoading ? <p>Loading steps…</p> : null}
-      {stepsError ? (
-        <p className="error-text">Failed to load steps: {String(stepsError)}</p>
+      {error ? (
+        <p className="error-text">Failed to load steps: {String(error)}</p>
       ) : null}
-      {steps ? (
-        <StepList
-          buildID={build.id}
-          steps={steps}
-          openStepIndex={openStepIndex}
-          onOpenStepChange={onOpenStepChange}
-        />
-      ) : null}
-    </section>
-  );
-}
-
-export function LogsPanel({
-  steps,
-  stepsLoading,
-  stepsError,
-  onOpenStep,
-}: {
-  steps: BuildStep[] | undefined;
-  stepsLoading: boolean;
-  stepsError: unknown;
-  onOpenStep: (stepIndex: number) => void;
-}) {
-  const stepCount = (steps ?? []).length;
-  const stepGroups = groupLogSteps(steps ?? []);
-
-  return (
-    <section className="detail-panel">
-      <div className="dashboard-panel-header">
-        <div>
-          <h3>Logs</h3>
-          {stepCount > 0 ? (
-            <p className="subtle-text">
-              {stepCount} step{stepCount === 1 ? "" : "s"}
-            </p>
-          ) : null}
-        </div>
-      </div>
-      {stepsLoading ? <p>Loading log entry points…</p> : null}
-      {stepsError ? (
-        <p className="error-text">
-          Step data is unavailable. Retry the page to fetch log entry points
-          again.
-        </p>
-      ) : null}
-      {!stepsLoading && !stepsError && (steps ?? []).length === 0 ? (
-        <p className="subtle-text">
-          No step logs are available yet. When execution starts, open a step in
-          the timeline to inspect stdout and stderr inline.
-        </p>
-      ) : null}
-      {!stepsLoading && !stepsError && (steps ?? []).length > 0 ? (
-        <div className="build-log-group-list">
-          {stepGroups.map((group) => (
-            <section
-              key={group.key}
-              className="build-log-group"
-              aria-label={`Log group ${group.label}`}
-            >
-              <div className="build-log-group-heading">
-                <strong>{group.label}</strong>
-                <span className="build-log-group-meta subtle-text">
-                  {logGroupSummaryText(group.steps)}
-                </span>
-              </div>
-              <div className="build-log-link-list">
-                {group.steps.map((step) => (
-                  <a
-                    key={step.id}
-                    className={stepLogLinkClassName(step)}
-                    href={`#step-${step.step_index}`}
-                    onClick={() => onOpenStep(step.step_index)}
-                    aria-label={`Open logs for ${step.name}`}
-                    title={`Open logs for ${step.name}`}
+      {loading ? (
+        <p>Loading steps…</p>
+      ) : (
+        <div className="investigation-split">
+          <StepList steps={steps} selected={selected} onSelect={onSelect} />
+          <div className="investigation-detail">
+            {selected ? (
+              <>
+                <h4>
+                  Step {selected.step_index + 1} · {selected.name}
+                </h4>
+                <div role="tablist" aria-label="Step view" ref={tabs}>
+                  {stepTabs.map((name, index) => (
+                    <button
+                      type="button"
+                      role="tab"
+                      key={name}
+                      id={`step-tab-${name}`}
+                      aria-controls={`step-panel-${name}`}
+                      aria-selected={tab === name}
+                      tabIndex={tab === name ? 0 : -1}
+                      onClick={() => setTab(name)}
+                      onKeyDown={(event) => {
+                        const next = {
+                          ArrowLeft: (index + 2) % 3,
+                          ArrowRight: (index + 1) % 3,
+                          Home: 0,
+                          End: 2,
+                        }[event.key];
+                        if (next === undefined) return;
+                        event.preventDefault();
+                        setTab(stepTabs[next]);
+                        tabs.current?.querySelectorAll("button")[next]?.focus();
+                      }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+                {stepTabs.map((name) => (
+                  <div
+                    role="tabpanel"
+                    key={name}
+                    id={`step-panel-${name}`}
+                    aria-labelledby={`step-tab-${name}`}
+                    hidden={tab !== name}
+                    tabIndex={0}
                   >
-                    <div className="build-log-link-header">
-                      <strong>{step.name}</strong>
-                      <StatusBadge status={step.status} />
-                    </div>
-                  </a>
+                    {name === "Logs" ? (
+                      <StepLogPanel
+                        buildID={build.id}
+                        stepIndex={selected.step_index}
+                      />
+                    ) : tab !== name ? null : name === "Details" ? (
+                      <StepDetails step={selected} />
+                    ) : (
+                      outputs
+                    )}
+                  </div>
                 ))}
-              </div>
-            </section>
-          ))}
+              </>
+            ) : (
+              !error && (
+                <p>
+                  {explicit ? "Step unavailable" : "No steps recorded yet."}
+                </p>
+              )
+            )}
+          </div>
         </div>
-      ) : null}
+      )}
     </section>
   );
 }

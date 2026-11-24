@@ -1,112 +1,66 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { StepList } from "./StepList";
+import { expect, it, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { StepDetails, StepList } from "./StepList";
 import type { BuildStep } from "../types";
 
-function makeStep(overrides: Partial<BuildStep> = {}): BuildStep {
-  return {
-    id: "step-1",
-    build_id: "build-1",
-    step_index: 0,
-    name: "verify",
-    command: "echo ok",
-    status: "pending",
-    worker_id: null,
-    started_at: null,
-    finished_at: null,
-    exit_code: null,
-    stdout: null,
-    stderr: null,
-    error_message: null,
-    ...overrides,
-  };
-}
+const step: BuildStep = {
+  id: "one",
+  build_id: "build",
+  step_index: 0,
+  name: "Compile",
+  command: "echo ok",
+  status: "failed",
+  worker_id: "builder",
+  started_at: "2026-04-01T00:00:00Z",
+  finished_at: "2026-04-01T00:01:05Z",
+  exit_code: 1,
+  stdout: null,
+  stderr: null,
+  error_message: "compile failed",
+};
 
-describe("StepList", () => {
-  it("renders step status, derived duration, and failure context in the timeline", () => {
-    render(
-      <StepList
-        buildID="build-1"
-        openStepIndex={null}
-        onOpenStepChange={() => {}}
-        steps={[
-          makeStep({
-            step_index: 2,
-            name: "deploy",
-            status: "failed",
-            started_at: "2026-04-01T00:00:00Z",
-            finished_at: "2026-04-01T00:01:05Z",
-            exit_code: 1,
-            error_message: "command exited with status 1",
-          }),
-        ]}
-      />,
-    );
+it("keeps consecutive groups in order, marks failures and exposes native selection", () => {
+  const select = vi.fn();
+  const steps = [
+    step,
+    { ...step, id: "two", step_index: 1, group_name: "Verify" },
+    { ...step, id: "three", step_index: 2, group_name: "Verify" },
+  ];
+  render(<StepList steps={steps} selected={step} onSelect={select} />);
+  const buttons = screen.getAllByRole("button");
+  expect(buttons[0]).toHaveAttribute("aria-current", "step");
+  expect(within(buttons[0]).getByText("1m 5s")).toBeVisible();
+  expect(screen.getAllByText("Failed")).toHaveLength(3);
+  expect(screen.getByText(/Parallel · 2/)).toBeVisible();
+  fireEvent.click(buttons[2]);
+  expect(select).toHaveBeenCalledWith(2);
+});
 
-    expect(screen.getByRole("heading", { name: "deploy" })).toBeTruthy();
-    expect(screen.getByText("Duration 1m 5s")).toBeTruthy();
-    expect(screen.getByText("command exited with status 1")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open logs" })).toBeTruthy();
-  });
-
-  it("renders full command when short", () => {
-    render(
-      <StepList
-        buildID="build-1"
-        openStepIndex={null}
-        onOpenStepChange={() => {}}
-        steps={[makeStep({ command: "echo hello" })]}
-      />,
-    );
-
-    const command = screen.getByTitle("echo hello");
-    expect(command.textContent).toBe("echo hello");
-  });
-
-  it("renders available execution phase timings", () => {
-    render(
-      <StepList
-        buildID="build-1"
-        openStepIndex={null}
-        onOpenStepChange={() => {}}
-        steps={[
-          makeStep({
-            job: {
-              timing: {
-                phases: [
-                  {
-                    name: "scheduling",
-                    started_at: "2026-04-01T00:00:00Z",
-                    finished_at: "2026-04-01T00:05:00Z",
-                  },
-                  { name: "workspace_prepare" },
-                ],
+it("shows full command, phase timings and failure details", () => {
+  render(
+    <StepDetails
+      step={{
+        ...step,
+        job: {
+          timing: {
+            phases: [
+              {
+                name: "workspace_prepare",
+                started_at: step.started_at,
+                finished_at: step.finished_at,
               },
-            },
-          }),
-        ]}
-      />,
-    );
-
-    expect(screen.getByLabelText("Execution phase timing")).toBeTruthy();
-    expect(screen.getByText("scheduling 5m 0s")).toBeTruthy();
-    expect(screen.getByText("workspace prepare —")).toBeTruthy();
-  });
-
-  it("truncates long command and preserves full command in title", () => {
-    const longCommand =
-      "echo one && echo two && echo three && echo four && echo five && echo six && echo seven && echo eight";
-    render(
-      <StepList
-        buildID="build-1"
-        openStepIndex={null}
-        onOpenStepChange={() => {}}
-        steps={[makeStep({ command: longCommand })]}
-      />,
-    );
-
-    const command = screen.getByTitle(longCommand);
-    expect(command.textContent?.endsWith("...")).toBe(true);
-    expect(command.textContent?.length).toBe(72);
-  });
+            ],
+          },
+        },
+      }}
+    />,
+  );
+  for (const text of [
+    "echo ok",
+    "compile failed",
+    "builder",
+    "workspace prepare",
+  ])
+    expect(screen.getByText(text)).toBeVisible();
+  expect(screen.getAllByText("1m 5s")).toHaveLength(2);
 });

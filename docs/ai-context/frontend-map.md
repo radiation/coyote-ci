@@ -14,7 +14,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 ## Pages and routes
 
 - `frontend/src/pages`: page-level containers. Start here for user-visible behavior, data loading, and page-specific interactions.
-- Build detail UI: `BuildDetailPage.tsx`, `BuildDetailPage.sections.tsx`, and `BuildDetailPage.helpers.ts`; `BuildDetailPage.tsx` now also owns the `?step=` deep link that opens a specific step log panel for actionable notification links.
+- Authenticated build investigation: `frontend/src/pages/BuildDetailPage.tsx` resolves `?step=` or the default failed/running step. `BuildDetailPage.sections.tsx` owns the workspace layout and tabs, `frontend/src/components/StepList.tsx` renders execution groups and details, and `frontend/src/components/StepLogPanel.tsx` owns history and SSE for the selected build/step. The public detail page is separate.
 - Artifact browser/release/lineage UI: `ArtifactsPage.tsx`, `ArtifactLogicalBrowserPage.tsx`, `ArtifactDetailPage.tsx`, plus `components/ArtifactBrowser.tsx` and `components/BuildArtifactsSection.tsx`.
 - Queue operations UI: `QueuePage.tsx` and `WorkersPage.tsx`.
 - Project/job/build navigation: `ProjectsListPage.tsx`, `ProjectDetailPage.tsx`, `JobsListPage.tsx`, `JobDetailPage.tsx`, `JobCreatePage.tsx`, `BuildsListPage.tsx`. Detail routes remain `/projects/:id` and `/jobs/:id`, which is the route shape the CLI now uses when it derives web links for discovery output.

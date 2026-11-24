@@ -1,326 +1,92 @@
-import { useEffect, useState } from "react";
-import { buildStepLogStreamURL, getStepLogs } from "../api";
 import type { BuildStep } from "../types";
-import { StatusBadge } from "./StatusBadge";
 import { formatDuration, formatTime } from "../utils/time";
-
-const COMMAND_PREVIEW_LIMIT = 72;
-
-function displayStepNumber(stepIndex: number): number {
-  return stepIndex + 1;
-}
-
-function stepCardClassName(step: BuildStep): string {
-  if (step.status === "failed") {
-    return "step-card is-failed";
-  }
-
-  if (step.status === "running") {
-    return "step-card is-running";
-  }
-
-  if (step.status === "pending") {
-    return "step-card is-pending";
-  }
-
-  return "step-card";
-}
-
-function commandPreview(command: string): string {
-  if (command.length <= COMMAND_PREVIEW_LIMIT) {
-    return command;
-  }
-
-  return `${command.slice(0, COMMAND_PREVIEW_LIMIT - 3)}...`;
-}
-
-function phaseLabel(name: string): string {
-  return name.replace(/_/g, " ");
-}
-
-type StepLogChunk = {
-  sequence_no: number;
-  stream: "stdout" | "stderr" | "system";
-  chunk_text: string;
-  created_at: string;
-};
-
-type StepBucket = {
-  key: string;
-  groupName: string | null;
-  steps: BuildStep[];
-};
-
-function bucketSteps(steps: BuildStep[]): StepBucket[] {
-  const buckets: StepBucket[] = [];
-  for (const step of steps) {
-    const trimmedGroup = (step.group_name ?? "").trim();
-    const groupName = trimmedGroup === "" ? null : trimmedGroup;
-    const bucketIdentity = groupName ?? `ungrouped:${step.step_index}`;
-    const previous = buckets[buckets.length - 1];
-    if (previous && previous.groupName === groupName) {
-      previous.steps.push(step);
-      continue;
-    }
-    buckets.push({
-      key: `${bucketIdentity}:${buckets.length}`,
-      groupName,
-      steps: [step],
-    });
-  }
-  return buckets;
-}
+import { StatusBadge } from "./StatusBadge";
 
 export function StepList({
-  buildID,
   steps,
-  openStepIndex,
-  onOpenStepChange,
+  selected,
+  onSelect,
 }: {
-  buildID: string;
   steps: BuildStep[];
-  openStepIndex: number | null;
-  onOpenStepChange: (stepIndex: number | null) => void;
+  selected?: BuildStep;
+  onSelect: (index: number) => void;
 }) {
-  const [logChunks, setLogChunks] = useState<Record<number, StepLogChunk[]>>(
-    {},
-  );
-  const [logLoading, setLogLoading] = useState<Record<number, boolean>>({});
-  const [logError, setLogError] = useState<Record<number, string | null>>({});
-
-  useEffect(() => {
-    if (openStepIndex === null) {
-      return;
-    }
-
-    let eventSource: EventSource | null = null;
-    let reconnectTimer: number | null = null;
-    let closed = false;
-
-    const closeCurrent = () => {
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-      }
-      if (reconnectTimer !== null) {
-        window.clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-    };
-
-    let latestSequence = 0;
-
-    const connect = (after: number) => {
-      if (closed) {
-        return;
-      }
-
-      latestSequence = after;
-
-      eventSource = new EventSource(
-        buildStepLogStreamURL(buildID, openStepIndex, after),
-      );
-
-      eventSource.addEventListener("chunk", (evt: MessageEvent) => {
-        const parsed = JSON.parse(evt.data) as StepLogChunk;
-        if (parsed.sequence_no <= latestSequence) {
-          return;
-        }
-        latestSequence = Math.max(latestSequence, parsed.sequence_no);
-        setLogChunks((prev) => {
-          const existing = prev[openStepIndex] ?? [];
-          return {
-            ...prev,
-            [openStepIndex]: [...existing, parsed],
-          };
-        });
-      });
-
-      eventSource.onerror = () => {
-        closeCurrent();
-        if (closed) {
-          return;
-        }
-        reconnectTimer = window.setTimeout(() => {
-          connect(latestSequence);
-        }, 1500);
-      };
-    };
-
-    const bootstrap = async () => {
-      setLogLoading((prev) => ({ ...prev, [openStepIndex]: true }));
-      setLogError((prev) => ({ ...prev, [openStepIndex]: null }));
-
-      try {
-        const history = await getStepLogs(buildID, openStepIndex, 0, 500);
-        setLogChunks((prev) => ({ ...prev, [openStepIndex]: history.chunks }));
-        latestSequence = history.next_sequence;
-        connect(history.next_sequence);
-      } catch (err) {
-        setLogError((prev) => ({ ...prev, [openStepIndex]: String(err) }));
-      } finally {
-        setLogLoading((prev) => ({ ...prev, [openStepIndex]: false }));
-      }
-    };
-
-    void bootstrap();
-
-    return () => {
-      closed = true;
-      closeCurrent();
-    };
-  }, [buildID, openStepIndex]);
-
-  if (steps.length === 0) {
-    return <p className="empty">No steps defined for this build.</p>;
+  const groups: { name: string; steps: BuildStep[] }[] = [];
+  for (const step of steps) {
+    const name = step.group_name?.trim() ?? "";
+    const last = groups.at(-1);
+    if (last?.name === name) last.steps.push(step);
+    else groups.push({ name, steps: [step] });
   }
-
-  const buckets = bucketSteps(steps);
-
   return (
-    <div className="step-timeline">
-      {buckets.map((bucket) => {
-        const runningCount = bucket.steps.filter(
-          (step) => step.status === "running",
-        ).length;
+    <nav className="investigation-nav" aria-label="Execution steps">
+      {groups.map((group) => (
+        <section
+          key={group.steps[0].id}
+          aria-label={group.name || "Sequential steps"}
+        >
+          <h4>
+            {group.name || "Sequential"}
+            {group.name && group.steps.length > 1 && (
+              <small>Parallel · {group.steps.length}</small>
+            )}
+          </h4>
+          {group.steps.map((step) => (
+            <button
+              key={step.id}
+              type="button"
+              aria-current={selected?.id === step.id ? "step" : undefined}
+              onClick={() => onSelect(step.step_index)}
+            >
+              <span>
+                {step.step_index + 1}. {step.name}
+              </span>
+              <StatusBadge status={step.status} />
+              {step.started_at && step.finished_at && (
+                <small>
+                  {formatDuration(step.started_at, step.finished_at)}
+                </small>
+              )}
+            </button>
+          ))}
+        </section>
+      ))}
+    </nav>
+  );
+}
 
-        return (
-          <section
-            key={`bucket-${bucket.key}`}
-            className="step-bucket"
-            aria-label={
-              bucket.groupName
-                ? `Step group ${bucket.groupName}`
-                : `Step bucket starting at step ${displayStepNumber(bucket.steps[0]?.step_index ?? 0)}`
-            }
-          >
-            {bucket.groupName ? (
-              <div className="step-group-header">
-                <strong>{bucket.groupName}</strong>
-                <span className="step-group-meta">
-                  {runningCount > 1
-                    ? `${runningCount} steps running concurrently`
-                    : runningCount === 1
-                      ? "1 step running"
-                      : `${bucket.steps.length} parallel steps`}
-                </span>
-              </div>
-            ) : null}
-
-            <div className="step-bucket-list">
-              {bucket.steps.map((step) => {
-                const isOpen = openStepIndex === step.step_index;
-                const chunks = logChunks[step.step_index] ?? [];
-                const loading = logLoading[step.step_index] ?? false;
-                const error = logError[step.step_index];
-                const duration = formatDuration(
-                  step.started_at,
-                  step.finished_at,
-                );
-
-                return (
-                  <article
-                    key={`step-card-${step.step_index}`}
-                    id={`step-${step.step_index}`}
-                    className={stepCardClassName(step)}
-                  >
-                    <div className="step-card-rail" aria-hidden="true" />
-                    <div className="step-card-body">
-                      <div className="step-card-header">
-                        <div>
-                          <h4>{step.name}</h4>
-                        </div>
-                        <div className="step-card-header-actions">
-                          <StatusBadge status={step.status} />
-                          <button
-                            type="button"
-                            className="logs-toggle"
-                            aria-expanded={isOpen}
-                            aria-controls={`step-log-${step.step_index}`}
-                            onClick={() =>
-                              onOpenStepChange(
-                                openStepIndex === step.step_index
-                                  ? null
-                                  : step.step_index,
-                              )
-                            }
-                          >
-                            {isOpen ? "Hide logs" : "Open logs"}
-                          </button>
-                        </div>
-                      </div>
-
-                      <p className="subtle-text step-card-command-row">
-                        <code className="step-command" title={step.command}>
-                          {commandPreview(step.command)}
-                        </code>
-                      </p>
-
-                      <div className="step-card-meta-grid subtle-text">
-                        <span>Started {formatTime(step.started_at)}</span>
-                        <span>Finished {formatTime(step.finished_at)}</span>
-                        <span>Duration {duration}</span>
-                        <span>Worker {step.worker_id ?? "—"}</span>
-                        <span>Exit code {step.exit_code ?? "—"}</span>
-                      </div>
-
-                      {step.job?.timing?.phases.length ? (
-                        <div
-                          className="step-card-meta-grid subtle-text"
-                          aria-label="Execution phase timing"
-                        >
-                          {step.job.timing.phases.map((phase) => (
-                            <span key={phase.name}>
-                              {phaseLabel(phase.name)}{" "}
-                              {formatDuration(
-                                phase.started_at ?? null,
-                                phase.finished_at ?? null,
-                              )}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-
-                      {step.error_message ? (
-                        <p className="step-card-error error-text">
-                          {step.error_message}
-                        </p>
-                      ) : null}
-
-                      {isOpen ? (
-                        <div className="step-log-panel">
-                          <p className="step-log-heading">Logs</p>
-                          {loading ? (
-                            <p className="subtle-text">Loading logs...</p>
-                          ) : null}
-                          {error ? (
-                            <p className="error-text">
-                              Failed to load logs: {error}
-                            </p>
-                          ) : null}
-                          {!loading && !error && chunks.length === 0 ? (
-                            <p className="subtle-text">No logs yet.</p>
-                          ) : null}
-                          {!error && chunks.length > 0 ? (
-                            <pre className="step-log-pre">
-                              {chunks
-                                .map(
-                                  (chunk) =>
-                                    `[${chunk.stream}] ${chunk.chunk_text}`,
-                                )
-                                .join("\n")}
-                            </pre>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          </section>
-        );
-      })}
-    </div>
+export function StepDetails({ step }: { step: BuildStep }) {
+  return (
+    <>
+      <pre className="investigation-command">{step.command}</pre>
+      <dl className="investigation-facts">
+        <dt>Status</dt>
+        <dd>
+          <StatusBadge status={step.status} />
+        </dd>
+        <dt>Worker</dt>
+        <dd>{step.worker_id ?? "—"}</dd>
+        <dt>Exit code</dt>
+        <dd>{step.exit_code ?? "—"}</dd>
+        <dt>Started</dt>
+        <dd>{formatTime(step.started_at)}</dd>
+        <dt>Finished</dt>
+        <dd>{formatTime(step.finished_at)}</dd>
+        <dt>Duration</dt>
+        <dd>{formatDuration(step.started_at, step.finished_at)}</dd>
+        {step.job?.timing?.phases.map((phase) => (
+          <div className="investigation-phase" key={phase.name}>
+            <dt>{phase.name.replace(/_/g, " ")}</dt>
+            <dd>
+              {formatDuration(
+                phase.started_at ?? null,
+                phase.finished_at ?? null,
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {step.error_message && <p className="error-text">{step.error_message}</p>}
+    </>
   );
 }

@@ -15,6 +15,15 @@ import {
   rerunBuild,
 } from "../api";
 import { PageHeader } from "../components/PageHeader";
+import { StatusBadge } from "../components/StatusBadge";
+import { BuildArtifactsSection } from "../components/BuildArtifactsSection";
+import {
+  buildGitHubCommitURL,
+  buildGitHubRefURL,
+  buildPrimaryCommitValue,
+  buildSourceRefValue,
+  shortSHA,
+} from "../utils/provenance";
 import type { Build } from "../types";
 import {
   FAST_POLL_INTERVAL,
@@ -28,13 +37,12 @@ import {
   BuildDetailHeaderActions,
   BuildSummaryPanel,
   ExecutionSummaryPanel,
-  LogsPanel,
+  InvestigationWorkspace,
   ProvenancePanel,
-  StepTimelinePanel,
 } from "./BuildDetailPage.sections";
 import {
   buildLabel,
-  compactTriggerMetadata,
+  buildDuration,
   operationalBuildTitle,
   jobLabel,
   projectLabel,
@@ -47,13 +55,9 @@ export function BuildDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedOpenStepIndex = parseOpenStepIndex(searchParams.get("step"));
 
-  function handleOpenStepChange(stepIndex: number | null) {
+  function handleOpenStepChange(stepIndex: number) {
     const nextParams = new URLSearchParams(searchParams);
-    if (stepIndex === null) {
-      nextParams.delete("step");
-    } else {
-      nextParams.set("step", String(stepIndex));
-    }
+    nextParams.set("step", String(stepIndex));
     setSearchParams(nextParams, { replace: true });
   }
 
@@ -99,11 +103,17 @@ export function BuildDetailPage() {
       : SLOW_POLL_INTERVAL,
   });
 
-  const openStepIndex =
-    requestedOpenStepIndex !== null &&
-    steps?.some((step) => step.step_index === requestedOpenStepIndex)
-      ? requestedOpenStepIndex
-      : null;
+  const ordered = [...(steps ?? [])].sort(
+    (left, right) => left.step_index - right.step_index,
+  );
+  const explicit = searchParams.has("step");
+  const selected = explicit
+    ? ordered.find((step) => step.step_index === requestedOpenStepIndex)
+    : (ordered.find(
+        (step) =>
+          (build?.status === "failed" || build?.status === "running") &&
+          step.status === build.status,
+      ) ?? ordered[0]);
 
   const {
     data: artifacts,
@@ -223,8 +233,15 @@ export function BuildDetailPage() {
     await rerunBuildMutation.mutateAsync();
   }
 
+  const commit = buildPrimaryCommitValue(currentBuild);
+  const ref = buildSourceRefValue(currentBuild);
+  const commitURL = buildGitHubCommitURL(currentBuild, commit);
+  const refURL = buildGitHubRefURL(currentBuild, ref);
+  const outputs = (artifacts ?? []).filter(
+    (artifact) => artifact.step_id === selected?.id,
+  );
   return (
-    <div className="page-content page-build-detail">
+    <div className="page-content page-build-detail investigation-page">
       <PageHeader
         eyebrow={
           <>
@@ -243,8 +260,24 @@ export function BuildDetailPage() {
         }
         title={operationalBuildTitle(currentBuild)}
         description={
-          compactTriggerMetadata(currentBuild) ||
-          "Execution details, logs, artifacts, and provenance."
+          <div className="investigation-context">
+            <StatusBadge status={currentBuild.status} />
+            <span>{buildDuration(currentBuild, buildUpdatedAt)}</span>
+            <span>{ordered.length} steps</span>
+            <span>Attempt {currentBuild.attempt_number}</span>
+            {ref && (refURL ? <a href={refURL}>{ref}</a> : <span>{ref}</span>)}
+            {commit &&
+              (commitURL ? (
+                <a href={commitURL}>{shortSHA(commit)}</a>
+              ) : (
+                <span>{shortSHA(commit)}</span>
+              ))}
+            {currentBuild.rerun_of_build_id && (
+              <Link to={`/builds/${currentBuild.rerun_of_build_id}`}>
+                Original build
+              </Link>
+            )}
+          </div>
         }
         actions={
           <BuildDetailHeaderActions
@@ -268,33 +301,48 @@ export function BuildDetailPage() {
         </p>
       ) : null}
 
-      <BuildSummaryPanel
+      <InvestigationWorkspace
+        key={currentBuild.id}
         build={currentBuild}
-        rerunSourceBuild={rerunSourceBuild}
-        steps={steps}
-        stepsLoading={stepsLoading}
-        buildUpdatedAt={buildUpdatedAt}
+        steps={ordered}
+        selected={selected}
+        explicit={explicit}
+        onSelect={handleOpenStepChange}
+        loading={stepsLoading}
+        error={stepsError}
+        outputs={
+          !artifactsLoading && !artifactsError && !outputs.length ? (
+            <p>No outputs for this step.</p>
+          ) : (
+            <BuildArtifactsSection
+              build={currentBuild}
+              steps={steps}
+              artifacts={outputs}
+              isLoading={artifactsLoading}
+              error={artifactsError}
+              onAssignVersion={
+                currentBuild.job_id ? assignArtifactVersion : undefined
+              }
+            />
+          )
+        }
       />
-      <ExecutionSummaryPanel
-        build={currentBuild}
-        steps={steps}
-        stepsLoading={stepsLoading}
-        stepsError={stepsError}
-      />
-      <LogsPanel
-        steps={steps}
-        stepsLoading={stepsLoading}
-        stepsError={stepsError}
-        onOpenStep={handleOpenStepChange}
-      />
-      <StepTimelinePanel
-        build={currentBuild}
-        steps={steps}
-        stepsLoading={stepsLoading}
-        stepsError={stepsError}
-        openStepIndex={openStepIndex}
-        onOpenStepChange={handleOpenStepChange}
-      />
+      <details>
+        <summary>Build metadata and execution summary</summary>
+        <BuildSummaryPanel
+          build={currentBuild}
+          rerunSourceBuild={rerunSourceBuild}
+          steps={steps}
+          stepsLoading={stepsLoading}
+          buildUpdatedAt={buildUpdatedAt}
+        />
+        <ExecutionSummaryPanel
+          build={currentBuild}
+          steps={steps}
+          stepsLoading={stepsLoading}
+          stepsError={stepsError}
+        />
+      </details>
       <ArtifactsPanel
         build={currentBuild}
         steps={steps}
