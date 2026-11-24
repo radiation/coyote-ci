@@ -252,8 +252,9 @@ func TestRepositorySchemaTargetPackaging(t *testing.T) {
 		exit   string
 		valid  bool
 	}{
-		{name: "valid", output: "57\n", exit: "0", valid: true},
-		{name: "go failure", output: "57\n", exit: "1"},
+		{name: "matching", output: "60\n", exit: "0", valid: true},
+		{name: "mismatch", output: "62\n", exit: "0"},
+		{name: "go failure", output: "60\n", exit: "1"},
 		{name: "empty", exit: "0"},
 		{name: "invalid", output: "not a target\n", exit: "0"},
 		{name: "zero", output: "0\n", exit: "0"},
@@ -270,7 +271,7 @@ func TestRepositorySchemaTargetPackaging(t *testing.T) {
 					t.Fatal(mkdirErr)
 				}
 			}
-			compatibility := []byte(`{"source_schema_min":0,"source_schema_max":57}`)
+			compatibility := []byte(`{"schema_target":"60","upgrade_from":">=0.0.11 <0.0.12","maintenance":"active"}`)
 			if writeErr := os.WriteFile(filepath.Join(root, "release", "compatibility.json"), compatibility, 0o600); writeErr != nil {
 				t.Fatal(writeErr)
 			}
@@ -289,6 +290,9 @@ func TestRepositorySchemaTargetPackaging(t *testing.T) {
 			if !test.valid {
 				if runErr == nil {
 					t.Fatalf("invalid target succeeded: %s", output)
+				}
+				if test.name == "mismatch" && !strings.Contains(string(output), `update release/compatibility.json: schema_target is "60", bundled Goose target is 62`) {
+					t.Fatalf("missing mismatch diagnostic: %s", output)
 				}
 				for _, name := range []string{"schema-target.txt", "compatibility.json"} {
 					if _, statErr := os.Stat(filepath.Join(root, "release", "dist", name)); !os.IsNotExist(statErr) {

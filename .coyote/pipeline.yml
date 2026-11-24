@@ -183,6 +183,12 @@ steps:
       case "$target" in
         ''|0*|*[!0-9]*) echo "Invalid schema target: $target" >&2; exit 1 ;;
       esac
+      perl -MJSON::PP -0777 -e '
+        my ($target) = @ARGV;
+        my $declared = encode_json(decode_json(scalar <STDIN>)->{schema_target});
+        die "update release/compatibility.json: schema_target is $declared, bundled Goose target is $target\n"
+          unless $declared eq encode_json($target);
+      ' "$target" < release/compatibility.json
       mkdir -p release/dist
       printf '%s\n' "$target" > release/dist/schema-target.txt
       cp release/compatibility.json release/dist/compatibility.json
