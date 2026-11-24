@@ -1,5 +1,5 @@
 {
-  "schema_target": "60",
+  "schema_target": "62",
   "upgrade_from": ">=0.0.11 <0.0.12",
   "maintenance": "active"
 }
