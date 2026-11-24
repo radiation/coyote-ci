@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { ThemeProvider } from "../theme";
@@ -59,7 +59,7 @@ function renderRouter(initialEntries: string[]) {
     initialEntries,
   });
 
-  return render(
+  render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthProvider>
@@ -68,6 +68,7 @@ function renderRouter(initialEntries: string[]) {
       </ThemeProvider>
     </QueryClientProvider>,
   );
+  return router;
 }
 
 describe("router dashboard home", () => {
@@ -129,11 +130,31 @@ describe("router dashboard home", () => {
     renderRouter(["/"]);
 
     expect(
-      await screen.findByRole("heading", { name: "Dashboard" }),
+      await screen.findByRole("heading", { name: "Overview" }),
     ).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Dashboard" })).toHaveClass(
+    expect(screen.getByRole("link", { name: "Overview" })).toHaveClass(
       "is-active",
     );
+  });
+
+  it("restores the filtered Activity view and fragment on Back", async () => {
+    const router = renderRouter(["/builds?project_id=p1#recent"]);
+    fireEvent.click(await screen.findByRole("link", { name: "Overview" }));
+    expect(
+      await screen.findByRole("heading", { name: "Overview" }),
+    ).toBeTruthy();
+    await act(() => router.navigate(-1));
+    expect(
+      await screen.findByRole("navigation", { name: "Activity views" }),
+    ).toBeTruthy();
+    expect(router.state.location).toMatchObject({
+      pathname: "/builds",
+      search: "?project_id=p1",
+      hash: "#recent",
+    });
+    expect(
+      screen.getByRole("link", { name: "Builds", current: "page" }),
+    ).toBeTruthy();
   });
 
   it("renders the projects route inside the shared shell", async () => {
@@ -174,12 +195,20 @@ describe("router dashboard home", () => {
     );
   });
 
-  it("renders the my api tokens settings route", async () => {
-    renderRouter(["/settings/my-api-tokens"]);
+  it.each([
+    "/settings/tokens",
+    "/settings/api-tokens",
+    "/settings/my-api-tokens",
+  ])("resolves %s in Settings", async (path) => {
+    const router = renderRouter([path]);
 
     expect(
       await screen.findByRole("heading", { name: "My API Tokens" }),
     ).toBeTruthy();
     expect(screen.queryByRole("link", { name: "My API Tokens" })).toBeNull();
+    expect(router.state.location.pathname).toBe("/settings/my-api-tokens");
+    expect(
+      screen.getByRole("link", { name: "Settings", current: "location" }),
+    ).toBeTruthy();
   });
 });

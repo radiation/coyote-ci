@@ -1,20 +1,32 @@
 import { Suspense } from "react";
 import { Navigate, NavLink, Outlet, useLocation } from "react-router-dom";
-import { AppShell, type AppShellNavigationItem } from "./AppShell";
+import { AppShell, type AppShellNavigationSection } from "./AppShell";
 import { useAuth } from "../auth-context";
 import { useTheme } from "../theme-context";
 
-const primaryNavigation: AppShellNavigationItem[] = [
-  { to: "/dashboard", label: "Dashboard" },
-  { to: "/projects", label: "Projects" },
-  { to: "/jobs", label: "Jobs" },
-  { to: "/builds", label: "Builds" },
-  { to: "/queue", label: "Queue" },
-  { to: "/workers", label: "Workers" },
+const primaryNavigation: AppShellNavigationSection[] = [
+  { to: "/dashboard", label: "Overview" },
+  {
+    to: "/projects",
+    label: "Projects",
+    children: [
+      { to: "/projects", label: "Project directory" },
+      { to: "/jobs", label: "All jobs" },
+    ],
+  },
+  {
+    to: "/builds",
+    label: "Activity",
+    children: [
+      { to: "/builds", label: "Builds" },
+      { to: "/queue", label: "Queue" },
+      { to: "/workers", label: "Workers" },
+    ],
+  },
   { to: "/artifacts", label: "Artifacts" },
 ];
 
-const publicNavigation: AppShellNavigationItem[] = [
+const publicNavigation: AppShellNavigationSection[] = [
   { to: "/projects", label: "Projects" },
 ];
 
@@ -44,7 +56,7 @@ export function Layout() {
   const showUsersLink = authMode === "disabled" || isGlobalAdmin;
   const showTokensLink = authMode !== "disabled";
   const displayName = currentUser?.display_name || currentUser?.email;
-  const settingsNavigation: AppShellNavigationItem[] = [
+  const settingsNavigation = [
     { to: "/settings/profile", label: "Profile" },
     { to: "/settings/my-notifications", label: "My notifications" },
     { to: "/settings/credentials", label: "Credentials" },
@@ -133,9 +145,17 @@ export function Layout() {
           (isAnonymous && isPublicRoute(location.pathname))) && (
           <AppShell
             primaryNavigation={
-              showNavigation ? primaryNavigation : publicNavigation
+              showNavigation
+                ? [
+                    ...primaryNavigation,
+                    {
+                      to: "/settings/profile",
+                      label: "Settings",
+                      children: settingsNavigation,
+                    },
+                  ]
+                : publicNavigation
             }
-            settingsNavigation={showNavigation ? settingsNavigation : []}
           >
             <Suspense fallback={<RouteLoadingPanel />}>
               <Outlet />
