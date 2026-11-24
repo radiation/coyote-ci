@@ -112,15 +112,15 @@ migrator. Never bypass hooks with `--no-hooks`.
 
 Goose state is authoritative. A missing application-version annotation does not
 mean an empty database. Fresh databases and already-current retries can proceed;
-pending changes on an existing database need either a verified source version in
-`compatibility.upgrade_from` with `migration.onlineUpgradeApproved: true`, or
+pending changes on an existing database need either known source and target
+versions with `migration.onlineUpgradeApproved: true`, or
 `migration.maintenanceAcknowledged: true` after quiescing consumers. If needed,
 assert a verified legacy source via `migration.sourceVersion`; do not guess it.
 Partially completed first installs also require explicit maintenance acknowledgment
 when they leave applied migrations but no application history.
 
-Online approval requires release-specific backward-compatibility testing, not just
-a version range. Historical migrations are not all online-compatible. For breaking
+Online approval requires release-specific backward-compatibility testing. A
+forward version change does not certify the SQL. For breaking
 changes, drain work and stop every database consumer before invoking Helm; zero
 replicas in the same upgrade take effect only after its pre-upgrade hook. V3
 `compatibility.maintenance` describes support lifecycle, not downtime permission.

@@ -36,7 +36,7 @@ func coyoteArtifactFixture(t *testing.T, input CoyoteReleaseInput) map[string]Co
 	}
 	write("cli-checksums", []byte(checksums.String()))
 	write("cli-metadata", []byte(fmt.Sprintf(`{"version":%q,"commit":%q}`, input.ApplicationVersion, input.SourceCommit)))
-	write("compatibility", []byte(`{"schema_target":"57","upgrade_from":">=0.0.11 <0.0.41","maintenance":"active"}`))
+	write("compatibility", []byte(`{"schema_target":"57","maintenance":"active"}`))
 	write("schema-target", []byte("57\n"))
 	var buffer bytes.Buffer
 	compressed := gzip.NewWriter(&buffer)

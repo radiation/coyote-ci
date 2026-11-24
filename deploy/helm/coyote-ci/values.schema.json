@@ -88,7 +88,7 @@
     },
     "server": {"type": "object", "properties": {"extraEnvSecrets": {"$ref": "#/definitions/envSecrets"}, "replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}}},
     "frontend": {"type": "object", "properties": {"replicas": {"type": "integer", "minimum": 0}, "replicasManagedExternally": {"type": "boolean"}}},
-    "compatibility": {"type": "object", "required": ["schema_target", "upgrade_from"], "properties": {"schema_target": {"type": "string", "pattern": "^[1-9][0-9]*$"}, "upgrade_from": {"type": "string"}}},
+    "compatibility": {"type": "object", "required": ["schema_target"], "properties": {"schema_target": {"type": "string", "pattern": "^[1-9][0-9]*$"}, "upgrade_from": {"type": "string"}}},
     "migration": {
       "type": "object",
       "additionalProperties": false,

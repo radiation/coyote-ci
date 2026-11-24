@@ -1,7 +1,6 @@
 namespace: coyote-ci
 compatibility:
   schema_target: "57"
-  upgrade_from: ""
 gke:
   enabled: true
   secretManagerCSI: {enabled: true}

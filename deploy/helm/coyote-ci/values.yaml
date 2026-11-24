@@ -25,7 +25,6 @@ release:
   manifestDigest: ""
 compatibility:
   schema_target: ""
-  upgrade_from: ""
 
 serviceAccounts:
   server:

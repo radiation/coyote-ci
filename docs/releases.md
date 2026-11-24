@@ -218,19 +218,21 @@ bytes, and `build_id`. The manifest's `compatibility.schema_target` is the
 nonzero decimal Goose migration version included in the digest-pinned `migrate`
 component image (for example `"57"` for migration file `00057_*`); it declares
 the target only, while Goose remains responsible for tracking and applying
-migrations. `compatibility.upgrade_from` is a nonempty, ascending, half-open
-semantic-version interval written exactly as `>=MIN_VERSION <MAX_VERSION`, with
-one ASCII space between comparators; compatibility is declarative in V3.
+migrations. New releases omit `compatibility.upgrade_from`. The updated CLI
+still validates a legacy range and passes it to older digest-pinned charts.
+Older CLIs require the range; update the publisher and resolver before using
+a release without it. Do not rewrite an existing manifest or replace its chart.
 `maintenance` is one of `active`, `maintenance`, or `end-of-life`. It is not a
 downtime authorization flag.
 
-V3 Helm image overlays carry `compatibility.schema_target` and `upgrade_from`
-without changing manifest bytes or the V3 contract. The automatic migration hook
+V3 Helm image overlays carry `compatibility.schema_target`. The updated chart
+accepts forward upgrades without a source-version range; downgrades remain
+unsupported. This is not approval to apply pending migrations. The migration hook
 checks the declared target against the bundled migration files before database
 writes and checks Goose history under an advisory lock. Publishers must verify
 the target against the exact image digest (`docker run --rm "$COYOTE_MIGRATE_IMAGE"
 target`); runtime verification does not replace publication validation or SQL
-immutability. A supported source range alone does not certify online-safe DDL.
+immutability. A forward version number does not certify online-safe DDL.
 Online and maintenance approvals, missing source history, timeout/retry behavior,
 and the application-only rollback boundary are documented in the
 [migration runbook](../deploy/docs/database-migrations.md).
@@ -252,7 +254,7 @@ and the application-only rollback boundary are documented in the
   },
   "helm": {"name": "coyote-ci", "repository": "oci://registry.example/charts", "version": "3.0.0", "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
   "cli_artifacts": {"linux-amd64": {"url": "https://downloads.example/coyote_3.0.0_linux_amd64.tar.gz", "filename": "coyote_3.0.0_linux_amd64.tar.gz", "size": 12345, "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "build_id": "cli-build-300"}},
-  "compatibility": {"schema_target": "57", "upgrade_from": ">=2.5.0 <4.0.0", "maintenance": "active"}
+  "compatibility": {"schema_target": "57", "maintenance": "active"}
 }
 ```
 
