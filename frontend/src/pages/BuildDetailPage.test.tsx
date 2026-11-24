@@ -761,6 +761,22 @@ describe("BuildDetailPage", () => {
     expect(mockedGetStepLogs).toHaveBeenCalledTimes(2);
   });
 
+  it("labels both version inputs when the same artifact is edited in both views", async () => {
+    mockedGetBuildArtifacts.mockResolvedValueOnce([
+      makeArtifact({ id: "scoped", step_id: "step-2" }),
+    ]);
+    renderPage();
+    fireEvent.click(await screen.findByRole("tab", { name: "Outputs" }));
+    const buttons = screen.getAllByRole("button", { name: "Assign version" });
+    expect(buttons).toHaveLength(2);
+    for (const button of buttons) fireEvent.click(button);
+    const inputs = screen.getAllByRole("textbox", {
+      name: "artifact-version-scoped",
+    });
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0].id).not.toBe(inputs[1].id);
+  });
+
   it("keeps the selected stream while navigating tabs and expanding the workspace", async () => {
     mockedGetBuildArtifacts.mockResolvedValueOnce([
       makeArtifact(),
