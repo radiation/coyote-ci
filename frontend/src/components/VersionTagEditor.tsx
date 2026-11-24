@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent } from "react";
 import type { VersionTag } from "../types";
 
 interface VersionTagEditorProps {
@@ -20,6 +20,7 @@ export function VersionTagEditor({
   requiredMessage = "Value is required.",
   onAssign,
 }: VersionTagEditorProps) {
+  const inputId = useId();
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -66,11 +67,11 @@ export function VersionTagEditor({
 
       {onAssign && (
         <form className="version-tag-form" onSubmit={handleSubmit}>
-          <label className="sr-only" htmlFor={inputLabel}>
+          <label className="sr-only" htmlFor={inputId}>
             {inputLabel}
           </label>
           <input
-            id={inputLabel}
+            id={inputId}
             value={value}
             onChange={(event) => setValue(event.target.value)}
             placeholder={placeholder}
