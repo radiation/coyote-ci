@@ -18,9 +18,6 @@
 {{- $source := include "coyote-ci.migrationSource" . -}}
 {{- if and $source .Values.release.version -}}
 {{- if (semver .Values.release.version).LessThan (semver $source) }}{{ fail "application downgrades are unsupported; Helm rollback does not reverse database migrations" }}{{ end -}}
-{{- if and (ne $source .Values.release.version) (not .Values.migration.maintenanceAcknowledged) -}}
-{{- if or (not .Values.compatibility.upgrade_from) (not (semverCompare .Values.compatibility.upgrade_from $source)) }}{{ fail "source release is outside compatibility.upgrade_from; a separately approved maintenance window is required" }}{{ end -}}
-{{- end -}}
 {{- end -}}
 {{- $jobs := lookup "batch/v1" "Job" $namespace "" -}}
 {{- range $jobs.items -}}
@@ -95,9 +92,7 @@
 
 {{- define "coyote-ci.onlineMigrationApproved" -}}
 {{- $source := include "coyote-ci.migrationSource" . -}}
-{{- if and .Values.migration.onlineUpgradeApproved $source .Values.release.version .Values.compatibility.upgrade_from -}}
-{{- semverCompare .Values.compatibility.upgrade_from $source -}}
-{{- else -}}false{{- end -}}
+{{- and .Values.migration.onlineUpgradeApproved (not (empty $source)) (not (empty .Values.release.version)) -}}
 {{- end -}}
 
 {{- define "coyote-ci.requireSecret" -}}

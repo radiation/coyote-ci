@@ -236,7 +236,14 @@ render(root, overrides: {"compatibility" => {"schema_target" => ""}}, failure: "
 render(root, overrides: {"migration" => {"render" => false}}, failure: "render")
 render(root, overrides: {"migration" => {"activeDeadlineSeconds" => 30}}, failure: "activeDeadlineSeconds")
 render(root, overrides: {"release" => {"version" => "1.0.0"}, "migration" => {"sourceVersion" => "2.0.0"}}, failure: "downgrades")
-render(root, overrides: {"release" => {"version" => "2.0.0"}, "compatibility" => {"upgrade_from" => ">=1.5.0 <2.0.0"}, "migration" => {"sourceVersion" => "1.0.0"}}, failure: "outside compatibility")
+[["0.0.16", false, false], ["0.0.16", true, true], ["", true, false]].each do |source, approved, expected|
+  overrides = {"release" => {"version" => "0.0.19"}, "migration" => {"sourceVersion" => source, "onlineUpgradeApproved" => approved}}
+  overrides["compatibility"] = {"upgrade_from" => ">=0.0.11 <0.0.12"} unless approved
+  documents = render(root, overrides: overrides)
+  job = documents.find { |doc| doc["kind"] == "Job" }
+  env = job.fetch("spec").fetch("template").fetch("spec").fetch("containers").first.fetch("env")
+  abort "unexpected online migration approval" unless env.find { |entry| entry["name"] == "MIGRATION_ONLINE_APPROVED" }.fetch("value") == expected.to_s
+end
 deployment = resource(control, "Deployment", "coyote-server")
 pod = deployment.dig("spec", "template", "spec")
 abort "filesystem server requires Recreate" unless deployment.dig("spec", "strategy", "type") == "Recreate"

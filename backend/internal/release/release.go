@@ -94,10 +94,24 @@ type CLIArtifact struct {
 	BuildID  string `json:"build_id"`
 }
 
+type legacyUpgradeRange string
+
+func (legacy *legacyUpgradeRange) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	if value == "" {
+		return errors.New("compatibility upgrade_from must be omitted or a nonempty range")
+	}
+	*legacy = legacyUpgradeRange(value)
+	return nil
+}
+
 type Compatibility struct {
-	SchemaTarget string `json:"schema_target"`
-	UpgradeFrom  string `json:"upgrade_from"`
-	Maintenance  string `json:"maintenance"`
+	SchemaTarget string             `json:"schema_target"`
+	UpgradeFrom  legacyUpgradeRange `json:"upgrade_from,omitempty"`
+	Maintenance  string             `json:"maintenance"`
 }
 
 type Deployment struct {
@@ -593,12 +607,14 @@ func validateCompatibility(compatibility *Compatibility) error {
 	if !gooseVersionPattern.MatchString(compatibility.SchemaTarget) {
 		return errors.New("compatibility schema_target must be a nonzero decimal Goose migration version")
 	}
-	if !upgradeRangePattern.MatchString(compatibility.UpgradeFrom) {
-		return errors.New("compatibility upgrade_from must use the form \">=MIN_VERSION <MAX_VERSION\"")
-	}
-	rangeParts := strings.Split(strings.TrimPrefix(compatibility.UpgradeFrom, ">="), " <")
-	if semver.Compare("v"+rangeParts[0], "v"+rangeParts[1]) >= 0 {
-		return errors.New("compatibility upgrade_from must be a nonempty ascending version interval")
+	if legacy := string(compatibility.UpgradeFrom); legacy != "" {
+		if !upgradeRangePattern.MatchString(legacy) {
+			return errors.New("compatibility upgrade_from must use the form \">=MIN_VERSION <MAX_VERSION\"")
+		}
+		rangeParts := strings.Split(strings.TrimPrefix(legacy, ">="), " <")
+		if semver.Compare("v"+rangeParts[0], "v"+rangeParts[1]) >= 0 {
+			return errors.New("compatibility upgrade_from must be a nonempty ascending version interval")
+		}
 	}
 	switch compatibility.Maintenance {
 	case "active", "maintenance", "end-of-life":
@@ -1002,8 +1018,12 @@ func WriteValuesOverlay(w io.Writer, resolved Resolved) error {
 		arguments = append(arguments, images["mcp"])
 	}
 	if resolved.Manifest.SchemaVersion == ManifestSchemaVersionV3 {
-		format += "compatibility:\n  schema_target: %q\n  upgrade_from: %q\n"
-		arguments = append(arguments, resolved.Manifest.Compatibility.SchemaTarget, resolved.Manifest.Compatibility.UpgradeFrom)
+		format += "compatibility:\n  schema_target: %q\n"
+		arguments = append(arguments, resolved.Manifest.Compatibility.SchemaTarget)
+		if legacy := resolved.Manifest.Compatibility.UpgradeFrom; legacy != "" {
+			format += "  upgrade_from: %q\n"
+			arguments = append(arguments, legacy)
+		}
 	}
 	_, err := fmt.Fprintf(w, format, arguments...)
 	return err

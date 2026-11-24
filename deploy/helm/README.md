@@ -248,8 +248,8 @@ a restartable init sidecar and requires Kubernetes 1.29+ with native sidecars
 enabled. The chart does not provision these external prerequisites.
 
 The image overlay must supply `compatibility.schema_target`, matching the exact
-migration image. V3 release resolution supplies it and `compatibility.upgrade_from`.
-For other overlays, supply these explicitly; the example target `57` is illustrative,
+migration image. V3 release resolution supplies it; no source range is required.
+For other overlays, supply the target explicitly; the example `57` is illustrative,
 not a default for future images. Keep application replicas at their desired counts.
 
 ```sh
@@ -309,8 +309,8 @@ For pending changes on an existing database, choose one of these explicitly:
 
 - **Online:** release notes/tests must certify backward compatibility with all
   running consumers. Set `migration.onlineUpgradeApproved: true`. A known source
-  version within `compatibility.upgrade_from` and a target `release.version` are
-  required. A version range alone is not evidence that DDL is online-safe.
+  version and a target `release.version` are required. A forward upgrade alone
+  is not evidence that DDL is online-safe.
 - **Maintenance:** stop new work, drain active builds, back up, and quiesce all
   database consumers out of band before setting
   `migration.maintenanceAcknowledged: true`. A pre-upgrade hook runs before

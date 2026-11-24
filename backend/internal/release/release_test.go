@@ -536,9 +536,38 @@ func TestV3ManifestResolutionWithoutPredecessorOrGitHistory(t *testing.T) {
 	if !strings.Contains(output.String(), "mcp: "+manifest.Components["mcp"].Image) || !strings.Contains(output.String(), "manifestDigest: "+digest) {
 		t.Fatalf("unexpected v3 overlay:\n%s", output.String())
 	}
-	for _, field := range []string{"schema_target: \"" + manifest.Compatibility.SchemaTarget + "\"", "upgrade_from: \"" + manifest.Compatibility.UpgradeFrom + "\""} {
+	for _, field := range []string{"schema_target: \"" + manifest.Compatibility.SchemaTarget + "\"", "upgrade_from: \"" + string(manifest.Compatibility.UpgradeFrom) + "\""} {
 		if !strings.Contains(output.String(), field) {
 			t.Fatalf("missing compatibility field %s in overlay:\n%s", field, output.String())
+		}
+	}
+}
+
+func TestOptionalUpgradeRange(t *testing.T) {
+	manifest := validV3Manifest()
+	manifest.Compatibility.UpgradeFrom = ""
+	if err := manifest.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil || bytes.Contains(data, []byte("upgrade_from")) {
+		t.Fatalf("legacy range not omitted: %s, %v", data, err)
+	}
+	parsed, parseErr := ParseManifest(data)
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	var overlay bytes.Buffer
+	if overlayErr := WriteValuesOverlay(&overlay, Resolved{Manifest: parsed}); overlayErr != nil {
+		t.Fatal(overlayErr)
+	}
+	if strings.Contains(overlay.String(), "upgrade_from") || !strings.Contains(overlay.String(), `schema_target: "57"`) {
+		t.Fatalf("unexpected compatibility overlay: %s", overlay.String())
+	}
+	for _, invalid := range []string{`null`, `""`, `7`} {
+		var metadata Compatibility
+		if decodeErr := json.Unmarshal([]byte(`{"upgrade_from":`+invalid+`}`), &metadata); decodeErr == nil {
+			t.Fatalf("accepted invalid upgrade_from: %s", invalid)
 		}
 	}
 }
