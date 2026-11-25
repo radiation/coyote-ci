@@ -1,11 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL } from "../utils/build";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { ProjectDetailPage } from "./ProjectDetailPage";
 import { AuthContext } from "../auth-context";
 import {
   APIError,
+  deleteProject,
+  listBuildsByJob,
+  runJob,
   deleteProjectMember,
   getProject,
   getPublicProject,
@@ -23,6 +33,9 @@ vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
   return {
     ...actual,
+    deleteProject: vi.fn(),
+    listBuildsByJob: vi.fn(),
+    runJob: vi.fn(),
     deleteProjectMember: vi.fn(),
     getProject: vi.fn(),
     getPublicProject: vi.fn(),
@@ -38,6 +51,18 @@ vi.mock("../api", async () => {
 });
 
 const mockedGetPublicProject = vi.mocked(getPublicProject);
+
+function HistoryControls() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate(-1)}>Back</button>
+      <button onClick={() => navigate(1)}>Forward</button>
+    </>
+  );
+}
+
+const settingsURL = "/projects/project-1?view=settings";
 
 function renderPage(
   authStatus: "authenticated" | "unauthenticated" = "authenticated",
@@ -66,7 +91,10 @@ function renderPage(
         }}
       >
         <MemoryRouter initialEntries={[initialEntry]}>
+          <HistoryControls />
           <Routes>
+            <Route path="/projects" element={<p>Project directory</p>} />
+            <Route path="/builds/:id" element={<p>Build investigation</p>} />
             <Route path="/projects/:id" element={<ProjectDetailPage />} />
           </Routes>
         </MemoryRouter>
@@ -184,19 +212,22 @@ describe("ProjectDetailPage", () => {
     mockedListPublicBuilds.mockResolvedValue([]);
   });
 
-  it("renders project details, members, and jobs", async () => {
+  it("renders operational overview without administrative requests", async () => {
     renderPage();
 
     await waitFor(() => {
       expect(screen.getByText("Platform")).toBeTruthy();
-      expect(screen.getByText("Project Summary")).toBeTruthy();
-      expect(screen.getByText("Project Actions")).toBeTruthy();
-      expect(screen.getByText("Jobs in This Project")).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+      expect(screen.getByText("Recent results")).toBeTruthy();
       expect(screen.getByText("Core platform pipelines")).toBeTruthy();
-      expect(screen.getByText("maintainer@example.com")).toBeTruthy();
+      expect(mockedListProjectMembers).not.toHaveBeenCalled();
+      expect(mockedListUsers).not.toHaveBeenCalled();
       expect(screen.getByText("backend-ci")).toBeTruthy();
       expect(
-        screen.getByText("https://github.com/example/backend.git"),
+        screen.getByRole("button", { name: "Run Now: backend-ci" }),
       ).toBeTruthy();
       expect(
         screen
@@ -206,27 +237,19 @@ describe("ProjectDetailPage", () => {
               link.getAttribute("href") === "/jobs/new?project_id=project-1",
           ),
       ).toBe(true);
-      expect(screen.getByRole("link", { name: "View Builds" })).toHaveAttribute(
-        "href",
-        "/builds?project_id=project-1",
-      );
       expect(
         screen.getByRole("link", { name: "Browse Artifacts" }),
       ).toHaveAttribute("href", "/artifacts?project_id=project-1");
       expect(
-        screen.getByRole("link", { name: "Open Release View" }),
+        screen.getByRole("link", { name: "Logical artifact repository" }),
       ).toHaveAttribute("href", "/artifacts/logical?project_id=project-1");
-      expect(screen.getByRole("link", { name: "Open Job" })).toHaveAttribute(
+      expect(screen.getByRole("link", { name: "backend-ci" })).toHaveAttribute(
         "href",
         "/jobs/job-1",
       );
       expect(screen.getByRole("link", { name: "Builds" })).toHaveAttribute(
         "href",
-        "/builds?project_id=project-1",
-      );
-      expect(screen.getByRole("link", { name: "Artifacts" })).toHaveAttribute(
-        "href",
-        "/artifacts?project_id=project-1&job_id=job-1",
+        "/projects/project-1?view=builds",
       );
       expect(screen.getByRole("link", { name: "release" })).toHaveAttribute(
         "href",
@@ -286,11 +309,18 @@ describe("ProjectDetailPage", () => {
       description: "Core platform pipelines",
     });
 
-    renderPage("authenticated", "/projects/platform");
+    renderPage("authenticated", "/projects/platform?from=ci&view=jobs#resume");
 
     await waitFor(() => {
       expect(mockedGetProject).toHaveBeenCalledWith("project-1");
-      expect(screen.getByText("Project Summary")).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Jobs" })).toHaveAttribute(
+        "href",
+        "/projects/project-1?from=ci&view=jobs#resume",
+      );
+      expect(screen.getByRole("link", { name: "Jobs" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
     });
     expect(mockedGetProject).toHaveBeenCalledWith("platform");
     expect(mockedGetPublicProject).toHaveBeenCalledWith("platform");
@@ -389,14 +419,14 @@ describe("ProjectDetailPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText("—")).toBeTruthy();
-      expect(screen.getByText("No project members yet.")).toBeTruthy();
       expect(screen.getByText("No jobs in this project yet.")).toBeTruthy();
     });
+    fireEvent.click(screen.getByRole("link", { name: "Settings" }));
+    expect(await screen.findByText("No project members yet.")).toBeTruthy();
   });
 
   it("requires user id before adding a project member", async () => {
-    renderPage();
+    renderPage("authenticated", settingsURL);
 
     await waitFor(() => {
       expect(screen.getByText("Platform")).toBeTruthy();
@@ -423,10 +453,9 @@ describe("ProjectDetailPage", () => {
 
     renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByText("Loading members…")).toBeTruthy();
-      expect(screen.getByText("Loading jobs…")).toBeTruthy();
-    });
+    expect(await screen.findByText("Loading jobs…")).toBeTruthy();
+    fireEvent.click(screen.getByRole("link", { name: "Settings" }));
+    expect(await screen.findByText("Loading members…")).toBeTruthy();
   });
 
   it("shows jobs error state when jobs query fails", async () => {
@@ -452,7 +481,7 @@ describe("ProjectDetailPage", () => {
       },
     ]);
 
-    renderPage();
+    renderPage("authenticated", settingsURL);
 
     await waitFor(() => {
       expect(screen.getByText("user-raw")).toBeTruthy();
@@ -461,14 +490,25 @@ describe("ProjectDetailPage", () => {
     });
   });
 
-  it("renders the responsive two-column activity rail layout", async () => {
-    const { container } = renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText("Platform")).toBeTruthy();
-    });
-
-    expect(container.querySelector(".detail-page-with-rail")).toBeTruthy();
+  it("restores views through history while preserving unrelated parameters and hash", async () => {
+    renderPage("authenticated", "/projects/project-1?source=list#anchor");
+    fireEvent.click(await screen.findByRole("link", { name: "Jobs" }));
+    fireEvent.click(screen.getByRole("link", { name: "Builds" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByRole("link", { name: "Jobs" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+    expect(screen.getByRole("link", { name: "Builds" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute(
+      "href",
+      "/projects/project-1?source=list#anchor",
+    );
+    expect(mockedListUsers).not.toHaveBeenCalled();
   });
 
   it("shows job name links in project-scoped activity rows", async () => {
@@ -486,7 +526,7 @@ describe("ProjectDetailPage", () => {
   });
 
   it("adds, updates, and removes project members", async () => {
-    renderPage();
+    renderPage("authenticated", settingsURL);
 
     await waitFor(() => {
       expect(screen.getByText("maintainer@example.com")).toBeTruthy();
@@ -536,7 +576,7 @@ describe("ProjectDetailPage", () => {
       ),
     );
 
-    renderPage();
+    renderPage("authenticated", settingsURL);
 
     await waitFor(() => {
       expect(
@@ -550,7 +590,7 @@ describe("ProjectDetailPage", () => {
       new Error("backend unavailable"),
     );
 
-    renderPage();
+    renderPage("authenticated", settingsURL);
 
     await waitFor(() => {
       expect(
@@ -570,7 +610,7 @@ describe("ProjectDetailPage", () => {
       new APIError(403, "global admin or project owner is required"),
     );
 
-    renderPage();
+    renderPage("authenticated", settingsURL);
 
     await waitFor(() => {
       expect(screen.getByText("maintainer@example.com")).toBeTruthy();
@@ -610,6 +650,258 @@ describe("ProjectDetailPage", () => {
         ),
       ).toBeTruthy();
     });
+  });
+
+  it.each(["/projects/project-1", "/projects/project-1?view=jobs"])(
+    "refreshes idle and active job badges on %s",
+    async (url) => {
+      const [job] = await mockedListJobsByProject("project-1");
+      const latest = {
+        id: "external",
+        build_number: 8,
+        created_at: job.created_at,
+      };
+      mockedListJobsByProject
+        .mockClear()
+        .mockResolvedValueOnce([job])
+        .mockResolvedValueOnce([
+          { ...job, latest_build: { ...latest, status: "running" } },
+        ])
+        .mockResolvedValue([
+          { ...job, latest_build: { ...latest, status: "success" } },
+        ]);
+      vi.useFakeTimers();
+      const advance = (ms: number) =>
+        act(async () => {
+          await vi.advanceTimersByTimeAsync(ms);
+        });
+      try {
+        renderPage("authenticated", url);
+        await advance(5);
+        expect(screen.getByText("Not run yet")).toBeTruthy();
+        await advance(FAST_POLL_INTERVAL);
+        expect(mockedListJobsByProject).toHaveBeenCalledTimes(1);
+        await advance(SLOW_POLL_INTERVAL - FAST_POLL_INTERVAL);
+        expect(
+          screen.getByRole("link", {
+            name: "Latest build for backend-ci: running",
+          }),
+        ).toBeTruthy();
+        await advance(FAST_POLL_INTERVAL);
+        expect(
+          screen.getByRole("link", {
+            name: "Latest build for backend-ci: success",
+          }),
+        ).toBeTruthy();
+        await advance(FAST_POLL_INTERVAL);
+        expect(mockedListJobsByProject).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("fills the four overview slots from enabled jobs only", async () => {
+    const [base] = await mockedListJobsByProject("project-1");
+    mockedListJobsByProject.mockResolvedValue(
+      Array.from({ length: 9 }, (_, index) => ({
+        ...base,
+        id: `job-${index}`,
+        name: `Pipeline ${index}`,
+        enabled: index >= 4,
+      })),
+    );
+    renderPage();
+    const buttons = await screen.findAllByRole("button", { name: /^Run Now:/ });
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Run Now: Pipeline 4",
+      "Run Now: Pipeline 5",
+      "Run Now: Pipeline 6",
+      "Run Now: Pipeline 7",
+    ]);
+    expect(screen.queryByRole("link", { name: "Pipeline 0" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Pipeline 8" })).toBeNull();
+  });
+
+  it("shows a no-runnable-jobs overview and keeps disabled jobs discoverable in Jobs", async () => {
+    const [base] = await mockedListJobsByProject("project-1");
+    mockedListJobsByProject.mockResolvedValue([{ ...base, enabled: false }]);
+    renderPage();
+    expect(
+      await screen.findByText("No runnable jobs in this project."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("link", { name: "Jobs" }));
+    expect(await screen.findByText("Disabled")).toBeTruthy();
+    expect(screen.getByRole("link", { name: base.name })).toHaveAttribute(
+      "href",
+      `/jobs/${base.id}`,
+    );
+    expect(screen.queryByRole("button", { name: /^Run Now:/ })).toBeNull();
+  });
+
+  it("filters project jobs and uses batched status and job-specific run actions", async () => {
+    const [base] = await mockedListJobsByProject("project-1");
+    const [build] = await mockedListBuilds();
+    mockedListBuilds.mockClear();
+    mockedListJobsByProject.mockClear().mockResolvedValue([
+      {
+        ...base,
+        latest_build: {
+          id: "latest",
+          build_number: 7,
+          created_at: base.created_at,
+          status: "failed",
+        },
+      },
+      { ...base, id: "other-job", name: "deploy" },
+      { ...base, project_id: "other", name: "foreign job" },
+    ]);
+    vi.mocked(runJob)
+      .mockRejectedValueOnce(new APIError(403, "Permission denied"))
+      .mockResolvedValueOnce(build);
+    renderPage("authenticated", "/projects/project-1?view=jobs");
+    expect(
+      await screen.findByRole("link", {
+        name: "Latest build for backend-ci: failed",
+      }),
+    ).toHaveAttribute("href", "/builds/latest");
+    expect(screen.getByRole("link", { name: "deploy" })).toHaveAttribute(
+      "href",
+      "/jobs/other-job",
+    );
+    expect(screen.queryByText("foreign job")).toBeNull();
+    const search = screen.getByRole("searchbox", {
+      name: "Filter by job name",
+    });
+    fireEvent.change(search, { target: { value: "absent" } });
+    expect(screen.getByText("No jobs match your filter.")).toBeTruthy();
+    fireEvent.change(search, { target: { value: "BACK" } });
+    expect(screen.queryByText("deploy")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Run Now: backend-ci" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Permission denied",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Run Now: backend-ci" }),
+    );
+    expect(await screen.findByText("Build investigation")).toBeTruthy();
+    expect(vi.mocked(runJob).mock.calls.map(([id]) => id)).toEqual([
+      "job-1",
+      "job-1",
+    ]);
+    expect(mockedListJobsByProject.mock.calls).toEqual([["project-1"]]);
+    expect(mockedListBuilds).not.toHaveBeenCalled();
+    expect(listBuildsByJob).not.toHaveBeenCalled();
+    expect(mockedListProjectMembers).not.toHaveBeenCalled();
+  });
+
+  it("polls quickly for active builds on older pages and discovers new builds while idle", async () => {
+    const [base] = await mockedListBuilds();
+    const first = Array.from({ length: 20 }, (_, index) => ({
+      ...base,
+      id: `build-${index}`,
+      build_number: index + 1,
+    }));
+    const older = { ...base, build_number: 21 };
+    mockedListBuilds
+      .mockClear()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce([{ ...older, status: "running" }])
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce([{ ...older, status: "success" }])
+      .mockResolvedValueOnce([
+        { ...base, id: "new", build_number: 22 },
+        ...first.slice(0, -1),
+      ])
+      .mockResolvedValueOnce([first[19], older]);
+    vi.useFakeTimers();
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    try {
+      renderPage("authenticated", "/projects/project-1?view=builds");
+      await advance(5);
+      fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+      await advance(5);
+      expect(screen.getByText("Running")).toBeTruthy();
+      await advance(FAST_POLL_INTERVAL);
+      expect(screen.getByText("Success")).toBeTruthy();
+      await advance(FAST_POLL_INTERVAL);
+      expect(mockedListBuilds).toHaveBeenCalledTimes(4);
+      await advance(SLOW_POLL_INTERVAL - FAST_POLL_INTERVAL);
+      expect(screen.getByRole("link", { name: "Build #22" })).toHaveAttribute(
+        "href",
+        "/builds/new",
+      );
+      expect(
+        mockedListBuilds.mock.calls.map(([params]) => params?.offset),
+      ).toEqual([0, 20, 0, 20, 0, 20]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the first build page across errors and de-duplicates overlapping pages", async () => {
+    const [base] = await mockedListBuilds();
+    const page = Array.from({ length: 20 }, (_, index) => ({
+      ...base,
+      id: `b-${index}`,
+      build_number: index + 1,
+    }));
+    mockedListBuilds
+      .mockClear()
+      .mockResolvedValueOnce(page)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce([
+        page[19],
+        { ...base, build_number: 21, job_id: "job-1", job_name: null },
+        { ...base, id: "foreign", project_id: "other", build_number: 22 },
+      ]);
+    renderPage("authenticated", "/projects/project-1?view=builds");
+    fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("offline");
+    expect(screen.getByRole("link", { name: "Build #1" })).toHaveAttribute(
+      "href",
+      "/builds/b-0",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("link", { name: "Build #21" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "backend-ci" })).toHaveAttribute(
+      "href",
+      "/jobs/job-1",
+    );
+    expect(screen.getAllByRole("link", { name: "Build #20" })).toHaveLength(1);
+    expect(screen.queryByText("Build #22")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    expect(mockedListBuilds.mock.calls).toEqual(
+      [0, 20, 20].map((offset) => [
+        { project_id: "project-1", limit: 20, offset },
+      ]),
+    );
+    expect(mockedListJobsByProject.mock.calls).toEqual([["project-1"]]);
+  });
+
+  it("requires confirmation, reports denied deletion, and returns to the directory on success", async () => {
+    vi.mocked(deleteProject)
+      .mockRejectedValueOnce(new APIError(403, "Forbidden"))
+      .mockResolvedValueOnce(undefined);
+    renderPage("authenticated", settingsURL);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Delete project" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(deleteProject).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm deletion" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "permission to delete",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Confirm deletion" }));
+    expect(await screen.findByText("Project directory")).toBeTruthy();
+    expect(deleteProject).toHaveBeenCalledWith("project-1");
   });
 
   it("keeps the job row compact when slug and description are provided", async () => {

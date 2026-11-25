@@ -633,6 +633,26 @@ fieldset {
   text-underline-offset: 4px;
 }
 
+.project-activity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: 12px;
+  margin-block: 12px;
+}
+
+.project-job-row {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+
+.project-create {
+  margin-block: 12px;
+}
+
+.project-create summary {
+  cursor: pointer;
+}
+
 .page-header-copy {
   min-width: 0;
 }

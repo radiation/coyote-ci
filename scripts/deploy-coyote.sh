@@ -84,6 +84,12 @@ if [[ -n "$BUILD" && "$COYOTE_CHART_REPO" != oci://*/coyote-ci ]]; then
 fi
 [[ "$COYOTE_KUBE_CONTEXT" == "$(kubectl config current-context)" ]] || log "Using explicitly configured context: $COYOTE_KUBE_CONTEXT (current default differs)"
 
+# We keep getting logged out, for some reason.
+gcloud auth print-access-token | helm registry login \
+  -u oauth2accesstoken \
+  --password-stdin \
+  us-central1-docker.pkg.dev
+
 # Avoid leaving configuration (which may include secrets) in a world-readable /tmp file.
 umask 077
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/coyote-deploy.XXXXXXXX")"
