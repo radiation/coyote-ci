@@ -1,3 +1,4 @@
+import { buildsReturnPath } from "../utils/buildHistory";
 import { Fragment, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { BuildArtifactsSection } from "../components/BuildArtifactsSection";
@@ -847,7 +848,9 @@ export function BuildDetailHeaderActions({
   rerunPending,
   onCancel,
   onRerun,
+  historySearch,
 }: {
+  historySearch: URLSearchParams;
   build: Build;
   cancelPending: boolean;
   rerunPending: boolean;
@@ -856,7 +859,10 @@ export function BuildDetailHeaderActions({
 }) {
   return (
     <div className="build-detail-header-actions">
-      <Link className="build-detail-nav-action" to="/builds">
+      <Link
+        className="build-detail-nav-action"
+        to={buildsReturnPath(historySearch)}
+      >
         Back to builds
       </Link>
       <Link

@@ -1106,6 +1106,26 @@ fieldset {
   align-items: start;
 }
 
+.build-history .artifact-filters,
+.build-history nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.build-history :is(select, .activity-list-main) {
+  max-width: 100%;
+}
+
+.build-history .activity-list-main {
+  overflow-wrap: anywhere;
+}
+
+.build-history :focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
 .artifact-copy-status {
   margin: 0;
 }

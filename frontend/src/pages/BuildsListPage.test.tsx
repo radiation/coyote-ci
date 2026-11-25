@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { BuildsListPage } from "./BuildsListPage";
 import { listBuilds, listProjects } from "../api";
 
@@ -10,7 +10,19 @@ vi.mock("../api", () => ({
   listProjects: vi.fn(),
 }));
 
-function renderPage(initialEntries: string[] = ["/"]) {
+function BrowserControls() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  return (
+    <>
+      <output data-testid="url">{location.search}</output>
+      <button onClick={() => navigate(-1)}>Back</button>
+      <button onClick={() => navigate(1)}>Forward</button>
+    </>
+  );
+}
+
+function renderPage(initialEntries: string[] = ["/builds"]) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -21,6 +33,7 @@ function renderPage(initialEntries: string[] = ["/"]) {
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={initialEntries}>
         <BuildsListPage />
+        <BrowserControls />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -48,15 +61,17 @@ describe("BuildsListPage", () => {
     mockedListBuilds.mockResolvedValue([]);
     renderPage();
 
-    await screen.findByText("No builds yet.");
+    await screen.findByText(/No visible builds on this page/);
     expect(screen.getByText(/Builds are created by running a/)).toBeTruthy();
     expect(screen.getByRole("link", { name: "job" })).toBeTruthy();
   });
 
-  it("renders builds table with data", async () => {
+  it("links numbered and legacy builds with returned context and filters without refetching", async () => {
     mockedListBuilds.mockResolvedValue([
       {
         id: "aaaa-bbbb-cccc-dddd",
+        build_number: 123,
+        job_id: "job-1",
         attempt_number: 1,
         priority: 5,
         project_id: "project-1",
@@ -98,15 +113,38 @@ describe("BuildsListPage", () => {
         actor: null,
       },
     ]);
-    renderPage();
-
-    await screen.findByText("aaaa-bbb…");
-    expect(screen.getByText("eeee-fff…")).toBeTruthy();
-    expect(screen.getByText("Canceled")).toBeTruthy();
-    expect(screen.getAllByText("Platform").length).toBe(2);
-    expect(screen.getByText("5")).toBeTruthy();
+    renderPage(["/builds?project_id=project-1&limit=10&offset=20"]);
+    const identity = await screen.findByRole("link", { name: "Build #123" });
+    expect(new URL((identity as HTMLAnchorElement).href).pathname).toBe(
+      "/builds/aaaa-bbbb-cccc-dddd",
+    );
+    expect(screen.getByRole("link", { name: "Build eeee-fff" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "job-1" })).toHaveAttribute(
+      "href",
+      "/jobs/job-1",
+    );
+    expect(
+      screen.getAllByRole("link", { name: "Platform" })[0],
+    ).toHaveAttribute("href", "/projects/project-1");
+    expect(screen.getAllByText("Duration 8s")).toHaveLength(2);
     expect(screen.getByText("webhook")).toBeTruthy();
     expect(screen.getByText("github • main • abc1234 • octocat")).toBeTruthy();
+    const filter = screen.getByLabelText("Status on this page");
+    fireEvent.change(filter, { target: { value: "success" } });
+    expect(screen.queryByRole("link", { name: "Build eeee-fff" })).toBeNull();
+    expect(
+      new URL((identity as HTMLAnchorElement).href).searchParams.get("history"),
+    ).toBe("project_id=project-1&status=success&limit=10&offset=20");
+    fireEvent.change(filter, { target: { value: "failed" } });
+    expect(
+      screen.getByText(/No failed builds among the 2 results on this page/),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: "Older" })).toHaveAttribute(
+      "href",
+      "/builds?project_id=project-1&status=failed&limit=10&offset=30",
+    );
+    expect(mockedListBuilds).toHaveBeenCalledTimes(1);
+    expect(mockedListProjects).toHaveBeenCalledTimes(1);
   });
 
   it("forwards the project filter from the query string", async () => {
@@ -114,8 +152,12 @@ describe("BuildsListPage", () => {
 
     renderPage(["/builds?project_id=project-1"]);
 
-    await screen.findByText("No builds yet.");
-    expect(mockedListBuilds).toHaveBeenCalledWith({ project_id: "project-1" });
+    await screen.findByText(/No visible builds on this page/);
+    expect(mockedListBuilds).toHaveBeenCalledWith({
+      project_id: "project-1",
+      limit: 50,
+      offset: 0,
+    });
     expect(screen.getByLabelText("Project")).toHaveValue("project-1");
   });
 
@@ -123,9 +165,55 @@ describe("BuildsListPage", () => {
     mockedListBuilds.mockResolvedValue([]);
     renderPage();
 
-    await screen.findByText("No builds yet.");
+    await screen.findByText(/No visible builds on this page/);
     expect(screen.queryByLabelText("Template")).toBeNull();
     expect(screen.queryByLabelText("Project ID")).toBeNull();
     expect(screen.queryByRole("button", { name: /Queue|Create/ })).toBeNull();
+  });
+
+  it("navigates empty windows, restores URL state, and resets offset only for project changes", async () => {
+    mockedListBuilds.mockResolvedValue([]);
+    const view = renderPage([
+      "/builds?project_id=project-1&status=failed&limit=12&offset=24",
+    ]);
+    await screen.findByText(/No visible builds on this page/);
+    expect(screen.getByLabelText("Status on this page")).toHaveValue("failed");
+    fireEvent.click(screen.getByRole("link", { name: "Older" }));
+    await waitFor(() =>
+      expect(mockedListBuilds).toHaveBeenLastCalledWith({
+        project_id: "project-1",
+        limit: 12,
+        offset: 36,
+      }),
+    );
+    fireEvent.click(screen.getByRole("link", { name: "Newer" }));
+    expect(screen.getByTestId("url")).toHaveTextContent("offset=24");
+    fireEvent.change(screen.getByLabelText("Project"), {
+      target: { value: "" },
+    });
+    expect(screen.getByTestId("url")).toHaveTextContent(
+      "?status=failed&limit=12&offset=0",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByLabelText("Project")).toHaveValue("project-1");
+    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+    const search = screen.getByTestId("url").textContent;
+    view.unmount();
+    renderPage([`/builds${search}`]);
+    await screen.findByText(/No visible builds on this page/);
+    expect(screen.getByLabelText("Status on this page")).toHaveValue("failed");
+    expect(screen.queryByRole("link", { name: "Newer" })).toBeNull();
+  });
+
+  it("uses defaults for malformed parameters and announces request failure", async () => {
+    mockedListBuilds.mockRejectedValue(new Error("unavailable"));
+    renderPage(["/builds?project_id=//bad&status=invalid&limit=201&offset=-1"]);
+    expect(await screen.findByRole("alert")).toHaveTextContent("unavailable");
+    expect(mockedListBuilds).toHaveBeenCalledWith({
+      project_id: undefined,
+      limit: 50,
+      offset: 0,
+    });
+    expect(screen.getByLabelText("Status on this page")).toHaveValue("");
   });
 });
