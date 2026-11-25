@@ -175,7 +175,15 @@ export function JobCreatePage() {
 
   return (
     <>
-      <Link to="/jobs">← Back to jobs</Link>
+      <Link
+        to={
+          hasRequestedProject
+            ? `/projects/${encodeURIComponent(requestedProjectID)}`
+            : "/jobs"
+        }
+      >
+        {hasRequestedProject ? "← Back to project" : "← Back to jobs"}
+      </Link>
       <h2>Create Job</h2>
       <p className="subtle-text">
         Define a reusable pipeline. Builds are created by running a job.

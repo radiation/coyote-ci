@@ -1,14 +1,11 @@
-import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useNavigate } from "react-router-dom";
-import { listJobs, listProjects, runJob } from "../api";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
+import { listJobs, listProjects } from "../api";
+import { RunJobAction } from "../components/RunJobAction";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatTime } from "../utils/time";
 
 export function JobsListPage() {
-  const navigate = useNavigate();
-  const [runError, setRunError] = useState<string | null>(null);
-
   const {
     data: jobs,
     isLoading,
@@ -28,23 +25,6 @@ export function JobsListPage() {
     projects.map((project) => [project.id, project.name]),
   );
 
-  const runNowMutation = useMutation({
-    mutationFn: (jobID: string) => runJob(jobID),
-    onMutate: () => {
-      setRunError(null);
-    },
-    onSuccess: (build) => {
-      if (build.id) {
-        navigate(`/builds/${build.id}`);
-        return;
-      }
-      setRunError("Run succeeded but no build id was returned.");
-    },
-    onError: (mutationError) => {
-      setRunError(`Failed to run job: ${String(mutationError)}`);
-    },
-  });
-
   return (
     <>
       <div className="page-header-row">
@@ -62,7 +42,6 @@ export function JobsListPage() {
         </Link>
       </div>
 
-      {runError && <p className="error-text">{runError}</p>}
       {isLoading && <p>Loading jobs…</p>}
       {error && (
         <p className="error-text">Failed to load jobs: {String(error)}</p>
@@ -97,8 +76,14 @@ export function JobsListPage() {
           <tbody>
             {jobs.map((job) => (
               <tr key={job.id}>
-                <td>{job.name}</td>
-                <td>{projectNames.get(job.project_id) ?? job.project_id}</td>
+                <td>
+                  <Link to={`/jobs/${job.id}`}>{job.name}</Link>
+                </td>
+                <td>
+                  <Link to={`/projects/${job.project_id}`}>
+                    {projectNames.get(job.project_id) ?? job.project_id}
+                  </Link>
+                </td>
                 <td>{job.priority}</td>
                 <td>{job.repository_url}</td>
                 <td>{job.default_ref}</td>
@@ -129,17 +114,7 @@ export function JobsListPage() {
                 <td>
                   <div className="table-actions">
                     <Link to={`/jobs/${job.id}`}>Open</Link>
-                    <button
-                      type="button"
-                      className="table-action-button"
-                      onClick={() => runNowMutation.mutate(job.id)}
-                      disabled={runNowMutation.isPending}
-                    >
-                      {runNowMutation.isPending &&
-                      runNowMutation.variables === job.id
-                        ? "Running…"
-                        : "Run Now"}
-                    </button>
+                    <RunJobAction jobID={job.id} jobName={job.name} />
                   </div>
                 </td>
               </tr>

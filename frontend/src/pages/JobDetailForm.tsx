@@ -1,7 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
-import { listSourceCredentials, runJob, updateJob } from "../api";
+import { listSourceCredentials, updateJob } from "../api";
 import {
   ManagedBuildImageFields,
   type ManagedBuildImageValue,
@@ -13,26 +12,9 @@ const MAX_PRIORITY = 10;
 
 type PipelineMode = "inline" | "repo";
 
-export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [name, setName] = useState(job.name);
-  const [priority, setPriority] = useState(String(job.priority));
-  const [repositoryURL, setRepositoryURL] = useState(job.repository_url);
-  const [defaultRef, setDefaultRef] = useState(job.default_ref);
-  const [pushEnabled, setPushEnabled] = useState(job.push_enabled);
-  const [pullRequestEnabled, setPullRequestEnabled] = useState(
-    job.pull_request_enabled,
-  );
-  const [pushBranch, setPushBranch] = useState(job.push_branch ?? "");
-  const [pipelineMode, setPipelineMode] = useState<PipelineMode>(
-    job.pipeline_path ? "repo" : "inline",
-  );
-  const [pipelineYAML, setPipelineYAML] = useState(job.pipeline_yaml);
-  const [pipelinePath, setPipelinePath] = useState(
-    job.pipeline_path ?? ".coyote/pipeline.yml",
-  );
-  const [managedImage, setManagedImage] = useState<ManagedBuildImageValue>({
+function formValues(job: Job) {
+  const pipelineMode: PipelineMode = job.pipeline_path ? "repo" : "inline";
+  const managedImage: ManagedBuildImageValue = {
     enabled: job.managed_image?.enabled ?? false,
     managedImageName: job.managed_image?.managed_image_name ?? "go",
     pipelinePath: job.managed_image?.pipeline_path ?? ".coyote/pipeline.yml",
@@ -42,10 +24,82 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
     commitAuthorName: job.managed_image?.commit_author_name ?? "Coyote CI Bot",
     commitAuthorEmail:
       job.managed_image?.commit_author_email ?? "bot@coyote-ci.local",
-  });
-  const [enabled, setEnabled] = useState(job.enabled);
+  };
+  return {
+    name: job.name,
+    priority: String(job.priority),
+    repositoryURL: job.repository_url,
+    defaultRef: job.default_ref,
+    pushEnabled: job.push_enabled,
+    pullRequestEnabled: job.pull_request_enabled,
+    pushBranch: job.push_branch ?? "",
+    pipelineMode,
+    pipelineYAML: job.pipeline_yaml,
+    pipelinePath: job.pipeline_path ?? ".coyote/pipeline.yml",
+    managedImage,
+    enabled: job.enabled,
+  };
+}
+
+export function JobConfiguration({
+  job,
+  active,
+}: {
+  job: Job;
+  active: boolean;
+}) {
+  const [draft, setDraft] = useState<ReturnType<typeof formValues> | null>(
+    null,
+  );
+  if (!active) return null;
+  const values = draft ?? formValues(job);
+  return (
+    <section
+      id="job-configuration"
+      className="detail-panel"
+      aria-label="Job configuration"
+    >
+      <h3>Job Configuration</h3>
+      <JobDetailForm
+        jobID={job.id}
+        values={values}
+        change={(patch) =>
+          setDraft((current) => ({ ...(current ?? values), ...patch }))
+        }
+        onSaved={() => setDraft(null)}
+      />
+    </section>
+  );
+}
+
+function JobDetailForm({
+  jobID,
+  values,
+  change,
+  onSaved,
+}: {
+  jobID: string;
+  values: ReturnType<typeof formValues>;
+  change: (patch: Partial<ReturnType<typeof formValues>>) => void;
+  onSaved: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const {
+    name,
+    priority,
+    repositoryURL,
+    defaultRef,
+    pushEnabled,
+    pullRequestEnabled,
+    pushBranch,
+    pipelineMode,
+    pipelineYAML,
+    pipelinePath,
+    managedImage,
+    enabled,
+  } = values;
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState("");
 
   const { data: credentials = [], isLoading: credentialsLoading } = useQuery({
     queryKey: ["source-credentials"],
@@ -93,33 +147,19 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
     },
     onMutate: () => {
       setErrorMessage(null);
-      setSuccessMessage(null);
+      setSuccessMessage("");
     },
     onSuccess: async (updated) => {
+      queryClient.setQueryData(["job", updated.id], updated);
+      onSaved();
       setSuccessMessage("Job saved.");
-      await queryClient.invalidateQueries({ queryKey: ["job", updated.id] });
+      await queryClient.invalidateQueries({
+        queryKey: ["projectJobs", updated.project_id],
+      });
       await queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
     onError: (mutationError) => {
       setErrorMessage(`Failed to save job: ${String(mutationError)}`);
-    },
-  });
-
-  const runNowMutation = useMutation({
-    mutationFn: (targetID: string) => runJob(targetID),
-    onMutate: () => {
-      setErrorMessage(null);
-      setSuccessMessage(null);
-    },
-    onSuccess: (build) => {
-      if (build.id) {
-        navigate(`/builds/${build.id}`);
-        return;
-      }
-      setSuccessMessage("Job run started.");
-    },
-    onError: (mutationError) => {
-      setErrorMessage(`Failed to run job: ${String(mutationError)}`);
     },
   });
 
@@ -166,7 +206,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
     saveMutation.mutate(jobID);
   };
 
-  const isSubmitting = saveMutation.isPending || runNowMutation.isPending;
+  const isSubmitting = saveMutation.isPending;
 
   return (
     <>
@@ -175,7 +215,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
         <input
           id="job-name"
           value={name}
-          onChange={(event) => setName(event.target.value)}
+          onChange={(event) => change({ name: event.target.value })}
           disabled={isSubmitting}
         />
 
@@ -186,7 +226,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
           min={MIN_PRIORITY}
           max={MAX_PRIORITY}
           value={priority}
-          onChange={(event) => setPriority(event.target.value)}
+          onChange={(event) => change({ priority: event.target.value })}
           disabled={isSubmitting}
         />
 
@@ -194,7 +234,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
         <input
           id="job-repository-url"
           value={repositoryURL}
-          onChange={(event) => setRepositoryURL(event.target.value)}
+          onChange={(event) => change({ repositoryURL: event.target.value })}
           disabled={isSubmitting}
         />
 
@@ -202,7 +242,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
         <input
           id="job-default-ref"
           value={defaultRef}
-          onChange={(event) => setDefaultRef(event.target.value)}
+          onChange={(event) => change({ defaultRef: event.target.value })}
           disabled={isSubmitting}
         />
 
@@ -211,7 +251,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
             id="job-push-enabled"
             type="checkbox"
             checked={pushEnabled}
-            onChange={(event) => setPushEnabled(event.target.checked)}
+            onChange={(event) => change({ pushEnabled: event.target.checked })}
             disabled={isSubmitting}
           />
           Enable push trigger
@@ -221,7 +261,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
         <input
           id="job-push-branch"
           value={pushBranch}
-          onChange={(event) => setPushBranch(event.target.value)}
+          onChange={(event) => change({ pushBranch: event.target.value })}
           disabled={isSubmitting}
           placeholder="main"
         />
@@ -231,7 +271,9 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
             id="job-pull-request-enabled"
             type="checkbox"
             checked={pullRequestEnabled}
-            onChange={(event) => setPullRequestEnabled(event.target.checked)}
+            onChange={(event) =>
+              change({ pullRequestEnabled: event.target.checked })
+            }
             disabled={isSubmitting}
           />
           Enable pull request trigger
@@ -245,7 +287,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
               name="pipeline-mode"
               value="inline"
               checked={pipelineMode === "inline"}
-              onChange={() => setPipelineMode("inline")}
+              onChange={() => change({ pipelineMode: "inline" })}
             />
             Inline YAML
           </label>
@@ -255,7 +297,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
               name="pipeline-mode"
               value="repo"
               checked={pipelineMode === "repo"}
-              onChange={() => setPipelineMode("repo")}
+              onChange={() => change({ pipelineMode: "repo" })}
             />
             File in repository
           </label>
@@ -267,7 +309,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
             <textarea
               id="job-pipeline-yaml"
               value={pipelineYAML}
-              onChange={(event) => setPipelineYAML(event.target.value)}
+              onChange={(event) => change({ pipelineYAML: event.target.value })}
               rows={14}
               disabled={isSubmitting}
             />
@@ -280,7 +322,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
             <input
               id="job-pipeline-path"
               value={pipelinePath}
-              onChange={(event) => setPipelinePath(event.target.value)}
+              onChange={(event) => change({ pipelinePath: event.target.value })}
               disabled={isSubmitting}
               placeholder=".coyote/pipeline.yml"
             />
@@ -293,7 +335,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
         <ManagedBuildImageFields
           value={managedImage}
           onChange={(patch) =>
-            setManagedImage((current) => ({ ...current, ...patch }))
+            change({ managedImage: { ...managedImage, ...patch } })
           }
           credentials={credentials}
           credentialsLoading={credentialsLoading}
@@ -305,7 +347,7 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
             id="job-enabled"
             type="checkbox"
             checked={enabled}
-            onChange={(event) => setEnabled(event.target.checked)}
+            onChange={(event) => change({ enabled: event.target.checked })}
             disabled={isSubmitting}
           />
           Enabled
@@ -315,18 +357,14 @@ export function JobDetailForm({ job, jobID }: { job: Job; jobID: string }) {
           <button type="submit" disabled={isSubmitting}>
             {saveMutation.isPending ? "Saving…" : "Save Job"}
           </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => runNowMutation.mutate(jobID)}
-            disabled={isSubmitting}
-          >
-            {runNowMutation.isPending ? "Running…" : "Run Now"}
-          </button>
         </div>
       </form>
 
-      {successMessage && <p className="success-text">{successMessage}</p>}
+      {successMessage && (
+        <p role="status" className="success-text">
+          {successMessage}
+        </p>
+      )}
       {errorMessage && <p className="error-text">{errorMessage}</p>}
     </>
   );

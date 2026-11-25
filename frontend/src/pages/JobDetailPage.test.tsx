@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import {
+  Link,
+  MemoryRouter,
+  Route,
+  Routes,
+  useNavigate,
+  useLocation,
+} from "react-router-dom";
 import { JobDetailPage } from "./JobDetailPage";
 import {
   getBuildArtifacts,
@@ -13,18 +20,20 @@ import {
   updateJob,
 } from "../api";
 
-const navigateMock = vi.fn();
-
-vi.mock("react-router-dom", async () => {
-  const actual =
-    await vi.importActual<typeof import("react-router-dom")>(
-      "react-router-dom",
-    );
-  return {
-    ...actual,
-    useNavigate: () => navigateMock,
-  };
-});
+function HistoryControls() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  return (
+    <>
+      <output aria-label="Location">
+        {location.pathname + location.search + location.hash}
+      </output>
+      <button onClick={() => navigate(-1)}>Back</button>
+      <button onClick={() => navigate(1)}>Forward</button>
+      <Link to="/jobs/job-2?view=configuration">Other job</Link>
+    </>
+  );
+}
 
 vi.mock("../api", () => ({
   artifactDownloadURL: (path: string) => `/api${path}`,
@@ -37,7 +46,10 @@ vi.mock("../api", () => ({
   listSourceCredentials: vi.fn(),
 }));
 
-function renderPage(seed?: (queryClient: QueryClient) => void) {
+function renderPage(
+  seed?: (queryClient: QueryClient) => void,
+  url = "/jobs/job-1",
+) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -49,8 +61,10 @@ function renderPage(seed?: (queryClient: QueryClient) => void) {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/jobs/job-1"]}>
+      <MemoryRouter initialEntries={[url]}>
+        <HistoryControls />
         <Routes>
+          <Route path="/builds/:id" element={<h2>Build investigation</h2>} />
           <Route path="/jobs/:id" element={<JobDetailPage />} />
         </Routes>
       </MemoryRouter>
@@ -228,7 +242,7 @@ describe("JobDetailPage", () => {
   it("loads job and saves edits", async () => {
     renderPage();
 
-    await screen.findByDisplayValue("backend-ci");
+    await screen.findByRole("link", { name: "backend-binary" });
     await waitFor(() => {
       expect(mockedListBuildsByJob).toHaveBeenCalledWith("job-1");
     });
@@ -240,8 +254,8 @@ describe("JobDetailPage", () => {
     expect(platformLinks[0]).toHaveAttribute("href", "/projects/project-1");
     expect(buildLinks.length).toBeGreaterThan(0);
     expect(
-      screen.getByRole("link", { name: "View Project Builds" }),
-    ).toHaveAttribute("href", "/builds?project_id=project-1");
+      screen.queryByRole("link", { name: "View Project Builds" }),
+    ).toBeNull();
     expect(
       screen
         .getAllByRole("link", { name: "Browse Job Artifacts" })
@@ -259,7 +273,7 @@ describe("JobDetailPage", () => {
     );
     expect(
       screen.getByRole("link", { name: "View Latest Build" }),
-    ).toHaveAttribute("href", "/builds/build-recent-1");
+    ).toHaveAttribute("href", "/builds/build-queued-1");
     expect(
       screen.getByRole("link", { name: "backend-binary" }),
     ).toHaveAttribute("href", "/artifacts/artifact-1");
@@ -279,6 +293,7 @@ describe("JobDetailPage", () => {
     );
     expect(screen.queryByRole("link", { name: /^Job\s/i })).toBeNull();
 
+    fireEvent.click(screen.getByRole("link", { name: "Configuration" }));
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "backend-ci-updated" },
     });
@@ -369,23 +384,26 @@ describe("JobDetailPage", () => {
 
     renderPage();
 
+    await screen.findByText(
+      "Latest successful build did not publish artifacts.",
+    );
+    fireEvent.click(screen.getByRole("link", { name: "Configuration" }));
     await waitFor(() => {
       expect(screen.getByRole("link", { name: "Platform" })).toHaveAttribute(
         "href",
         "/projects/project-1",
       );
       expect(
-        screen.getAllByText("Push Branch")[0].parentElement,
+        screen.getByText("Push Branch", { selector: "strong" }).parentElement,
       ).toHaveTextContent("—");
       expect(
-        screen.getAllByText("Pipeline Source")[0].parentElement,
+        screen.getByText("Pipeline Source", { selector: "strong" })
+          .parentElement,
       ).toHaveTextContent("Inline YAML");
       expect(
-        screen.getAllByText("Managed Build Image")[0].parentElement,
+        screen.getByText("Managed Build Image", { selector: "strong" })
+          .parentElement,
       ).toHaveTextContent("Disabled");
-      expect(
-        screen.getByText("Latest successful build did not publish artifacts."),
-      ).toBeTruthy();
     });
   });
 
@@ -420,6 +438,7 @@ describe("JobDetailPage", () => {
 
     renderPage();
 
+    fireEvent.click(await screen.findByRole("link", { name: "Configuration" }));
     await waitFor(() => {
       expect(
         screen.getByText("Push Branch", { selector: "strong" }).parentElement,
@@ -461,7 +480,7 @@ describe("JobDetailPage", () => {
         },
         { updatedAt: 0 },
       );
-    });
+    }, "/jobs/job-1?view=configuration");
 
     await waitFor(() => {
       expect(
@@ -491,7 +510,7 @@ describe("JobDetailPage", () => {
 
     renderPage();
 
-    await screen.findByDisplayValue("backend-ci");
+    fireEvent.click(await screen.findByRole("link", { name: "Configuration" }));
     expect(
       (
         screen.getByRole("radio", {
@@ -551,7 +570,7 @@ describe("JobDetailPage", () => {
 
     renderPage();
 
-    await screen.findByDisplayValue("backend-ci");
+    fireEvent.click(await screen.findByRole("link", { name: "Configuration" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Job" }));
 
     await waitFor(() => {
@@ -564,7 +583,10 @@ describe("JobDetailPage", () => {
   });
 
   it("covers job form validation, repo saves, and run-now fallback", async () => {
-    const { container } = renderPage();
+    const { container } = renderPage(
+      undefined,
+      "/jobs/job-1#job-configuration",
+    );
 
     await screen.findByDisplayValue("backend-ci");
 
@@ -671,7 +693,9 @@ describe("JobDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run Now" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Job run started.")).toBeTruthy();
+      expect(
+        screen.getByText("Job run started. No build link was returned."),
+      ).toBeTruthy();
     });
 
     mockedUpdateJob.mockRejectedValueOnce(new Error("save failed"));
@@ -682,18 +706,91 @@ describe("JobDetailPage", () => {
       expect(screen.getByText(/save failed/)).toBeTruthy();
     });
   });
-  it("renders the responsive two-column activity rail layout", async () => {
-    const { container } = renderPage();
+  it("defaults to activity without mounting the editor or fetching credentials", async () => {
+    renderPage();
+    expect(
+      await screen.findByRole("link", { name: "Activity" }),
+    ).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByLabelText("Name")).toBeNull();
+    expect(mockedListSourceCredentials).not.toHaveBeenCalled();
+  });
 
-    await screen.findByDisplayValue("backend-ci");
+  it("preserves URL state and a local draft across Back/Forward but not across jobs", async () => {
+    renderPage(undefined, "/jobs/job-1?from=search#context");
+    const config = await screen.findByRole("link", { name: "Configuration" });
+    expect(config).toHaveAttribute(
+      "href",
+      "/jobs/job-1?from=search&view=configuration#context",
+    );
+    fireEvent.click(config);
+    expect(config).toHaveAttribute("aria-current", "page");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "local draft" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByLabelText("Location")).toHaveTextContent(
+      "/jobs/job-1?from=search#context",
+    );
+    expect(screen.queryByLabelText("Name")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+    expect(screen.getByLabelText("Name")).toHaveValue("local draft");
+    const other = {
+      ...(await mockedGetJob("job-1")),
+      id: "job-2",
+      name: "release",
+    };
+    mockedGetJob.mockResolvedValueOnce(other);
+    fireEvent.click(screen.getByRole("link", { name: "Other job" }));
+    expect(await screen.findByLabelText("Name")).toHaveValue("release");
+    expect(mockedListBuildsByJob).toHaveBeenCalledWith("job-2");
+  });
 
-    expect(container.querySelector(".detail-page-with-rail")).toBeTruthy();
+  it("opens the legacy anchor and removes only that fragment on leaving it", async () => {
+    renderPage(undefined, "/jobs/job-1?from=project#job-configuration");
+    expect(await screen.findByLabelText("Name")).toBeVisible();
+    fireEvent.click(screen.getByRole("link", { name: "Activity" }));
+    expect(screen.getByLabelText("Location").textContent).toBe(
+      "/jobs/job-1?from=project",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByRole("link", { name: "Configuration" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
+  it("runs the saved definition only once while pending and does not retry a missing ID", async () => {
+    const result = { ...(await mockedRunJob("job-1")), id: " " };
+    mockedRunJob.mockClear();
+    let finish!: (value: typeof result) => void;
+    mockedRunJob.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    renderPage(undefined, "/jobs/job-1?view=configuration");
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "not saved" },
+    });
+    const button = screen.getByRole("button", { name: "Run Now" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(button).toHaveAttribute("aria-disabled", "true"),
+    );
+    expect(mockedRunJob.mock.calls).toEqual([["job-1"]]);
+    expect(mockedUpdateJob).not.toHaveBeenCalled();
+    finish(result);
+    expect(await screen.findByText(/No build link was returned/)).toBeVisible();
+    expect(mockedRunJob).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Name")).toHaveValue("not saved");
   });
 
   it("job-scoped activity rows show trigger ref and no redundant job link", async () => {
     renderPage();
 
-    await screen.findByDisplayValue("backend-ci");
+    await screen.findByRole("heading", { name: "Recent job builds" });
 
     await waitFor(() => {
       expect(
@@ -706,7 +803,7 @@ describe("JobDetailPage", () => {
   });
 
   it("sends managed_image null when automation is disabled", async () => {
-    renderPage();
+    renderPage(undefined, "/jobs/job-1?view=configuration");
 
     await screen.findByDisplayValue("backend-ci");
 
@@ -736,28 +833,31 @@ describe("JobDetailPage", () => {
   it("runs now and navigates to build detail", async () => {
     renderPage();
 
-    await screen.findByDisplayValue("backend-ci");
+    await screen.findByRole("button", { name: "Run Now" });
 
     fireEvent.click(screen.getByRole("button", { name: "Run Now" }));
 
     await waitFor(() => {
       expect(mockedRunJob).toHaveBeenCalledWith("job-1");
-      expect(navigateMock).toHaveBeenCalledWith("/builds/build-123");
+      expect(screen.getByLabelText("Location")).toHaveTextContent(
+        "/builds/build-123",
+      );
     });
   });
 
   it("surfaces run-now error message", async () => {
-    mockedRunJob.mockRejectedValueOnce(new Error("API 409: job is disabled"));
+    mockedRunJob.mockRejectedValueOnce(new Error("API 403: forbidden"));
 
     renderPage();
 
-    await screen.findByDisplayValue("backend-ci");
-
-    fireEvent.click(screen.getByRole("button", { name: "Run Now" }));
+    const button = await screen.findByRole("button", { name: "Run Now" });
+    button.focus();
+    fireEvent.click(button);
 
     await waitFor(() => {
       expect(screen.getByText(/Failed to run job/)).toBeTruthy();
-      expect(screen.getByText(/job is disabled/)).toBeTruthy();
+      expect(screen.getByRole("alert")).toHaveTextContent("403: forbidden");
+      expect(button).toHaveFocus();
     });
   });
 
@@ -777,21 +877,21 @@ describe("JobDetailPage", () => {
     });
   });
 
-  it("shows a compact latest-build note when the newest build is not yet successful", async () => {
+  it("links the newest failed execution separately from an older success that finished later", async () => {
     mockedListBuildsByJob.mockResolvedValue([
       {
-        id: "build-running-1",
+        id: "build-failed-1",
         build_number: 22,
         attempt_number: 1,
         project_id: "project-1",
         project_name: "Platform",
         job_id: "job-1",
         priority: 5,
-        status: "running",
-        created_at: "2026-03-30T00:00:00Z",
+        status: "failed",
+        created_at: "2026-03-30T00:00:05Z",
         queued_at: "2026-03-30T00:00:01Z",
         started_at: "2026-03-30T00:01:00Z",
-        finished_at: "2026-03-30T00:02:00Z",
+        finished_at: "2026-03-30T00:01:05Z",
         current_step_index: 0,
         error_message: null,
         application_version: null,
@@ -824,8 +924,11 @@ describe("JobDetailPage", () => {
       ).toBeNull();
       expect(screen.getByRole("link", { name: "#22" })).toHaveAttribute(
         "href",
-        "/builds/build-running-1",
+        "/builds/build-failed-1",
       );
+      expect(
+        screen.getByRole("link", { name: "View Successful Build" }),
+      ).toHaveAttribute("href", "/builds/build-success-1");
     });
   });
 
