@@ -10,7 +10,7 @@ import type { Worker } from "../types/worker";
 import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL } from "../utils/build";
 import { formatCompactTime, formatTime } from "../utils/time";
 
-const STALE_WORKER_DISPLAY_RETENTION_MS = 24 * 60 * 60 * 1000;
+import { shouldHideStaleWorker } from "../utils/workerVisibility";
 
 function contextLabel(
   primary: string | null | undefined,
@@ -35,48 +35,6 @@ function currentStepLabel(worker: Worker): string {
     parts.push(worker.current_step_name);
   }
   return parts.join(" · ");
-}
-
-function parseTimestamp(value: string | null | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? null : parsed;
-}
-
-function hasCurrentClaimContext(worker: Worker): boolean {
-  return Boolean(
-    worker.current_build_id ||
-    typeof worker.current_build_number === "number" ||
-    worker.current_step_id ||
-    worker.current_step_name ||
-    typeof worker.current_step_index === "number" ||
-    worker.claimed_at ||
-    worker.lease_expires_at ||
-    worker.project_id ||
-    worker.project_name ||
-    worker.job_id ||
-    worker.job_name,
-  );
-}
-
-function shouldHideStaleWorker(worker: Worker, now: number): boolean {
-  if (worker.status !== "stale") {
-    return false;
-  }
-
-  if (worker.stale_lease || hasCurrentClaimContext(worker)) {
-    return false;
-  }
-
-  const lastHeartbeat = parseTimestamp(worker.last_heartbeat_at);
-  if (lastHeartbeat === null) {
-    return true;
-  }
-
-  return now - lastHeartbeat > STALE_WORKER_DISPLAY_RETENTION_MS;
 }
 
 export function WorkersPage() {

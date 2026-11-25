@@ -4,8 +4,10 @@ import { RouterProvider } from "react-router-dom";
 import { checkReadiness } from "./api";
 import { AuthProvider } from "./auth";
 import { router } from "./routes/router";
+import { createOverviewAwareQueryCache } from "./utils/overviewSnapshots";
 
 const queryClient = new QueryClient({
+  queryCache: createOverviewAwareQueryCache(),
   defaultOptions: {
     queries: {
       retry: 1,

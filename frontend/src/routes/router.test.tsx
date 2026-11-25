@@ -6,6 +6,7 @@ import { ThemeProvider } from "../theme";
 import { AuthProvider } from "../auth";
 import { appRoutes } from "./router";
 import {
+  APIError,
   getCommitAuthorFailureNotificationPreference,
   getCommitAuthorSuccessNotificationPreference,
   getAuthConfig,
@@ -14,6 +15,7 @@ import {
   listBuilds,
   listProjects,
   listQueue,
+  listWorkers,
 } from "../api";
 import { installMockLocalStorage } from "../test/browserMocks";
 
@@ -29,6 +31,7 @@ vi.mock("../api", async () => {
     listProjects: vi.fn(),
     listQueue: vi.fn(),
     listBuilds: vi.fn(),
+    listWorkers: vi.fn(),
   };
 });
 
@@ -124,6 +127,7 @@ describe("router dashboard home", () => {
     mockedListProjects.mockResolvedValue([]);
     mockedListQueue.mockResolvedValue([]);
     mockedListBuilds.mockResolvedValue([]);
+    vi.mocked(listWorkers).mockResolvedValue([]);
   });
 
   it("redirects the home route to the dashboard", async () => {
@@ -135,6 +139,21 @@ describe("router dashboard home", () => {
     expect(screen.getByRole("link", { name: "Overview" })).toHaveClass(
       "is-active",
     );
+  });
+
+  it("redirects anonymous Overview visits without requesting dashboard data", async () => {
+    vi.clearAllMocks();
+    mockedGetAuthConfig.mockResolvedValue({
+      auth_mode: "oidc",
+      login_url: "/auth/login",
+    });
+    mockedGetMe.mockRejectedValue(new APIError(401, "unauthenticated"));
+    const router = renderRouter(["/dashboard"]);
+    await screen.findByRole("link", { name: "Projects" });
+    expect(router.state.location.pathname).toBe("/projects");
+    expect(mockedListQueue).not.toHaveBeenCalled();
+    expect(mockedListBuilds).not.toHaveBeenCalled();
+    expect(listWorkers).not.toHaveBeenCalled();
   });
 
   it("restores the filtered Activity view and fragment on Back", async () => {
