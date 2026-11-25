@@ -427,6 +427,29 @@ describe("QueuePage", () => {
     });
   });
 
+  it("moves keyboard focus to the first new build on each reveal, but not on refresh", async () => {
+    const entries = Array.from({ length: 18 }, (_, index) => entry(index + 1));
+    mockedListQueue.mockResolvedValue(entries);
+    const { queryClient } = renderPage();
+    const more = await screen.findByRole("button", {
+      name: "Show more queued builds",
+    });
+
+    more.focus();
+    fireEvent.click(more, { detail: 0 });
+    expect(screen.getByRole("link", { name: "Build #9" })).toHaveFocus();
+
+    more.focus();
+    mockedListQueue.mockResolvedValue([...entries, entry(19)]);
+    await queryClient.invalidateQueries({ queryKey: ["queue"] });
+    await screen.findByText("Showing 16 of 19 queued builds");
+    expect(more).toHaveFocus();
+
+    fireEvent.click(more, { detail: 0 });
+    expect(more).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Build #17" })).toHaveFocus();
+  });
+
   it("reveals each snapshot independently in returned order and retains depth across refresh", async () => {
     const entries = Array.from({ length: 14 }, (_, index) => entry(18 - index));
     const running = Array.from({ length: 10 }, (_, index) =>

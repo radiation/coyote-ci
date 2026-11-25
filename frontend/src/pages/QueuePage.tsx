@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   Link,
   useLocation,
@@ -184,7 +185,16 @@ function QueueSection({
   activeStatus?: QueueEntry["status"];
 }) {
   const [limit, setLimit] = useState(SECTION_LIMIT);
+  const listRef = useRef<HTMLUListElement>(null);
   const visible = activeStatus ? items.slice(0, limit) : items;
+
+  function revealMore() {
+    const firstNewIndex = visible.length;
+    flushSync(() => setLimit(limit + SECTION_LIMIT));
+    listRef.current?.children[firstNewIndex]
+      ?.querySelector<HTMLAnchorElement>(".activity-list-title-row a")
+      ?.focus();
+  }
   return (
     <section className="panel dashboard-panel">
       <div className="dashboard-panel-header">
@@ -200,13 +210,13 @@ function QueueSection({
           <p className="empty">{emptyMessage}</p>
         </div>
       ) : null}
-      {visible.length > 0 ? <ul className="activity-list">{visible}</ul> : null}
+      {visible.length > 0 ? (
+        <ul className="activity-list" ref={listRef}>
+          {visible}
+        </ul>
+      ) : null}
       {visible.length < items.length ? (
-        <button
-          className="secondary-button"
-          type="button"
-          onClick={() => setLimit(limit + SECTION_LIMIT)}
-        >
+        <button className="secondary-button" type="button" onClick={revealMore}>
           Show more {activeStatus} builds
         </button>
       ) : null}
