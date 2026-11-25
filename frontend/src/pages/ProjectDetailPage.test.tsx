@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL } from "../utils/build";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { ProjectDetailPage } from "./ProjectDetailPage";
@@ -645,6 +652,93 @@ describe("ProjectDetailPage", () => {
     });
   });
 
+  it.each(["/projects/project-1", "/projects/project-1?view=jobs"])(
+    "refreshes idle and active job badges on %s",
+    async (url) => {
+      const [job] = await mockedListJobsByProject("project-1");
+      const latest = {
+        id: "external",
+        build_number: 8,
+        created_at: job.created_at,
+      };
+      mockedListJobsByProject
+        .mockClear()
+        .mockResolvedValueOnce([job])
+        .mockResolvedValueOnce([
+          { ...job, latest_build: { ...latest, status: "running" } },
+        ])
+        .mockResolvedValue([
+          { ...job, latest_build: { ...latest, status: "success" } },
+        ]);
+      vi.useFakeTimers();
+      const advance = (ms: number) =>
+        act(async () => {
+          await vi.advanceTimersByTimeAsync(ms);
+        });
+      try {
+        renderPage("authenticated", url);
+        await advance(5);
+        expect(screen.getByText("Not run yet")).toBeTruthy();
+        await advance(FAST_POLL_INTERVAL);
+        expect(mockedListJobsByProject).toHaveBeenCalledTimes(1);
+        await advance(SLOW_POLL_INTERVAL - FAST_POLL_INTERVAL);
+        expect(
+          screen.getByRole("link", {
+            name: "Latest build for backend-ci: running",
+          }),
+        ).toBeTruthy();
+        await advance(FAST_POLL_INTERVAL);
+        expect(
+          screen.getByRole("link", {
+            name: "Latest build for backend-ci: success",
+          }),
+        ).toBeTruthy();
+        await advance(FAST_POLL_INTERVAL);
+        expect(mockedListJobsByProject).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("fills the four overview slots from enabled jobs only", async () => {
+    const [base] = await mockedListJobsByProject("project-1");
+    mockedListJobsByProject.mockResolvedValue(
+      Array.from({ length: 9 }, (_, index) => ({
+        ...base,
+        id: `job-${index}`,
+        name: `Pipeline ${index}`,
+        enabled: index >= 4,
+      })),
+    );
+    renderPage();
+    const buttons = await screen.findAllByRole("button", { name: /^Run Now:/ });
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Run Now: Pipeline 4",
+      "Run Now: Pipeline 5",
+      "Run Now: Pipeline 6",
+      "Run Now: Pipeline 7",
+    ]);
+    expect(screen.queryByRole("link", { name: "Pipeline 0" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Pipeline 8" })).toBeNull();
+  });
+
+  it("shows a no-runnable-jobs overview and keeps disabled jobs discoverable in Jobs", async () => {
+    const [base] = await mockedListJobsByProject("project-1");
+    mockedListJobsByProject.mockResolvedValue([{ ...base, enabled: false }]);
+    renderPage();
+    expect(
+      await screen.findByText("No runnable jobs in this project."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("link", { name: "Jobs" }));
+    expect(await screen.findByText("Disabled")).toBeTruthy();
+    expect(screen.getByRole("link", { name: base.name })).toHaveAttribute(
+      "href",
+      `/jobs/${base.id}`,
+    );
+    expect(screen.queryByRole("button", { name: /^Run Now:/ })).toBeNull();
+  });
+
   it("filters project jobs and uses batched status and job-specific run actions", async () => {
     const [base] = await mockedListJobsByProject("project-1");
     const [build] = await mockedListBuilds();
@@ -703,6 +797,53 @@ describe("ProjectDetailPage", () => {
     expect(mockedListProjectMembers).not.toHaveBeenCalled();
   });
 
+  it("polls quickly for active builds on older pages and discovers new builds while idle", async () => {
+    const [base] = await mockedListBuilds();
+    const first = Array.from({ length: 20 }, (_, index) => ({
+      ...base,
+      id: `build-${index}`,
+      build_number: index + 1,
+    }));
+    const older = { ...base, build_number: 21 };
+    mockedListBuilds
+      .mockClear()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce([{ ...older, status: "running" }])
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce([{ ...older, status: "success" }])
+      .mockResolvedValueOnce([
+        { ...base, id: "new", build_number: 22 },
+        ...first.slice(0, -1),
+      ])
+      .mockResolvedValueOnce([first[19], older]);
+    vi.useFakeTimers();
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    try {
+      renderPage("authenticated", "/projects/project-1?view=builds");
+      await advance(5);
+      fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+      await advance(5);
+      expect(screen.getByText("Running")).toBeTruthy();
+      await advance(FAST_POLL_INTERVAL);
+      expect(screen.getByText("Success")).toBeTruthy();
+      await advance(FAST_POLL_INTERVAL);
+      expect(mockedListBuilds).toHaveBeenCalledTimes(4);
+      await advance(SLOW_POLL_INTERVAL - FAST_POLL_INTERVAL);
+      expect(screen.getByRole("link", { name: "Build #22" })).toHaveAttribute(
+        "href",
+        "/builds/new",
+      );
+      expect(
+        mockedListBuilds.mock.calls.map(([params]) => params?.offset),
+      ).toEqual([0, 20, 0, 20, 0, 20]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retains the first build page across errors and de-duplicates overlapping pages", async () => {
     const [base] = await mockedListBuilds();
     const page = Array.from({ length: 20 }, (_, index) => ({
@@ -716,7 +857,7 @@ describe("ProjectDetailPage", () => {
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce([
         page[19],
-        { ...base, build_number: 21 },
+        { ...base, build_number: 21, job_id: "job-1", job_name: null },
         { ...base, id: "foreign", project_id: "other", build_number: 22 },
       ]);
     renderPage("authenticated", "/projects/project-1?view=builds");
@@ -728,6 +869,10 @@ describe("ProjectDetailPage", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
     expect(await screen.findByRole("link", { name: "Build #21" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "backend-ci" })).toHaveAttribute(
+      "href",
+      "/jobs/job-1",
+    );
     expect(screen.getAllByRole("link", { name: "Build #20" })).toHaveLength(1);
     expect(screen.queryByText("Build #22")).toBeNull();
     expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
@@ -736,7 +881,7 @@ describe("ProjectDetailPage", () => {
         { project_id: "project-1", limit: 20, offset },
       ]),
     );
-    expect(mockedListJobsByProject).not.toHaveBeenCalled();
+    expect(mockedListJobsByProject.mock.calls).toEqual([["project-1"]]);
   });
 
   it("requires confirmation, reports denied deletion, and returns to the directory on success", async () => {

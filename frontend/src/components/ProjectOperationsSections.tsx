@@ -2,6 +2,12 @@ import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { listBuilds, listJobsByProject } from "../api";
+import {
+  FAST_POLL_INTERVAL,
+  isActiveBuild,
+  SLOW_POLL_INTERVAL,
+} from "../utils/build";
+import { hydrateJobNames } from "../utils/jobNames";
 import { BuildActivityList } from "./BuildActivityList";
 import { RunJobAction } from "./RunJobAction";
 import { StatusBadge } from "./StatusBadge";
@@ -17,10 +23,14 @@ export function ProjectJobsSection({
   const query = useQuery({
     queryKey: ["projectJobs", id],
     queryFn: () => listJobsByProject(id),
+    refetchInterval: ({ state }) =>
+      state.data?.some((job) => isActiveBuild(job.latest_build?.status))
+        ? FAST_POLL_INTERVAL
+        : SLOW_POLL_INTERVAL,
   });
   const jobs = (query.data ?? []).filter((job) => job.project_id === id);
   const visible = compact
-    ? jobs.slice(0, 4)
+    ? jobs.filter((job) => job.enabled).slice(0, 4)
     : jobs.filter((job) =>
         job.name.toLowerCase().includes(filter.trim().toLowerCase()),
       );
@@ -51,7 +61,11 @@ export function ProjectJobsSection({
       ) : !jobs.length ? (
         <p>No jobs in this project yet.</p>
       ) : !visible.length ? (
-        <p>No jobs match your filter.</p>
+        <p>
+          {compact
+            ? "No runnable jobs in this project."
+            : "No jobs match your filter."}
+        </p>
       ) : (
         <ul className="activity-list">
           {visible.map((job) => (
@@ -67,7 +81,11 @@ export function ProjectJobsSection({
               ) : (
                 <span className="subtle-text">Not run yet</span>
               )}
-              <RunJobAction jobID={job.id} jobName={job.name} />
+              {job.enabled ? (
+                <RunJobAction jobID={job.id} jobName={job.name} />
+              ) : (
+                <span className="subtle-text">Disabled</span>
+              )}
             </li>
           ))}
         </ul>
@@ -79,6 +97,10 @@ export function ProjectJobsSection({
 const pageSize = 20;
 
 export function ProjectBuildsSection({ id }: { id: string }) {
+  const { data: projectJobs } = useQuery({
+    queryKey: ["projectJobs", id],
+    queryFn: () => listJobsByProject(id),
+  });
   const query = useInfiniteQuery({
     queryKey: ["projectBuildHistory", id],
     initialPageParam: 0,
@@ -86,17 +108,27 @@ export function ProjectBuildsSection({ id }: { id: string }) {
       listBuilds({ project_id: id, limit: pageSize, offset: pageParam }),
     getNextPageParam: (last, _pages, offset) =>
       last.length === pageSize ? offset + pageSize : undefined,
+    refetchInterval: ({ state }) =>
+      state.data?.pages.some((page) =>
+        page.some((build) => isActiveBuild(build.status)),
+      )
+        ? FAST_POLL_INTERVAL
+        : SLOW_POLL_INTERVAL,
   });
   const builds = (query.data?.pages.flat() ?? []).filter(
     (build) => build.project_id === id,
   );
   const unique = new Map(builds.map((build) => [build.id, build]));
+  const jobNames = new Map(
+    (projectJobs ?? []).map((job) => [job.id, job.name]),
+  );
+  const namedBuilds = hydrateJobNames(Array.from(unique.values()), jobNames);
   return (
     <>
       <BuildActivityList
         title="Project builds"
         contextMode="project"
-        items={Array.from(unique.values(), (build) => ({
+        items={namedBuilds.map((build) => ({
           kind: "build",
           build,
         }))}
