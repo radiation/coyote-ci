@@ -1821,8 +1821,46 @@ fieldset legend {
   background: var(--color-success-bg);
 }
 
-.workers-table td strong {
-  display: block;
+.worker-activity li {
+  border-top: 1px solid var(--color-border);
+  padding: 0.75rem 0;
+}
+
+.worker-activity dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(8rem, 100%), 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0.6rem 0 0;
+}
+
+.worker-activity dt {
+  font-weight: 600;
+}
+.worker-activity dd {
+  margin: 0;
+}
+.worker-activity .activity-list-title-row {
+  flex-wrap: wrap;
+}
+.page-workers,
+.page-queue {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.page-queue select {
+  max-width: 100%;
+}
+:is(.page-workers, .page-queue) :focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+@media (max-width: 600px) {
+  .page-queue .activity-list-item,
+  .page-workers .dashboard-panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 .workers-row-stale {

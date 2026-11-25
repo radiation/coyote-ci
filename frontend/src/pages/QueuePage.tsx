@@ -1,5 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { useRef, useState } from "react";
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 import {
   cancelBuild,
   listBuilds,
@@ -8,6 +14,7 @@ import {
   listQueue,
 } from "../api";
 import { PageHeader } from "../components/PageHeader";
+import { BuildIdentityLink } from "../components/BuildIdentityLink";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Build, QueueEntry } from "../types/build";
 import {
@@ -18,7 +25,7 @@ import {
   isTerminalBuild,
 } from "../utils/build";
 import { hydrateJobNames, missingJobNameProjectIDs } from "../utils/jobNames";
-import { formatTime } from "../utils/time";
+import { formatDuration, formatTime } from "../utils/time";
 
 const RECENT_BUILD_FETCH_LIMIT = 24;
 const SECTION_LIMIT = 8;
@@ -35,8 +42,14 @@ type QueueSectionRowProps = {
   queuedAt?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
+  entry?: QueueEntry;
+  snapshotAt?: string;
   canceling?: boolean;
-  onCancel?: (buildID: string, buildLabel: string) => void;
+  onCancel?: (
+    buildID: string,
+    buildLabel: string,
+    button: HTMLButtonElement,
+  ) => void;
 };
 
 function projectLabel(
@@ -52,34 +65,6 @@ function jobLabel(
   jobID: string | null | undefined,
 ): string {
   return jobName?.trim() || jobID?.trim() || "Manual";
-}
-
-function formatDuration(
-  startISO: string | null | undefined,
-  endISO: string | null | undefined,
-): string | null {
-  if (!startISO || !endISO) {
-    return null;
-  }
-
-  const start = Date.parse(startISO);
-  const end = Date.parse(endISO);
-  if (Number.isNaN(start) || Number.isNaN(end) || end < start) {
-    return null;
-  }
-
-  const totalSeconds = Math.floor((end - start) / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
-  }
-  return `${seconds}s`;
 }
 
 function sortByNewest(builds: Build[]): Build[] {
@@ -110,13 +95,16 @@ function QueueSectionRow({
   queuedAt,
   startedAt,
   finishedAt,
+  entry,
+  snapshotAt,
   canceling = false,
   onCancel,
 }: QueueSectionRowProps) {
   const duration = formatDuration(startedAt, finishedAt);
-  const buildLabel = buildNumber
-    ? `Build #${buildNumber}`
-    : `Build ${buildID.slice(0, 8)}`;
+  const buildLabel =
+    buildNumber != null
+      ? `Build #${buildNumber}`
+      : `Build ${buildID.slice(0, 8)}`;
 
   return (
     <li
@@ -124,7 +112,7 @@ function QueueSectionRow({
     >
       <div className="activity-list-main">
         <div className="activity-list-title-row">
-          <Link to={`/builds/${buildID}`}>{buildLabel}</Link>
+          <BuildIdentityLink id={buildID} number={buildNumber} />
           <StatusBadge status={status} />
         </div>
         <p className="subtle-text activity-list-context">
@@ -141,10 +129,24 @@ function QueueSectionRow({
           )}
         </p>
         <div className="activity-list-detail-grid subtle-text">
-          <span>Queued {formatTime(queuedAt)}</span>
-          {startedAt ? <span>Started {formatTime(startedAt)}</span> : null}
+          {entry ? (
+            <>
+              <span>Priority {entry.priority ?? "—"}</span>
+              <span>Queued {formatTime(queuedAt)}</span>
+              {status === "running" ? (
+                <>
+                  <span>Started {formatTime(startedAt)}</span>
+                  <span>Running {formatDuration(startedAt, snapshotAt)}</span>
+                </>
+              ) : (
+                <span>Waiting {formatDuration(queuedAt, snapshotAt)}</span>
+              )}
+              <span>Worker {entry.worker_id || "Unassigned"}</span>
+              <span>Lease expires {formatTime(entry.lease_expires_at)}</span>
+            </>
+          ) : null}
           {finishedAt ? <span>Finished {formatTime(finishedAt)}</span> : null}
-          {duration ? <span>Duration {duration}</span> : null}
+          {finishedAt ? <span>Duration {duration}</span> : null}
         </div>
       </div>
       <div className="activity-list-meta subtle-text">
@@ -153,10 +155,12 @@ function QueueSectionRow({
           <button
             className="inline-action-button danger-button"
             type="button"
-            onClick={() => onCancel(buildID, buildLabel)}
-            disabled={canceling}
+            onClick={(event) =>
+              onCancel(buildID, buildLabel, event.currentTarget)
+            }
+            aria-disabled={canceling}
           >
-            {canceling ? "Canceling…" : "Cancel"}
+            Cancel
           </button>
         ) : null}
       </div>
@@ -170,36 +174,58 @@ function QueueSection({
   loading,
   error,
   emptyMessage,
+  activeStatus,
 }: {
   title: string;
   items: React.JSX.Element[];
   loading: boolean;
   error: unknown;
   emptyMessage: string;
+  activeStatus?: QueueEntry["status"];
 }) {
+  const [limit, setLimit] = useState(SECTION_LIMIT);
+  const visible = activeStatus ? items.slice(0, limit) : items;
   return (
     <section className="panel dashboard-panel">
       <div className="dashboard-panel-header">
         <h3>{title}</h3>
       </div>
-      {loading ? <p>Loading…</p> : null}
-      {error ? <p className="error-text">Unable to load.</p> : null}
+      {activeStatus && !loading && (!error || items.length > 0) ? (
+        <p className="subtle-text">
+          Showing {visible.length} of {items.length} {activeStatus} builds
+        </p>
+      ) : null}
       {!loading && !error && items.length === 0 ? (
         <div className="empty-state">
           <p className="empty">{emptyMessage}</p>
         </div>
       ) : null}
-      {!loading && !error && items.length > 0 ? (
-        <ul className="activity-list">{items}</ul>
+      {visible.length > 0 ? <ul className="activity-list">{visible}</ul> : null}
+      {visible.length < items.length ? (
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={() => setLimit(limit + SECTION_LIMIT)}
+        >
+          Show more {activeStatus} builds
+        </button>
       ) : null}
     </section>
   );
 }
 
 export function QueuePage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activeHeading = useRef<HTMLHeadingElement>(null);
+  const pending = useRef(false);
+  const [feedback, setFeedback] = useState("");
   const queryClient = useQueryClient();
   const projectID = searchParams.get("project_id")?.trim() ?? "";
+  const rawStatus = searchParams.get("status");
+  const status =
+    rawStatus === "queued" || rawStatus === "running" ? rawStatus : undefined;
 
   const {
     data: entries,
@@ -207,10 +233,11 @@ export function QueuePage() {
     error: queueError,
     dataUpdatedAt: queueUpdatedAt,
   } = useQuery({
-    queryKey: ["queue", projectID],
+    queryKey: ["queue", projectID, status],
     queryFn: () =>
       listQueue({
         project_id: projectID || undefined,
+        status,
       }),
     refetchInterval: (query) => {
       const nextEntries = query.state.data as QueueEntry[] | undefined;
@@ -267,12 +294,33 @@ export function QueuePage() {
     },
   });
 
-  function requestCancelBuild(buildID: string, label: string) {
+  function requestCancelBuild(
+    buildID: string,
+    label: string,
+    button: HTMLButtonElement,
+  ) {
+    if (pending.current) return;
     const confirmed = window.confirm(`Cancel ${label}?`);
     if (!confirmed) {
+      button.focus();
       return;
     }
-    cancelBuildMutation.mutate(buildID);
+    pending.current = true;
+    setFeedback(`Canceling ${label}…`);
+    cancelBuildMutation.mutate(buildID, {
+      onSuccess: () => {
+        setFeedback(`${label} canceled.`);
+        if (
+          document.activeElement === button ||
+          document.activeElement === document.body
+        )
+          activeHeading.current?.focus();
+      },
+      onError: () => setFeedback(""),
+      onSettled: () => {
+        pending.current = false;
+      },
+    });
   }
 
   const projectIDsNeedingJobs = missingJobNameProjectIDs([
@@ -292,18 +340,15 @@ export function QueuePage() {
     enabled: projectIDsNeedingJobs.length > 0,
   });
 
-  function updateFilters(next: { projectID?: string }) {
+  function updateFilters(key: "project_id" | "status", value: string) {
     const nextParams = new URLSearchParams(searchParams);
-    const nextProjectID = next.projectID ?? projectID;
-
-    if (nextProjectID) {
-      nextParams.set("project_id", nextProjectID);
-    } else {
-      nextParams.delete("project_id");
-    }
-    nextParams.delete("status");
-
-    setSearchParams(nextParams, { replace: true });
+    if (value) nextParams.set(key, value);
+    else nextParams.delete(key);
+    navigate({
+      pathname: location.pathname,
+      search: nextParams.toString(),
+      hash: location.hash,
+    });
   }
 
   const projectJobNames = new Map(projectJobs.map((job) => [job.id, job.name]));
@@ -328,55 +373,28 @@ export function QueuePage() {
   const recentTerminalBuilds = terminalBuilds
     .filter((build) => build.status !== "failed")
     .slice(0, SECTION_LIMIT);
-  const lastUpdatedAt = Math.max(queueUpdatedAt, recentBuildsUpdatedAt);
+  const snapshotAt = new Date(queueUpdatedAt).toISOString();
+  const activeRow = (entry: QueueEntry) => (
+    <QueueSectionRow
+      key={entry.build_id}
+      buildID={entry.build_id}
+      buildNumber={entry.build_number}
+      status={entry.status}
+      projectID={entry.project_id}
+      projectName={entry.project_name}
+      projectSlug={entry.project_slug}
+      jobID={entry.job_id}
+      jobName={entry.job_name}
+      queuedAt={entry.queued_at}
+      snapshotAt={snapshotAt}
+      entry={entry}
+      startedAt={entry.started_at}
+      canceling={cancelBuildMutation.isPending}
+      onCancel={requestCancelBuild}
+    />
+  );
 
-  const runningItems = runningEntries
-    .slice(0, SECTION_LIMIT)
-    .map((entry) => (
-      <QueueSectionRow
-        key={entry.build_id}
-        buildID={entry.build_id}
-        buildNumber={entry.build_number}
-        status={entry.status}
-        projectID={entry.project_id}
-        projectName={entry.project_name}
-        projectSlug={entry.project_slug}
-        jobID={entry.job_id}
-        jobName={entry.job_name}
-        queuedAt={entry.queued_at ?? entry.created_at}
-        startedAt={entry.started_at}
-        canceling={
-          cancelBuildMutation.isPending &&
-          cancelBuildMutation.variables === entry.build_id
-        }
-        onCancel={requestCancelBuild}
-      />
-    ));
-
-  const queuedItems = queuedEntries
-    .slice(0, SECTION_LIMIT)
-    .map((entry) => (
-      <QueueSectionRow
-        key={entry.build_id}
-        buildID={entry.build_id}
-        buildNumber={entry.build_number}
-        status={entry.status}
-        projectID={entry.project_id}
-        projectName={entry.project_name}
-        projectSlug={entry.project_slug}
-        jobID={entry.job_id}
-        jobName={entry.job_name}
-        queuedAt={entry.queued_at ?? entry.created_at}
-        startedAt={entry.started_at}
-        canceling={
-          cancelBuildMutation.isPending &&
-          cancelBuildMutation.variables === entry.build_id
-        }
-        onCancel={requestCancelBuild}
-      />
-    ));
-
-  const failedItems = failedBuilds.map((build) => (
+  const terminalRow = (build: Build) => (
     <QueueSectionRow
       key={build.id}
       buildID={build.id}
@@ -387,47 +405,21 @@ export function QueuePage() {
       projectSlug={build.project_slug}
       jobID={build.job_id}
       jobName={build.job_name}
-      queuedAt={build.queued_at ?? build.created_at}
       startedAt={build.started_at}
       finishedAt={build.finished_at}
     />
-  ));
-
-  const terminalItems = recentTerminalBuilds.map((build) => (
-    <QueueSectionRow
-      key={build.id}
-      buildID={build.id}
-      buildNumber={build.build_number}
-      status={build.status}
-      projectID={build.project_id}
-      projectName={build.project_name}
-      projectSlug={build.project_slug}
-      jobID={build.job_id}
-      jobName={build.job_name}
-      queuedAt={build.queued_at ?? build.created_at}
-      startedAt={build.started_at}
-      finishedAt={build.finished_at}
-    />
-  ));
+  );
 
   return (
     <div className="page-content page-queue">
       <PageHeader
         title="Queue"
-        description={
-          <>
-            Active and recent build execution across accessible projects. Last
-            updated{" "}
-            {lastUpdatedAt > 0
-              ? formatTime(new Date(lastUpdatedAt).toISOString())
-              : "—"}
-            .
-          </>
-        }
+        description="Active and recent build execution across accessible projects."
       />
 
+      <div role="status">{feedback}</div>
       {cancelBuildMutation.error ? (
-        <p className="error-text">
+        <p role="alert" className="error-text">
           Failed to cancel build: {String(cancelBuildMutation.error)}
         </p>
       ) : null}
@@ -439,7 +431,7 @@ export function QueuePage() {
             <select
               value={projectID}
               onChange={(event) =>
-                updateFilters({ projectID: event.target.value })
+                updateFilters("project_id", event.target.value)
               }
             >
               <option value="">All projects</option>
@@ -450,39 +442,117 @@ export function QueuePage() {
               ))}
             </select>
           </label>
+          <label className="artifact-filter-field artifact-filter-select">
+            <span>Active work status</span>
+            <select
+              value={status ?? ""}
+              onChange={(event) => updateFilters("status", event.target.value)}
+            >
+              <option value="">All active</option>
+              <option value="queued">Queued</option>
+              <option value="running">Running</option>
+            </select>
+          </label>
         </div>
       </section>
 
+      <h2 ref={activeHeading} tabIndex={-1}>
+        Active work
+      </h2>
+      <FeedState
+        name="active work"
+        loading={queueLoading}
+        error={queueError}
+        updatedAt={queueUpdatedAt}
+      />
+      <div
+        className="queue-sections-grid"
+        key={JSON.stringify([projectID, status])}
+      >
+        {status !== "running" && (
+          <QueueSection
+            title="Queued builds"
+            activeStatus="queued"
+            items={queuedEntries.map(activeRow)}
+            loading={queueLoading}
+            error={queueError}
+            emptyMessage="Nothing is queued."
+          />
+        )}
+        {status !== "queued" && (
+          <QueueSection
+            title="Running builds"
+            activeStatus="running"
+            items={runningEntries.map(activeRow)}
+            loading={queueLoading}
+            error={queueError}
+            emptyMessage="No running builds."
+          />
+        )}
+      </div>
+      <h2>Recent outcomes</h2>
+      <div>
+        From up to {RECENT_BUILD_FETCH_LIMIT} recent builds ·{" "}
+        <Link
+          to={{
+            pathname: "/builds",
+            search: projectID
+              ? new URLSearchParams({ project_id: projectID }).toString()
+              : "",
+          }}
+        >
+          View build history
+        </Link>
+      </div>
+      <FeedState
+        name="recent outcomes"
+        loading={recentBuildsLoading}
+        error={recentBuildsError}
+        updatedAt={recentBuildsUpdatedAt}
+      />
       <div className="queue-sections-grid">
         <QueueSection
-          title="Running"
-          items={runningItems}
-          loading={queueLoading}
-          error={queueError}
-          emptyMessage="No running builds."
-        />
-        <QueueSection
-          title="Queued"
-          items={queuedItems}
-          loading={queueLoading}
-          error={queueError}
-          emptyMessage="Nothing is queued."
-        />
-        <QueueSection
-          title="Recent failed"
-          items={failedItems}
+          title="Recent failed builds"
+          items={failedBuilds.map(terminalRow)}
           loading={recentBuildsLoading}
           error={recentBuildsError}
           emptyMessage="No recent failures."
         />
         <QueueSection
-          title="Recent terminal"
-          items={terminalItems}
+          title="Other recent completed builds"
+          items={recentTerminalBuilds.map(terminalRow)}
           loading={recentBuildsLoading}
           error={recentBuildsError}
           emptyMessage="No recent terminal builds."
         />
       </div>
+    </div>
+  );
+}
+
+function FeedState({
+  name,
+  loading,
+  error,
+  updatedAt,
+}: {
+  name: string;
+  loading: boolean;
+  error: unknown;
+  updatedAt: number;
+}) {
+  return (
+    <div className="subtle-text">
+      {loading && <span role="status">Loading {name}…</span>}
+      {error ? (
+        <span role="alert">
+          Unable to load {name}.
+          {updatedAt ? " Showing last known results." : ""}{" "}
+        </span>
+      ) : null}
+      {updatedAt > 0 && (
+        <>Last updated {formatTime(new Date(updatedAt).toISOString())}</>
+      )}
     </div>
   );
 }

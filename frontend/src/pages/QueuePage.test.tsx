@@ -7,7 +7,9 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
+import type { QueueEntry } from "../types/build";
+import { formatTime } from "../utils/time";
 import { QueuePage } from "./QueuePage";
 import {
   cancelBuild,
@@ -25,6 +27,36 @@ vi.mock("../api", () => ({
   listQueue: vi.fn(),
 }));
 
+function HistoryControls() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <>
+      <output data-testid="url">
+        {location.pathname}
+        {location.search}
+        {location.hash}
+      </output>
+      <button onClick={() => navigate(-1)}>Back</button>
+      <button onClick={() => navigate(1)}>Forward</button>
+    </>
+  );
+}
+
+function entry(
+  number: number,
+  status: QueueEntry["status"] = "queued",
+): QueueEntry {
+  return {
+    build_id: `long-build-id-${number}`,
+    build_number: number,
+    status,
+    project_id: "project-1",
+    priority: 0,
+    created_at: "2026-01-01T00:00:00Z",
+  };
+}
+
 function renderPage(initialEntries: string[] = ["/"]) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -32,13 +64,15 @@ function renderPage(initialEntries: string[] = ["/"]) {
     },
   });
 
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={initialEntries}>
         <QueuePage />
+        <HistoryControls />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, queryClient };
 }
 
 describe("QueuePage", () => {
@@ -213,7 +247,7 @@ describe("QueuePage", () => {
       },
     ]);
 
-    renderPage(["/queue?project_id=project-1&status=queued"]);
+    renderPage(["/queue?project_id=project-1"]);
 
     await screen.findByRole("link", { name: "Build #13" });
     expect(mockedListQueue).toHaveBeenCalledWith({
@@ -257,7 +291,7 @@ describe("QueuePage", () => {
     expect(screen.getByText("Duration 1m 5s")).toBeTruthy();
     expect(screen.getByText("Duration 30s")).toBeTruthy();
     const terminalSection = screen
-      .getByRole("heading", { name: "Recent terminal" })
+      .getByRole("heading", { name: "Other recent completed builds" })
       .closest("section");
     expect(terminalSection).toBeTruthy();
     expect(
@@ -266,6 +300,10 @@ describe("QueuePage", () => {
         .map((link) => link.textContent),
     ).toEqual(["Build #14", "Build #10"]);
     expect(screen.queryByRole("link", { name: "Build #9" })).toBeNull();
+    expect(screen.getByText(/From up to 24 recent builds/)).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "View build history" }),
+    ).toHaveAttribute("href", "/builds?project_id=project-1");
   });
 
   it("confirms and cancels queued builds", async () => {
@@ -290,6 +328,12 @@ describe("QueuePage", () => {
     renderPage(["/queue"]);
 
     const cancelButton = await screen.findByRole("button", { name: "Cancel" });
+    confirmSpy.mockReturnValueOnce(false);
+    fireEvent.click(cancelButton);
+    expect(mockedCancelBuild).not.toHaveBeenCalled();
+    expect(cancelButton).toHaveFocus();
+    mockedListQueue.mockResolvedValue([]);
+    fireEvent.click(cancelButton);
     fireEvent.click(cancelButton);
 
     await waitFor(() => {
@@ -297,6 +341,10 @@ describe("QueuePage", () => {
       expect(mockedCancelBuild).toHaveBeenCalledWith("build-1");
     });
 
+    await screen.findByText("Build #12 canceled.");
+    expect(screen.getByRole("heading", { name: "Active work" })).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(mockedCancelBuild).toHaveBeenCalledTimes(1);
     confirmSpy.mockRestore();
   });
 
@@ -306,8 +354,11 @@ describe("QueuePage", () => {
 
     renderPage(["/queue"]);
 
-    await screen.findAllByText("Unable to load.");
-    expect(screen.getAllByText("Unable to load.").length).toBe(4);
+    await screen.findByText(/Unable to load active work/);
+    expect(screen.getByText(/Unable to load recent outcomes/)).toHaveAttribute(
+      "role",
+      "alert",
+    );
   });
 
   it("hydrates missing job names from project jobs across queue sections", async () => {
@@ -372,6 +423,121 @@ describe("QueuePage", () => {
       expect(mockedListJobsByProject).toHaveBeenCalledWith("project-1");
       expect(screen.getAllByRole("link", { name: "release" }).length).toBe(2);
       expect(screen.queryByRole("link", { name: "job-release" })).toBeNull();
+      expect(mockedListJobsByProject).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("reveals each snapshot independently in returned order and retains depth across refresh", async () => {
+    const entries = Array.from({ length: 14 }, (_, index) => entry(18 - index));
+    const running = Array.from({ length: 10 }, (_, index) =>
+      entry(60 - index, "running"),
+    );
+    mockedListQueue.mockResolvedValue([...entries, ...running]);
+    const { queryClient } = renderPage();
+    await screen.findByText("Showing 8 of 14 queued builds");
+    expect(screen.getByText("Showing 8 of 10 running builds")).toBeVisible();
+    const section = within(
+      screen
+        .getByRole("heading", { name: "Queued builds" })
+        .closest("section")!,
+    );
+    fireEvent.click(section.getByRole("button", { name: /Show more/ }));
+    expect(
+      section
+        .getAllByRole("link", { name: /^Build #/ })
+        .map((link) => link.textContent),
+    ).toEqual(entries.map((item) => `Build #${item.build_number}`));
+    fireEvent.click(screen.getByRole("button", { name: /Show more running/ }));
+    expect(screen.getByText("Showing 10 of 10 running builds")).toBeVisible();
+    expect(mockedListQueue).toHaveBeenCalledTimes(1);
+    mockedListQueue.mockRejectedValue(new Error("offline"));
+    await queryClient.invalidateQueries({ queryKey: ["queue"] });
+    await screen.findByText(/Showing last known results/);
+    expect(section.getByText("Showing 14 of 14 queued builds")).toBeVisible();
+    expect(screen.getByText("No recent failures.")).toBeVisible();
+    expect(screen.getAllByText(/Last updated/)).toHaveLength(2);
+    fireEvent.change(screen.getByLabelText("Active work status"), {
+      target: { value: "queued" },
+    });
+    fireEvent.click(screen.getByText("Back"));
+    await screen.findByText("Showing 8 of 14 queued builds");
+  });
+
+  it("round-trips URL filters through history and reload without refetching recent builds on status changes", async () => {
+    mockedListQueue.mockResolvedValue([]);
+    const view = renderPage(["/queue?keep=yes&status=invalid#anchor"]);
+    await screen.findByText("No running builds.");
+    expect(mockedListQueue).toHaveBeenLastCalledWith({
+      project_id: undefined,
+      status: undefined,
+    });
+    fireEvent.change(screen.getByLabelText("Active work status"), {
+      target: { value: "running" },
+    });
+    await waitFor(() =>
+      expect(mockedListQueue).toHaveBeenLastCalledWith({
+        project_id: undefined,
+        status: "running",
+      }),
+    );
+    expect(mockedListBuilds).toHaveBeenCalledTimes(1);
+    fireEvent.change(screen.getByLabelText("Project"), {
+      target: { value: "project-1" },
+    });
+    const url = "/queue?keep=yes&status=running&project_id=project-1#anchor";
+    expect(screen.getByTestId("url")).toHaveTextContent(url);
+    fireEvent.click(screen.getByText("Back"));
+    expect(screen.getByLabelText("Project")).toHaveValue("");
+    fireEvent.click(screen.getByText("Forward"));
+    expect(screen.getByTestId("url")).toHaveTextContent(url);
+    view.unmount();
+    renderPage([url]);
+    await screen.findByText("No running builds.");
+    expect(screen.getByLabelText("Active work status")).toHaveValue("running");
+    expect(mockedListQueue).toHaveBeenLastCalledWith({
+      project_id: "project-1",
+      status: "running",
+    });
+  });
+
+  it("keeps active timing and assignment explicit when history is unavailable", async () => {
+    const lease = "2026-03-14T10:00:00Z";
+    mockedListQueue.mockResolvedValue([
+      entry(1),
+      {
+        ...entry(2, "running"),
+        started_at: "2999-01-01T00:00:00Z",
+        worker_id: "worker-72",
+        lease_expires_at: lease,
+      },
+    ]);
+    mockedListBuilds.mockRejectedValue(new Error("offline"));
+    renderPage();
+    await screen.findByText("Waiting —");
+    expect(screen.getAllByText("Queued —")).toHaveLength(2);
+    for (const text of [
+      "Worker Unassigned",
+      "Worker worker-72",
+      "Running —",
+      `Lease expires ${formatTime(lease)}`,
+      "Lease expires —",
+    ])
+      expect(screen.getByText(text)).toBeVisible();
+    expect(screen.getAllByText("Priority 0")).toHaveLength(2);
+    expect(screen.getByText(/Unable to load recent outcomes/)).toBeVisible();
+  });
+
+  it("announces a denied cancellation without losing the row or focus", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockedListQueue.mockResolvedValue([entry(1)]);
+    mockedCancelBuild.mockRejectedValue(new Error("403 Forbidden"));
+    renderPage();
+    const button = await screen.findByRole("button", { name: "Cancel" });
+    button.focus();
+    fireEvent.click(button);
+    expect(await screen.findByRole("alert")).toHaveTextContent("403 Forbidden");
+    expect(button).toHaveFocus();
+    expect(screen.getByRole("link", { name: "Build #1" })).toBeVisible();
+    confirm.mockRestore();
   });
 });

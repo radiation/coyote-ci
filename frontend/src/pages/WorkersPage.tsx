@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { listWorkers } from "../api";
 import { PageHeader } from "../components/PageHeader";
+import { BuildIdentityLink } from "../components/BuildIdentityLink";
 import { StatusBadge } from "../components/StatusBadge";
 import { SummaryCard } from "../components/SummaryCard";
 import type { Worker } from "../types/worker";
@@ -10,16 +11,6 @@ import { FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL } from "../utils/build";
 import { formatCompactTime, formatTime } from "../utils/time";
 
 const STALE_WORKER_DISPLAY_RETENTION_MS = 24 * 60 * 60 * 1000;
-
-function buildLabel(worker: Worker): string {
-  if (typeof worker.current_build_number === "number") {
-    return `Build #${worker.current_build_number}`;
-  }
-  if (worker.current_build_id) {
-    return `Build ${worker.current_build_id.slice(0, 8)}`;
-  }
-  return "—";
-}
 
 function contextLabel(
   primary: string | null | undefined,
@@ -181,27 +172,21 @@ export function WorkersPage() {
         }
       />
 
-      <section className="dashboard-summary-grid" aria-label="Workers summary">
-        <SummaryCard
-          title="Total workers"
-          value={isLoading ? "Loading…" : String(total)}
-        />
-        <SummaryCard
-          title="Idle"
-          value={isLoading ? "Loading…" : String(idle)}
-          tone="info"
-        />
-        <SummaryCard
-          title="Busy"
-          value={isLoading ? "Loading…" : String(busy)}
-          tone="warning"
-        />
-        <SummaryCard
-          title="Stale"
-          value={isLoading ? "Loading…" : String(stale)}
-          tone={stale > 0 ? "danger" : "success"}
-        />
-      </section>
+      {workers && (
+        <section
+          className="dashboard-summary-grid"
+          aria-label="Visible workers summary"
+        >
+          <SummaryCard title="Visible workers" value={String(total)} />
+          <SummaryCard title="Idle" value={String(idle)} tone="info" />
+          <SummaryCard title="Busy" value={String(busy)} tone="warning" />
+          <SummaryCard
+            title="Stale"
+            value={String(stale)}
+            tone={stale > 0 ? "danger" : "success"}
+          />
+        </section>
+      )}
 
       <section className="panel dashboard-panel">
         <div className="dashboard-panel-header">
@@ -211,11 +196,14 @@ export function WorkersPage() {
           {hiddenOlderStaleWorkers.length > 0 ? (
             <div className="workers-hidden-notice">
               <span className="subtle-text">
-                {hiddenOlderStaleWorkers.length} older stale workers hidden
+                {hiddenOlderStaleWorkers.length} older stale{" "}
+                {hiddenOlderStaleWorkers.length === 1 ? "worker" : "workers"}{" "}
+                {showHiddenStaleWorkers ? "shown" : "hidden"}
               </span>
               <button
                 type="button"
                 className="secondary-button workers-hidden-toggle"
+                aria-expanded={showHiddenStaleWorkers}
                 onClick={() => {
                   setShowHiddenStaleWorkers((current) => !current);
                 }}
@@ -228,75 +216,103 @@ export function WorkersPage() {
           ) : null}
         </div>
 
-        {isLoading ? <p>Loading workers…</p> : null}
+        {isLoading ? <p role="status">Loading workers…</p> : null}
         {error ? (
           <div className="empty-state">
-            <p className="error-text">Unable to load workers.</p>
+            <p className="error-text" role="alert">
+              Unable to load workers.
+              {workers ? " Showing last known results." : ""}
+            </p>
           </div>
         ) : null}
         {!isLoading && !error && total === 0 ? (
           <div className="empty-state">
-            <p className="empty">No workers have reported heartbeats yet.</p>
+            <p className="empty">
+              {hiddenOlderStaleWorkers.length
+                ? "All reported workers are hidden by the stale-worker filter."
+                : "No workers have reported heartbeats yet."}
+            </p>
           </div>
         ) : null}
 
-        {!isLoading && !error && visibleWorkers.length > 0 ? (
-          <table className="table workers-table">
-            <thead>
-              <tr>
-                <th>Worker</th>
-                <th>Status</th>
-                <th>Current build</th>
-                <th>Current step</th>
-                <th>Project</th>
-                <th>Job</th>
-                <th>Last heartbeat</th>
-                <th>Lease expires</th>
-                <th>Claimed at</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleWorkers.map((worker) => (
-                <tr
-                  key={worker.id}
-                  className={
-                    worker.status === "stale" ? "workers-row-stale" : undefined
-                  }
-                >
-                  <td>
-                    <strong>{worker.name}</strong>
-                    <div className="subtle-text">{worker.id}</div>
-                  </td>
-                  <td>
-                    <StatusBadge status={worker.status} />
-                    {worker.stale_lease ? (
-                      <div className="subtle-text">Expired lease</div>
-                    ) : null}
-                    {worker.stale_heartbeat ? (
-                      <div className="subtle-text">Heartbeat overdue</div>
-                    ) : null}
-                  </td>
-                  <td>
-                    {worker.current_build_id ? (
-                      <Link to={`/builds/${worker.current_build_id}`}>
-                        {buildLabel(worker)}
-                      </Link>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td>{currentStepLabel(worker)}</td>
-                  <td>
-                    {contextLabel(worker.project_name, worker.project_id)}
-                  </td>
-                  <td>{contextLabel(worker.job_name, worker.job_id)}</td>
-                  <td>{formatTime(worker.last_heartbeat_at)}</td>
-                  <td>{formatTime(worker.lease_expires_at)}</td>
-                  <td>{formatTime(worker.claimed_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {visibleWorkers.length > 0 ? (
+          <ul className="activity-list worker-activity">
+            {visibleWorkers.map((worker) => (
+              <li
+                key={worker.id}
+                className={
+                  worker.status === "stale" ? "workers-row-stale" : undefined
+                }
+              >
+                <div className="activity-list-title-row">
+                  <strong>{worker.name}</strong>
+                  <StatusBadge status={worker.status} />
+                  <span className="subtle-text">{worker.id}</span>
+                  {worker.stale_lease ? (
+                    <div className="subtle-text">Expired lease</div>
+                  ) : null}
+                  {worker.stale_heartbeat ? (
+                    <div className="subtle-text">Heartbeat overdue</div>
+                  ) : null}
+                </div>
+                <dl>
+                  <div>
+                    <dt>Current build</dt>
+                    <dd>
+                      {worker.current_build_id ? (
+                        <BuildIdentityLink
+                          id={worker.current_build_id}
+                          number={worker.current_build_number}
+                        />
+                      ) : (
+                        "—"
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Current step</dt>
+                    <dd>{currentStepLabel(worker)}</dd>
+                  </div>
+                  <div>
+                    <dt>Project</dt>
+                    <dd>
+                      {worker.project_id ? (
+                        <Link to={`/projects/${worker.project_id}`}>
+                          {contextLabel(worker.project_name, worker.project_id)}
+                        </Link>
+                      ) : (
+                        contextLabel(worker.project_name, null)
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Job</dt>
+                    <dd>
+                      {worker.job_id ? (
+                        <Link to={`/jobs/${worker.job_id}`}>
+                          {contextLabel(worker.job_name, worker.job_id)}
+                        </Link>
+                      ) : (
+                        contextLabel(worker.job_name, null)
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Last heartbeat</dt>
+                    <dd>{formatTime(worker.last_heartbeat_at)}</dd>
+                  </div>
+                  <div>
+                    <dt>Claimed at</dt>
+                    <dd>{formatTime(worker.claimed_at)}</dd>
+                  </div>
+                  <div>
+                    <dt>Lease expires</dt>
+                    <dd>{formatTime(worker.lease_expires_at)}</dd>
+                  </div>
+                </dl>
+              </li>
+            ))}
+          </ul>
         ) : null}
       </section>
     </div>
