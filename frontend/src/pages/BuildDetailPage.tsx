@@ -281,6 +281,7 @@ export function BuildDetailPage() {
         }
         actions={
           <BuildDetailHeaderActions
+            historySearch={searchParams}
             build={currentBuild}
             cancelPending={cancelBuildMutation.isPending}
             rerunPending={rerunBuildMutation.isPending}

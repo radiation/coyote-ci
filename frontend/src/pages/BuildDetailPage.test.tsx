@@ -736,7 +736,9 @@ describe("BuildDetailPage", () => {
     render(
       <QueryClientProvider client={client}>
         <MemoryRouter
-          initialEntries={["/builds/build-1?from=notification&step=0"]}
+          initialEntries={[
+            "/builds/build-1?from=notification&step=0&history=project_id%3Dproject-1%26status%3Dfailed%26limit%3D10%26offset%3D20%26redirect%3Dhttps%3A%2F%2Fexample.com",
+          ]}
         >
           <BuildDetailLocationSearch />
           <Routes>
@@ -758,6 +760,12 @@ describe("BuildDetailPage", () => {
     });
     expect(notify).toHaveAttribute("aria-current", "step");
     expect(notify).toHaveFocus();
+    expect(
+      screen.getByRole("link", { name: "Back to builds" }),
+    ).toHaveAttribute(
+      "href",
+      "/builds?project_id=project-1&status=failed&limit=10&offset=20",
+    );
     expect(mockedGetStepLogs).toHaveBeenCalledTimes(2);
   });
 

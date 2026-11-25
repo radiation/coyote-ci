@@ -81,6 +81,11 @@ Recent direction includes:
 - provenance/source information that is visible and easy to navigate
 - cards/sections that avoid unnecessary density while still fitting important context
 
+Global Builds history uses newest-first offset windows; its status filter applies only to the loaded page. Backend follow-ups, outside the frontend redesign:
+
+- Add server-side status and job filters; evaluate time-window filtering.
+- Apply read visibility before pagination to avoid sparse or empty authorized pages, and return reliable pagination metadata or a continuation token.
+
 ## Current backend direction
 
 The backend should preserve clear layered boundaries:

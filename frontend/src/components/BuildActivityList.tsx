@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { StatusBadge } from "./StatusBadge";
+import { BuildIdentityLink } from "./BuildIdentityLink";
 import type { Build, QueueEntry } from "../types/build";
 import { formatTime } from "../utils/time";
 
@@ -140,9 +141,10 @@ export function BuildActivityPanel({
                 >
                   <div className="activity-list-main">
                     <div className="activity-list-title-row">
-                      <Link to={`/builds/${entry.build_id}`}>
-                        Build #{entry.build_number}
-                      </Link>
+                      <BuildIdentityLink
+                        id={entry.build_id}
+                        number={entry.build_number}
+                      />
                       <StatusBadge status={entry.status} />
                     </div>
                     {context ? <p className="subtle-text">{context}</p> : null}
@@ -165,12 +167,10 @@ export function BuildActivityPanel({
               >
                 <div className="activity-list-main">
                   <div className="activity-list-title-row">
-                    <Link to={`/builds/${build.id}`}>
-                      Build{" "}
-                      {build.build_number
-                        ? `#${build.build_number}`
-                        : build.id.slice(0, 8)}
-                    </Link>
+                    <BuildIdentityLink
+                      id={build.id}
+                      number={build.build_number}
+                    />
                     <StatusBadge status={build.status} />
                   </div>
                   {context ? <p className="subtle-text">{context}</p> : null}
