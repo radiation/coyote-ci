@@ -627,6 +627,12 @@ fieldset {
   margin-bottom: 4px;
 }
 
+.job-view-nav a[aria-current="page"] {
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
 .page-header-copy {
   min-width: 0;
 }

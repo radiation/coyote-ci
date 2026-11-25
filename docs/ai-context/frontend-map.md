@@ -13,6 +13,7 @@ Start with this file, `docs/ai-context/current-priorities.md`, `docs/ai-context/
 
 ## Pages and routes
 
+- Job detail defaults to Activity: `frontend/src/pages/JobDetailPage.tsx` owns job-scoped execution history, successful outputs, and URL-backed Configuration (`?view=configuration`, also `#job-configuration`). `frontend/src/pages/JobDetailForm.tsx` retains a same-job draft and mounts credential-dependent inputs only in Configuration. `frontend/src/components/RunJobAction.tsx` runs the saved job from detail and All jobs.
 - `frontend/src/pages`: page-level containers. Start here for user-visible behavior, data loading, and page-specific interactions.
 - Authenticated build investigation: `frontend/src/pages/BuildDetailPage.tsx` resolves `?step=` or the default failed/running step. `BuildDetailPage.sections.tsx` owns the workspace layout and tabs, `frontend/src/components/StepList.tsx` renders execution groups and details, and `frontend/src/components/StepLogPanel.tsx` owns history and SSE for the selected build/step. The public detail page is separate.
 - Artifact browser/release/lineage UI: `ArtifactsPage.tsx`, `ArtifactLogicalBrowserPage.tsx`, `ArtifactDetailPage.tsx`, plus `components/ArtifactBrowser.tsx` and `components/BuildArtifactsSection.tsx`.

@@ -108,7 +108,10 @@ describe("JobsListPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("backend-ci")).toBeTruthy();
-      expect(screen.getByText("Platform")).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Platform" })).toHaveAttribute(
+        "href",
+        "/projects/project-1",
+      );
       expect(
         screen.getByText("https://github.com/example/backend.git"),
       ).toBeTruthy();
@@ -128,7 +131,9 @@ describe("JobsListPage", () => {
     renderPage();
 
     await screen.findByText("backend-ci");
-    fireEvent.click(screen.getByRole("button", { name: "Run Now" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Run Now: backend-ci" }),
+    );
 
     await waitFor(() => {
       expect(mockedRunJob).toHaveBeenCalledWith("job-1");
@@ -142,7 +147,9 @@ describe("JobsListPage", () => {
     renderPage();
 
     await screen.findByText("backend-ci");
-    fireEvent.click(screen.getByRole("button", { name: "Run Now" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Run Now: backend-ci" }),
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/Failed to run job/)).toBeTruthy();

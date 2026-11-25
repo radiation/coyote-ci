@@ -177,5 +177,8 @@ describe("JobCreatePage", () => {
       expect(screen.getByLabelText("Project")).toHaveValue("project-2");
     });
     expect(screen.getByText("Release (release)")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: /back to project/i }),
+    ).toHaveAttribute("href", "/projects/project-2");
   });
 });
