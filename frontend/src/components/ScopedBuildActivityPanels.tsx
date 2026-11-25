@@ -193,7 +193,12 @@ export function QueueActivityPanel({
   const error = scope.type === "job" ? jobQueueError : scopedQueueError;
   const normalizedQueueEntries =
     scope.type === "project"
-      ? hydrateJobNames(queueEntries ?? [], projectJobNames)
+      ? hydrateJobNames(
+          (queueEntries ?? []).filter(
+            (entry) => entry.project_id === scope.projectId,
+          ),
+          projectJobNames,
+        )
       : (queueEntries ?? []);
 
   return (
@@ -211,11 +216,13 @@ export function QueueActivityPanel({
 
 export function RecentBuildsPanel({
   scope,
+  resultsOnly = false,
   title = "Recent builds",
   limit = DEFAULT_ACTIVITY_LIMIT,
   pollInterval,
 }: {
   scope: BuildActivityScope;
+  resultsOnly?: boolean;
   title?: string;
   limit?: number;
   pollInterval?: number | false;
@@ -300,7 +307,12 @@ export function RecentBuildsPanel({
       ? hydrateJobNames(builds ?? [], projectJobNames)
       : (builds ?? []);
 
-  const items = mapBuilds(sortByNewest(normalizedBuilds).slice(0, limit));
+  const visible = normalizedBuilds.filter(
+    (build) =>
+      (scope.type !== "project" || build.project_id === scope.projectId) &&
+      (!resultsOnly || !isActiveBuild(build.status)),
+  );
+  const items = mapBuilds(sortByNewest(visible).slice(0, limit));
 
   return (
     <BuildActivityPanel
@@ -309,7 +321,11 @@ export function RecentBuildsPanel({
       loadingMessage={isLoading ? "Loading recent builds…" : undefined}
       error={error}
       errorPrefix="Failed to load builds"
-      emptyMessage="No recent build activity."
+      emptyMessage={
+        resultsOnly
+          ? "No completed builds in the recent window."
+          : "No recent build activity."
+      }
       contextMode={contextModeForScope(scope)}
     />
   );

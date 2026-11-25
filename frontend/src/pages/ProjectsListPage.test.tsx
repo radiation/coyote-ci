@@ -102,10 +102,26 @@ describe("ProjectsListPage", () => {
       expect(screen.getByText("platform")).toBeTruthy();
       expect(screen.getByText("Core platform pipelines")).toBeTruthy();
     });
+    expect(screen.getByRole("link", { name: "Platform" })).toHaveAttribute(
+      "href",
+      "/projects/project-1",
+    );
+    expect(
+      screen.getByRole("link", { name: "Settings for Platform" }),
+    ).toHaveAttribute("href", "/projects/project-1?view=settings");
+    const search = screen.getByRole("searchbox", { name: "Find a project" });
+    fireEvent.change(search, { target: { value: "missing" } });
+    expect(screen.getByText("No matching projects.")).toBeTruthy();
+    fireEvent.change(search, { target: { value: "PLAT" } });
+    expect(screen.getByRole("link", { name: "Platform" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
   it("creates a project and navigates to its detail page", async () => {
     renderPage();
+    fireEvent.click(
+      screen.getByText("Create Project", { selector: "summary" }),
+    );
 
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "Release" },

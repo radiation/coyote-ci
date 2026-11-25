@@ -1,12 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import {
-  createProject,
-  deleteProject,
-  listProjects,
-  listPublicProjects,
-} from "../api";
+import { createProject, listProjects, listPublicProjects } from "../api";
 import { useAuth } from "../auth-context";
 import { formatTime } from "../utils/time";
 
@@ -71,6 +66,7 @@ function AuthenticatedProjectsListPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
+  const [filter, setFilter] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -99,18 +95,11 @@ function AuthenticatedProjectsListPage() {
     },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: deleteProject,
-    onMutate: () => {
-      setErrorMessage(null);
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["projects"] });
-    },
-    onError: (mutationError) => {
-      setErrorMessage(`Failed to delete project: ${String(mutationError)}`);
-    },
-  });
+  const visible = projects?.filter((project) =>
+    `${project.name} ${project.slug}`
+      .toLowerCase()
+      .includes(filter.trim().toLowerCase()),
+  );
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -145,11 +134,16 @@ function AuthenticatedProjectsListPage() {
         </div>
       </div>
 
-      <section className="panel">
-        <h3>Create Project</h3>
-        <p className="subtle-text">
-          Projects are the first durable grouping boundary for jobs.
-        </p>
+      <label>
+        Find a project{" "}
+        <input
+          type="search"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+        />
+      </label>
+      <details className="project-create">
+        <summary>Create Project</summary>
 
         <form className="job-form" onSubmit={onSubmit}>
           <label htmlFor="project-name">Name</label>
@@ -184,7 +178,7 @@ function AuthenticatedProjectsListPage() {
             {createMutation.isPending ? "Creating…" : "Create Project"}
           </button>
         </form>
-      </section>
+      </details>
 
       {errorMessage && <p className="error-text">{errorMessage}</p>}
       {isLoading && <p>Loading projects…</p>}
@@ -201,7 +195,10 @@ function AuthenticatedProjectsListPage() {
         </div>
       )}
 
-      {projects && projects.length > 0 && (
+      {projects && projects.length > 0 && !visible?.length && (
+        <p>No matching projects.</p>
+      )}
+      {visible && visible.length > 0 && (
         <table className="table">
           <thead>
             <tr>
@@ -213,27 +210,21 @@ function AuthenticatedProjectsListPage() {
             </tr>
           </thead>
           <tbody>
-            {projects.map((project) => (
+            {visible.map((project) => (
               <tr key={project.id}>
-                <td>{project.name}</td>
+                <td>
+                  <Link to={`/projects/${project.id}`}>{project.name}</Link>
+                </td>
                 <td>{project.slug}</td>
                 <td>{project.description || "—"}</td>
                 <td>{formatTime(project.updated_at)}</td>
                 <td>
-                  <div className="table-actions">
-                    <Link to={`/projects/${project.id}`}>Open</Link>
-                    <button
-                      type="button"
-                      className="table-action-button"
-                      onClick={() => deleteMutation.mutate(project.id)}
-                      disabled={deleteMutation.isPending}
-                    >
-                      {deleteMutation.isPending &&
-                      deleteMutation.variables === project.id
-                        ? "Deleting…"
-                        : "Delete"}
-                    </button>
-                  </div>
+                  <Link
+                    aria-label={`Settings for ${project.name}`}
+                    to={`/projects/${project.id}?view=settings`}
+                  >
+                    Settings
+                  </Link>
                 </td>
               </tr>
             ))}
