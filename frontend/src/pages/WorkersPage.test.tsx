@@ -93,6 +93,15 @@ describe("WorkersPage", () => {
 
     await screen.findByText("idle-worker");
     expect(screen.getByText("2")).toBeTruthy();
+    expect(screen.getByText("Visible workers")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Platform" })).toHaveAttribute(
+      "href",
+      "/projects/project-1",
+    );
+    expect(screen.getByRole("link", { name: "release" })).toHaveAttribute(
+      "href",
+      "/jobs/job-1",
+    );
     expect(screen.getByRole("link", { name: "Build #18" })).toHaveAttribute(
       "href",
       "/builds/build-1",
@@ -136,6 +145,8 @@ describe("WorkersPage", () => {
     renderPage();
 
     await screen.findByText("Unable to load workers.");
+    expect(screen.queryByText("Visible workers")).toBeNull();
+    expect(screen.queryByText(/No workers have reported/)).toBeNull();
   });
 
   it("falls back to durable project and job ids when names are missing", async () => {
@@ -239,7 +250,7 @@ describe("WorkersPage", () => {
 
     await screen.findByText("idle-worker");
     expect(screen.queryByText("old-stale-worker")).toBeNull();
-    expect(screen.getByText("1 older stale workers hidden")).toBeTruthy();
+    expect(screen.getByText("1 older stale worker hidden")).toBeTruthy();
   });
 
   it("reveals older stale workers when toggled", async () => {
@@ -256,12 +267,14 @@ describe("WorkersPage", () => {
 
     renderPage();
 
-    await screen.findByText("1 older stale workers hidden");
+    await screen.findByText("1 older stale worker hidden");
+    expect(screen.getByText(/All reported workers are hidden/)).toBeVisible();
     fireEvent.click(
       screen.getByRole("button", { name: "Show hidden stale workers" }),
     );
 
     expect(await screen.findByText("old-stale-worker")).toBeTruthy();
+    expect(screen.getByText("1 older stale worker shown")).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Hide older stale workers" }),
     ).toBeTruthy();
