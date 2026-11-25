@@ -1,6 +1,7 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { APIError, listBuilds, listQueue, listWorkers } from "../api";
+import { listBuilds, listQueue, listWorkers } from "../api";
+import { denied, overviewKeys } from "../utils/overviewSnapshots";
 import { BuildIdentityLink } from "../components/BuildIdentityLink";
 import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
@@ -11,12 +12,6 @@ import { shouldHideStaleWorker } from "../utils/workerVisibility";
 
 const HISTORY_LIMIT = 24;
 const historyURL = `/builds?limit=${HISTORY_LIMIT}&offset=0`;
-
-function denied(error: unknown) {
-  return (
-    error instanceof APIError && (error.status === 401 || error.status === 403)
-  );
-}
 
 function retry(count: number, error: Error) {
   return !denied(error) && count < 1;
@@ -98,7 +93,7 @@ function ExecutionList({ rows }: { rows: (Build | QueueEntry)[] }) {
 
 export function DashboardPage() {
   const queue = useQuery({
-    queryKey: ["queue", "", undefined],
+    queryKey: overviewKeys.queue,
     queryFn: () => listQueue(),
     retry,
     refetchInterval: ({ state }) =>
@@ -109,14 +104,14 @@ export function DashboardPage() {
           : SLOW_POLL_INTERVAL,
   });
   const history = useQuery({
-    queryKey: ["queue-page", "recent-builds", ""],
+    queryKey: overviewKeys.history,
     queryFn: () => listBuilds({ limit: HISTORY_LIMIT, offset: 0 }),
     retry,
     refetchInterval: ({ state }) =>
       denied(state.error) ? false : SLOW_POLL_INTERVAL,
   });
   const workers = useQuery({
-    queryKey: ["workers"],
+    queryKey: overviewKeys.workers,
     queryFn: listWorkers,
     retry,
     refetchInterval: ({ state }) =>
@@ -125,7 +120,13 @@ export function DashboardPage() {
 
   const entries = snapshot(queue);
   const running = entries?.filter((entry) => entry.status === "running") ?? [];
-  const runningPreview = running.slice(0, 3);
+  const runningPreview = running
+    .sort(
+      (left, right) =>
+        Date.parse(right.started_at ?? right.created_at) -
+        Date.parse(left.started_at ?? left.created_at),
+    )
+    .slice(0, 3);
   const builds = snapshot(history);
   const recent = [...(builds ?? [])].sort(
     (left, right) =>

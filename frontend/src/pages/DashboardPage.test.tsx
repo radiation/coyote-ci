@@ -7,6 +7,7 @@ import { APIError } from "../api/request";
 import type { Build, QueueEntry } from "../types/build";
 import type { Worker } from "../types/worker";
 import { DashboardPage } from "./DashboardPage";
+import { createOverviewAwareQueryCache } from "../utils/overviewSnapshots";
 
 vi.mock("../api", async () => ({
   APIError: (await vi.importActual<typeof import("../api")>("../api")).APIError,
@@ -67,6 +68,7 @@ function worker(
 }
 function renderPage() {
   const client = new QueryClient({
+    queryCache: createOverviewAwareQueryCache(),
     defaultOptions: { queries: { retryDelay: 1 } },
   });
   render(
@@ -89,11 +91,13 @@ describe("DashboardPage", () => {
   });
 
   it("counts the complete active snapshot, caps previews and links to filtered queue and build investigation", async () => {
-    vi.mocked(listQueue).mockResolvedValue(
-      [1, 2, 3, 4]
-        .map((number) => entry(number, "running"))
-        .concat(entry(5, "queued")),
-    );
+    vi.mocked(listQueue).mockResolvedValue([
+      entry(5, "queued"),
+      entry(1, "running"),
+      { ...entry(2, "running"), started_at: "2026-05-01T02:00:00Z" },
+      { ...entry(3, "running"), created_at: "2026-05-01T03:00:00Z" },
+      { ...entry(4, "running"), started_at: "2026-05-01T04:00:00Z" },
+    ]);
     renderPage();
     const active = region("Active work");
     expect(
@@ -103,7 +107,11 @@ describe("DashboardPage", () => {
       "href",
       "/queue?status=queued",
     );
-    expect(active.getAllByRole("listitem")).toHaveLength(3);
+    expect(
+      active
+        .getAllByRole("link", { name: /^Build #/ })
+        .map((link) => link.textContent),
+    ).toEqual(["Build #4", "Build #3", "Build #2"]);
     expect(active.getByRole("link", { name: "Build #2" })).toHaveAttribute(
       "href",
       "/builds/execution-2",
@@ -233,5 +241,17 @@ describe("DashboardPage", () => {
     ).toBeTruthy();
     expect(screen.queryByText("Build #7")).toBeNull();
     expect(screen.getByRole("link", { name: "0 Running" })).toBeTruthy();
+    vi.mocked(listBuilds).mockRejectedValue(new APIError(500, "unavailable"));
+    await refresh();
+    expect(
+      await screen.findByText(/^Unable to refresh recent builds/),
+    ).toBeTruthy();
+    expect(screen.queryByText("Build #7")).toBeNull();
+    expect(screen.queryByText(/Last known results/)).toBeNull();
+
+    vi.mocked(listBuilds).mockResolvedValue([build(8, "failed")]);
+    await refresh();
+    expect(await screen.findByText("Build #8")).toBeTruthy();
+    expect(screen.queryByText("Build #7")).toBeNull();
   });
 });
