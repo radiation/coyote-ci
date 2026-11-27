@@ -5,9 +5,11 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { createJobVersionTags, listArtifacts, listProjects } from "../api";
 import { ArtifactBrowser } from "../components/ArtifactBrowser";
+import { ArtifactNavigation } from "../components/ArtifactNavigation";
+import { invalidateArtifactAssignment } from "../queries/artifactAssignments";
 import type { ArtifactBrowseVersion, ArtifactType } from "../types";
 
 const DEFAULT_LOGICAL_PAGE_SIZE = 20;
@@ -143,16 +145,15 @@ export function ArtifactLogicalBrowserPage() {
       jobID: string;
       version: string;
       artifactID: string;
+      buildID: string;
     }) =>
       createJobVersionTags(jobID, {
         version,
+        kind: "version",
         artifact_ids: [artifactID],
       }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["artifactLogicalBrowse"],
-      });
-    },
+    onSuccess: (_, { artifactID, buildID }) =>
+      invalidateArtifactAssignment(queryClient, artifactID, buildID, "version"),
   });
 
   const artifacts = artifactResults.slice(0, DEFAULT_LOGICAL_PAGE_SIZE);
@@ -224,6 +225,7 @@ export function ArtifactLogicalBrowserPage() {
       jobID: version.job_id,
       version: releaseVersion,
       artifactID: version.artifact_id,
+      buildID: version.build_id,
     });
   }
 
@@ -231,17 +233,14 @@ export function ArtifactLogicalBrowserPage() {
     <>
       <div className="page-header-row">
         <div>
-          <h2>Repository view</h2>
+          <h2>Packages</h2>
           <p className="subtle-text">
-            Grouped artifact repository view for versions and channels. Use this
-            view to see what exists, what channels resolve today, and which
-            build produced each artifact.
+            Matching outputs grouped by package, with immutable versions and
+            mutable channels.
             {isFetching && !isLoading ? " Updating…" : ""}
           </p>
         </div>
-        <Link className="secondary-button" to="/artifacts">
-          Artifact listing
-        </Link>
+        <ArtifactNavigation />
       </div>
 
       <section
@@ -250,7 +249,7 @@ export function ArtifactLogicalBrowserPage() {
       >
         <div className="artifact-filter-toolbar">
           <div>
-            <h3>Repository view</h3>
+            <h3>Filter packages</h3>
             <p className="subtle-text">
               {hasActiveFilters
                 ? "Filtered repository view"

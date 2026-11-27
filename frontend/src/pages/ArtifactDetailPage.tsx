@@ -10,6 +10,7 @@ import {
   getBuildArtifacts,
 } from "../api";
 import { VersionTagEditor } from "../components/VersionTagEditor";
+import { invalidateArtifactAssignment } from "../queries/artifactAssignments";
 import { StatusBadge } from "../components/StatusBadge";
 import type { ArtifactDetail, BuildArtifact, VersionTag } from "../types";
 import {
@@ -246,7 +247,7 @@ export function ArtifactDetailPage() {
     }: {
       jobID: string;
       version: string;
-      kind?: "version" | "channel";
+      kind: "version" | "channel";
       artifactID: string;
     }) =>
       createJobVersionTags(jobID, {
@@ -254,16 +255,13 @@ export function ArtifactDetailPage() {
         kind,
         artifact_ids: [artifactID],
       }),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["artifact", id] }),
-        queryClient.invalidateQueries({
-          queryKey: ["buildArtifacts", data?.build_id],
-        }),
-        queryClient.invalidateQueries({ queryKey: ["artifactLogicalBrowse"] }),
-        queryClient.invalidateQueries({ queryKey: ["artifactCatalog"] }),
-      ]);
-    },
+    onSuccess: (_, { artifactID, kind }) =>
+      invalidateArtifactAssignment(
+        queryClient,
+        artifactID,
+        data!.build_id,
+        kind,
+      ),
   });
 
   if (isLoading) {
@@ -274,7 +272,11 @@ export function ArtifactDetailPage() {
   }
   if (error) {
     return (
-      <p className="error-text">Failed to load artifact: {String(error)}</p>
+      <p role="alert" className="error-text">
+        {error instanceof APIError && error.status === 403
+          ? "Permission denied for this output."
+          : `Failed to load artifact: ${String(error)}`}
+      </p>
     );
   }
   if (!data) {
@@ -288,8 +290,10 @@ export function ArtifactDetailPage() {
   const channelTags = (data.version_tags ?? []).filter(
     (tag) => tagKind(tag) === "channel",
   );
-  const sourceRef = build ? buildSourceRefValue(build) : null;
-  const primaryCommit = build ? buildPrimaryCommitValue(build) : null;
+  const sourceRef =
+    (build && buildSourceRefValue(build)) || data.lineage?.git_ref || null;
+  const primaryCommit =
+    (build && buildPrimaryCommitValue(build)) || data.lineage?.git_sha || null;
   const sourceRefHref = build ? buildGitHubRefURL(build, sourceRef) : null;
   const primaryCommitHref = build
     ? buildGitHubCommitURL(build, primaryCommit)
@@ -304,10 +308,7 @@ export function ArtifactDetailPage() {
   const lineageVersion = artifactLineageVersionLabel(data);
   const lineageChannel = artifactLineageChannelLabel(data);
 
-  async function assignArtifactTag(
-    value: string,
-    kind?: "version" | "channel",
-  ) {
+  async function assignArtifactTag(value: string, kind: "version" | "channel") {
     if (!tagJobID) {
       throw new Error("Artifact is not associated with a job.");
     }
@@ -421,7 +422,7 @@ export function ArtifactDetailPage() {
             <span>{artifactTypeLabel(data.artifact_type)}</span>
           </div>
           <div>
-            <strong>Versions</strong>
+            <strong>Immutable versions</strong>
             <VersionTagEditor
               tags={versionTags}
               emptyText="No versions yet."
@@ -442,6 +443,11 @@ export function ArtifactDetailPage() {
               emptyText="No channels yet."
               inputLabel={`artifact-detail-channel-${artifactID}`}
               submitLabel="Assign channel"
+              confirmAssignment={(channel) =>
+                window.confirm(
+                  `Assign channel ${channel} to output ${artifactID} from ${buildLabel(data)} (${data.build_id})?\nPackage: ${projectLabel(data)} / ${tagJobID} / ${data.path}\nAn existing channel target may be replaced. Immutable versions will not change.`,
+                )
+              }
               placeholder="stable"
               requiredMessage="Channel is required."
               onAssign={
@@ -472,14 +478,12 @@ export function ArtifactDetailPage() {
             <span>{data.content_type ?? "—"}</span>
           </div>
           <div className="artifact-version-meta-full">
-            <strong>Digest</strong>
+            <strong>SHA-256</strong>
             <span
               className="artifact-mono"
               title={data.checksum_sha256 ?? undefined}
             >
-              {data.checksum_sha256
-                ? formatChecksumDisplay(data.checksum_sha256)
-                : "—"}
+              {data.checksum_sha256 ?? "—"}
             </span>
           </div>
         </div>
@@ -491,13 +495,9 @@ export function ArtifactDetailPage() {
           <div>
             <strong>Project</strong>
             <span>
-              {build ? (
-                <Link to={`/projects/${build.project_id}`}>
-                  {buildPageProjectLabel(build)}
-                </Link>
-              ) : (
-                projectLabel(data)
-              )}
+              <Link to={`/projects/${data.project_id}`}>
+                {build ? buildPageProjectLabel(build) : projectLabel(data)}
+              </Link>
             </span>
           </div>
           <div>
@@ -567,9 +567,9 @@ export function ArtifactDetailPage() {
             <span className="artifact-mono">
               {primaryCommit ? (
                 primaryCommitHref ? (
-                  <a href={primaryCommitHref}>{shortSHA(primaryCommit)}</a>
+                  <a href={primaryCommitHref}>{primaryCommit}</a>
                 ) : (
-                  shortSHA(primaryCommit)
+                  primaryCommit
                 )
               ) : (
                 "—"
@@ -589,7 +589,7 @@ export function ArtifactDetailPage() {
       </section>
 
       <section className="detail-panel">
-        <h3>Related artifacts</h3>
+        <h3>Sibling outputs</h3>
         {buildArtifactsLoading ? (
           <p className="subtle-text">Loading related artifacts…</p>
         ) : buildArtifactsError ? (

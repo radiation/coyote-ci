@@ -133,7 +133,7 @@ describe("ArtifactsPage", () => {
     renderPage();
 
     expect(
-      await screen.findByRole("link", { name: "Repository view" }),
+      await screen.findByRole("link", { name: "Packages" }),
     ).toHaveAttribute("href", "/artifacts/logical");
 
     const artifactLink = await screen.findByRole("link", {
@@ -156,7 +156,7 @@ describe("ArtifactsPage", () => {
       within(card).getByRole("link", { name: "Open artifact" }),
     ).toHaveAttribute("href", "/artifacts/artifact-1");
     expect(
-      within(card).getByRole("link", { name: "Repository view" }),
+      within(card).getByRole("link", { name: "Find package" }),
     ).toHaveAttribute(
       "href",
       "/artifacts/logical?q=packages%2Fpkg-a.tgz&job_id=job-1",
@@ -170,6 +170,22 @@ describe("ArtifactsPage", () => {
     expect(within(card).getByText("0123456789ab…89abcdef")).toHaveAttribute(
       "title",
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    );
+  });
+
+  it("switches to Packages with project and job scope only", async () => {
+    renderPage([
+      "/artifacts?project_id=project-1&job_id=job-1&build_id=build-1&q=41&page=2",
+    ]);
+    expect(
+      await screen.findByRole("link", { name: "Packages" }),
+    ).toHaveAttribute(
+      "href",
+      "/artifacts/logical?project_id=project-1&job_id=job-1",
+    );
+    expect(screen.getByRole("link", { name: "Build outputs" })).toHaveAttribute(
+      "aria-current",
+      "page",
     );
   });
 

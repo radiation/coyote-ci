@@ -1,3 +1,15 @@
+.artifact-browser-list,
+.artifact-detail-header,
+.artifact-build-list,
+.artifact-detail-grid {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+nav[aria-label="Artifact views"] [aria-current="page"] {
+  font-weight: 700;
+  text-decoration: underline;
+}
 :root {
   --color-bg: #ecf2f9;
   --color-bg-accent: rgba(22, 93, 202, 0.18);

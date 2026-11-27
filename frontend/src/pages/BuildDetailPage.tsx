@@ -1,3 +1,4 @@
+import { invalidateArtifactAssignment } from "../queries/artifactAssignments";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Link,
@@ -142,10 +143,20 @@ export function BuildDetailPage() {
     }) =>
       createJobVersionTags(jobID, {
         version,
+        ...(artifactIDs ? { kind: "version" as const } : {}),
         artifact_ids: artifactIDs,
         managed_image_version_ids: managedImageVersionIDs,
       }),
-    onSuccess: async () => {
+    onSuccess: async (_, { artifactIDs }) => {
+      if (artifactIDs?.[0] && id) {
+        await invalidateArtifactAssignment(
+          queryClient,
+          artifactIDs[0],
+          id,
+          "version",
+        );
+        return;
+      }
       await queryClient.invalidateQueries({ queryKey: ["build", id] });
       await queryClient.invalidateQueries({ queryKey: ["buildArtifacts", id] });
     },

@@ -1,3 +1,4 @@
+import { ArtifactNavigation } from "../components/ArtifactNavigation";
 import { useCallback } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
@@ -267,15 +268,12 @@ export function ArtifactsPage() {
     <>
       <div className="page-header-row">
         <div>
-          <h2>Artifacts</h2>
+          <h2>Build outputs</h2>
           <p className="subtle-text">
-            Artifact listing with build lineage.
+            Files collected from individual builds.
             {isFetching && !isLoading ? " Updating…" : ""}
           </p>
-          <p className="subtle-text">
-            <Link to="/artifacts/logical">Repository view</Link> groups
-            artifacts by path with versions and channels.
-          </p>
+          <ArtifactNavigation />
           <p className="subtle-text">
             Updated{" "}
             {dataUpdatedAt > 0
@@ -288,7 +286,7 @@ export function ArtifactsPage() {
       <section className="artifact-filters-panel" aria-label="Artifact filters">
         <div className="artifact-filter-toolbar">
           <div>
-            <h3>Artifact listing</h3>
+            <h3>Filter outputs</h3>
             <p className="subtle-text">
               {activeFilterCount > 0
                 ? `${activeFilterCount} active filter${activeFilterCount === 1 ? "" : "s"}`
@@ -401,8 +399,10 @@ export function ArtifactsPage() {
         <p>Loading artifacts…</p>
       ) : error ? (
         <div className="empty-state artifact-empty-state artifact-error-state">
-          <p className="error-text">
-            Failed to load artifacts: {String(error)}
+          <p className="error-text" role="alert">
+            {"status" in error && error.status === 403
+              ? "Permission denied for these build outputs."
+              : `Failed to load artifacts: ${String(error)}`}
           </p>
         </div>
       ) : artifacts.length === 0 ? (
@@ -434,12 +434,18 @@ export function ArtifactsPage() {
                       <span className="artifact-secondary-pill">
                         {stepLabel(artifact)}
                       </span>
-                      <span className="artifact-secondary-pill">
+                      <Link
+                        className="artifact-secondary-pill"
+                        to={`/projects/${artifact.project_id}`}
+                      >
                         Project {projectLabel(artifact)}
-                      </span>
+                      </Link>
                       {artifact.job_id ? (
                         <span className="artifact-secondary-pill">
-                          Job {jobLabel(artifact)}
+                          Job{" "}
+                          <Link to={`/jobs/${artifact.job_id}`}>
+                            {jobLabel(artifact)}
+                          </Link>
                         </span>
                       ) : null}
                     </div>
@@ -469,44 +475,6 @@ export function ArtifactsPage() {
 
                 <div className="artifact-detail-grid artifact-build-card-grid">
                   <div>
-                    <strong>Path</strong>
-                    <span className="artifact-mono">{artifact.path}</span>
-                  </div>
-                  <div>
-                    <strong>Build</strong>
-                    <span>
-                      <Link to={`/builds/${artifact.build_id}`}>
-                        {buildLabel(artifact)}
-                      </Link>
-                    </span>
-                  </div>
-                  <div>
-                    <strong>Build status</strong>
-                    <span>
-                      <StatusBadge status={artifact.build_status} />
-                    </span>
-                  </div>
-                  <div>
-                    <strong>Created</strong>
-                    <span>{formatTime(artifact.created_at)}</span>
-                  </div>
-                  <div>
-                    <strong>Job</strong>
-                    <span>
-                      {artifact.job_id ? (
-                        <Link to={`/jobs/${artifact.job_id}`}>
-                          {jobLabel(artifact)}
-                        </Link>
-                      ) : (
-                        "—"
-                      )}
-                    </span>
-                  </div>
-                  <div>
-                    <strong>Size</strong>
-                    <span>{formatFileSize(artifact.size_bytes)}</span>
-                  </div>
-                  <div>
                     <strong>Content type</strong>
                     <span>{artifact.content_type ?? "—"}</span>
                   </div>
@@ -527,7 +495,7 @@ export function ArtifactsPage() {
                   <div className="artifact-actions">
                     <Link to={`/artifacts/${artifact.id}`}>Open artifact</Link>
                     <Link to={buildArtifactRepositoryPath(artifact)}>
-                      Repository view
+                      Find package
                     </Link>
                     <a href={artifactDownloadURL(artifact.download_url_path)}>
                       Download

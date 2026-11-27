@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ArtifactBrowser } from "./ArtifactBrowser";
 import type { ArtifactBrowseItem } from "../types";
@@ -109,6 +109,59 @@ function renderBrowser(
 }
 
 describe("ArtifactBrowser", () => {
+  it("keeps same-path packages separate and resolves multiple labels to an older matching output", () => {
+    const pkg = makeArtifact();
+    const older = pkg.versions[0];
+    older.version_tags!.push({
+      ...older.version_tags![0],
+      id: "second",
+      version: "1.2.0",
+    });
+    const newest = {
+      ...older,
+      artifact_id: "new",
+      build_id: "new-build",
+      build_number: 42,
+      version_tags: [],
+      lineage: null,
+    };
+    renderBrowser({
+      artifacts: [
+        { ...pkg, versions: [newest, older] },
+        { ...pkg, key: "other", job_id: null, versions: [newest] },
+      ],
+    });
+    const toggle = screen.getByRole("button", { name: /Job backend-ci/ });
+    expect(toggle).toHaveTextContent("Newest matching output: Build #42");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen.getByRole("button", { name: /Jobless build new-build/ }),
+    ).toHaveAttribute("aria-expanded", "false");
+    const channels = within(
+      screen.getByText("Mutable aliases").closest("section")!,
+    );
+    expect(channels.getByText("latest")).toBeVisible();
+    expect(channels.getByRole("link", { name: "Download" })).toHaveAttribute(
+      "href",
+      `/api${older.download_url_path}`,
+    );
+    const versions = within(
+      screen
+        .getByRole("heading", { name: "Immutable versions" })
+        .closest("section")!,
+    );
+    expect(versions.getAllByText("1.2.0")[0]).toBeVisible();
+    expect(versions.getAllByText("2026.04.25")[0]).toBeVisible();
+    const unversioned = within(
+      screen
+        .getByRole("heading", { name: "Unversioned outputs" })
+        .closest("section")!,
+    );
+    expect(
+      unversioned.getByRole("link", { name: "Open artifact" }),
+    ).toHaveAttribute("href", "/artifacts/new");
+  });
   it("renders loading, error, and empty states", () => {
     const { rerender } = render(
       <MemoryRouter>
@@ -142,7 +195,7 @@ describe("ArtifactBrowser", () => {
       </MemoryRouter>,
     );
     expect(
-      screen.getByText("No release artifacts matched the current filters."),
+      screen.getByText("No packages matched the current filters."),
     ).toBeTruthy();
 
     rerender(
@@ -198,9 +251,7 @@ describe("ArtifactBrowser", () => {
       screen.getByRole("button", { name: /packages\/pkg-a\.tgz/i }),
     );
 
-    expect(
-      screen.getByText("No channels currently point to this artifact package."),
-    ).toBeTruthy();
+    expect(screen.getByText("No channels on matching outputs.")).toBeTruthy();
     expect(screen.getByText("No versions yet")).toBeTruthy();
     expect(screen.getByText("No channels yet")).toBeTruthy();
     expect(screen.getAllByText("Build-level artifact").length).toBeGreaterThan(
@@ -263,7 +314,7 @@ describe("ArtifactBrowser", () => {
       ],
     });
 
-    expect(screen.getByText("No versions")).toBeTruthy();
+    expect(screen.getByText("No matching outputs")).toBeTruthy();
 
     fireEvent.click(
       screen.getByRole("button", { name: /dist\/channel-only\.txt/i }),
@@ -283,7 +334,7 @@ describe("ArtifactBrowser", () => {
     );
 
     expect(screen.getAllByText("Commit 95f09eb").length).toBeGreaterThan(0);
-    expect(screen.getByText("Version 2026.04.25")).toBeTruthy();
+    expect(screen.getAllByText("Version 2026.04.25").length).toBeGreaterThan(0);
     expect(screen.getByText("Channel latest")).toBeTruthy();
     expect(
       screen.getAllByRole("link", { name: "Build #41" }).length,

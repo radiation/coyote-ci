@@ -164,13 +164,14 @@ function toBuildArtifact(detail: ArtifactDetail): BuildArtifact {
   };
 }
 
-function renderPage(initialEntries = ["/artifacts/artifact-1"]) {
-  const queryClient = new QueryClient({
+function renderPage(
+  initialEntries = ["/artifacts/artifact-1"],
+  queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
     },
-  });
-
+  }),
+) {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={initialEntries}>
@@ -227,7 +228,9 @@ describe("ArtifactDetailPage", () => {
     );
     expect(screen.getByText("1.2.3")).toBeTruthy();
     expect(screen.getByText("stable")).toBeTruthy();
-    expect(screen.getByText("0123456789ab…89abcdef")).toHaveAttribute(
+    expect(
+      screen.getByText(buildArtifactDetail().checksum_sha256!),
+    ).toHaveAttribute(
       "title",
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     );
@@ -246,14 +249,14 @@ describe("ArtifactDetailPage", () => {
     fireEvent.change(
       screen.getByLabelText("artifact-detail-version-artifact-1"),
       {
-        target: { value: "2.0.0" },
+        target: { value: "prod" },
       },
     );
     fireEvent.click(screen.getByRole("button", { name: "Assign version" }));
 
     await waitFor(() => {
       expect(mockedCreateJobVersionTags).toHaveBeenCalledWith("job-1", {
-        version: "2.0.0",
+        version: "prod",
         kind: "version",
         artifact_ids: ["artifact-1"],
       });
@@ -265,7 +268,19 @@ describe("ArtifactDetailPage", () => {
         target: { value: "latest" },
       },
     );
+    const confirm = vi
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
     fireEvent.click(screen.getByRole("button", { name: "Assign channel" }));
+    expect(mockedCreateJobVersionTags).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /latest.*artifact-1.*build-1[\s\S]*job-1.*packages\/pkg-a.tgz/,
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Assign channel" }));
+    confirm.mockRestore();
 
     await waitFor(() => {
       expect(mockedCreateJobVersionTags).toHaveBeenCalledWith("job-1", {
@@ -294,6 +309,83 @@ describe("ArtifactDetailPage", () => {
     expect(
       within(producedBy).getByRole("link", { name: "Build #41" }),
     ).toHaveAttribute("href", "/builds/build-1");
+  });
+
+  it.each([
+    [403, "Permission denied"],
+    [404, "not found"],
+    [409, "conflict"],
+    [400, "Invalid assignment"],
+    [503, "Assignment failed"],
+  ] as const)(
+    "keeps channel input and announces HTTP %i",
+    async (status, message) => {
+      mockedCreateJobVersionTags.mockRejectedValueOnce(
+        new APIError(status, "server response"),
+      );
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      renderPage();
+      const input = await screen.findByLabelText(
+        "artifact-detail-channel-artifact-1",
+      );
+      fireEvent.change(input, { target: { value: "stable" } });
+      fireEvent.click(screen.getByRole("button", { name: "Assign channel" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(message);
+      expect(input).toHaveValue("stable");
+      confirm.mockRestore();
+    },
+  );
+
+  it("invalidates former targets without eager reads and prevents duplicate channel writes", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { staleTime: Infinity, retry: false } },
+    });
+    const keys = [
+      ["artifact", "former"],
+      ["buildArtifacts", "former-build"],
+      ["jobLatestSuccessfulArtifacts", "former-build"],
+      ["artifactLogicalBrowse", "scope"],
+      ["artifactCatalog", "scope"],
+    ];
+    keys.forEach((key) => client.setQueryData(key, ["stable"]));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let finish!: () => void;
+    mockedCreateJobVersionTags.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve([]);
+        }),
+    );
+    renderPage(undefined, client);
+    fireEvent.change(
+      await screen.findByLabelText("artifact-detail-channel-artifact-1"),
+      { target: { value: "stable" } },
+    );
+    const submit = screen.getByRole("button", { name: "Assign channel" });
+    fireEvent.click(submit);
+    expect(submit).toBeDisabled();
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(mockedCreateJobVersionTags).toHaveBeenCalledTimes(1),
+    );
+    finish();
+    expect(await screen.findByText("Assigned stable.")).toBeVisible();
+    keys.forEach((key) =>
+      expect(client.getQueryState(key)?.isInvalidated).toBe(true),
+    );
+    expect(mockedGetArtifact).not.toHaveBeenCalledWith("former");
+    expect(
+      await client.fetchQuery({ queryKey: keys[0], queryFn: async () => [] }),
+    ).toEqual([]);
+    confirm.mockRestore();
+  });
+
+  it("retains embedded source evidence when the producing build is inaccessible", async () => {
+    mockedGetBuild.mockRejectedValueOnce(new APIError(403, "denied"));
+    renderPage();
+    expect(await screen.findByText("95f09eb123456789")).toBeVisible();
+    expect(screen.getByText("refs/heads/main")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "95f09eb123456789" })).toBeNull();
   });
 
   it("renders compact lineage from commit through version and channel", async () => {
@@ -336,7 +428,7 @@ describe("ArtifactDetailPage", () => {
       within(provenance).getByRole("link", { name: "refs/heads/main" }),
     ).toHaveAttribute("href", "https://github.com/example/platform/tree/main");
     expect(
-      within(provenance).getByRole("link", { name: "95f09eb" }),
+      within(provenance).getByRole("link", { name: "95f09eb123456789" }),
     ).toHaveAttribute(
       "href",
       "https://github.com/example/platform/commit/95f09eb123456789",
@@ -347,7 +439,7 @@ describe("ArtifactDetailPage", () => {
     renderPage();
 
     const related = (
-      await screen.findByRole("heading", { name: "Related artifacts" })
+      await screen.findByRole("heading", { name: "Sibling outputs" })
     ).closest("section") as HTMLElement;
 
     await waitFor(() => {
