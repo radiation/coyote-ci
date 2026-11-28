@@ -10,7 +10,10 @@ import { artifactTypeLabel, formatFileSize } from "../utils/format";
 import { shortSHA } from "../utils/provenance";
 import { formatTime } from "../utils/time";
 import { StatusBadge } from "./StatusBadge";
-import { VersionTagEditor } from "./VersionTagEditor";
+import {
+  VersionTagEditor,
+  type VersionTagEditorState,
+} from "./VersionTagEditor";
 
 interface ArtifactBrowserProps {
   artifacts: ArtifactBrowseItem[];
@@ -247,6 +250,19 @@ export function ArtifactBrowser({
   onAssignVersion,
 }: ArtifactBrowserProps) {
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [editors, setEditors] = useState<
+    Record<string, Partial<VersionTagEditorState>>
+  >({});
+
+  function updateEditor(
+    artifactID: string,
+    patch: Partial<VersionTagEditorState>,
+  ) {
+    setEditors((current) => ({
+      ...current,
+      [artifactID]: { ...current[artifactID], ...patch },
+    }));
+  }
 
   if (isLoading) {
     return (
@@ -622,6 +638,11 @@ export function ArtifactBrowser({
                             </div>
 
                             <VersionTagEditor
+                              editor={{
+                                state: editors[version.artifact_id] ?? {},
+                                update: (patch) =>
+                                  updateEditor(version.artifact_id, patch),
+                              }}
                               tags={releaseTags}
                               emptyText="No versions yet."
                               inputLabel={`artifact-browser-version-${version.artifact_id}`}

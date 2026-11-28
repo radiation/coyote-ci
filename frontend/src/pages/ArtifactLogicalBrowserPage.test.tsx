@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ThemeProvider } from "../theme";
@@ -181,6 +187,47 @@ describe("ArtifactLogicalBrowserPage", () => {
         artifact_ids: ["artifact-1"],
       });
     });
+  });
+
+  it("keeps assignment feedback on the output when refetch returns its first immutable version", async () => {
+    const item = buildBrowseItem(1);
+    const output = item.versions[0];
+    const firstTag = output.version_tags[0];
+    mockedListArtifacts
+      .mockResolvedValueOnce([
+        { ...item, versions: [{ ...output, version_tags: [] }] },
+      ])
+      .mockResolvedValue([
+        { ...item, versions: [{ ...output, version_tags: [firstTag] }] },
+      ]);
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /coyote-ci\/package-1/i }),
+    );
+    const unversioned = within(
+      screen
+        .getByRole("heading", { name: "Unversioned outputs" })
+        .closest("section")!,
+    );
+    fireEvent.change(unversioned.getByRole("textbox"), {
+      target: { value: firstTag.version },
+    });
+    fireEvent.click(
+      unversioned.getByRole("button", { name: "Assign version" }),
+    );
+
+    const versions = within(
+      screen
+        .getByRole("heading", { name: "Immutable versions" })
+        .closest("section")!,
+    );
+    const target = await versions.findByRole("link", { name: "Open artifact" });
+    expect(target).toHaveAttribute("href", "/artifacts/artifact-1");
+    await waitFor(() =>
+      expect(
+        within(target.closest("article")!).getByRole("status"),
+      ).toHaveTextContent(`Assigned ${firstTag.version}.`),
+    );
   });
 
   it("switches to outputs without package-only filters and expands matching results without fetching more rows", async () => {

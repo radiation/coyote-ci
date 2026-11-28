@@ -1,6 +1,20 @@
 import { useId, useState, type FormEvent } from "react";
 import type { VersionTag } from "../types";
 
+export interface VersionTagEditorState {
+  value: string;
+  error: string | null;
+  notice: string;
+  isSubmitting: boolean;
+}
+
+const initialEditorState: VersionTagEditorState = {
+  value: "",
+  error: null,
+  notice: "",
+  isSubmitting: false,
+};
+
 interface VersionTagEditorProps {
   tags: VersionTag[];
   emptyText: string;
@@ -10,6 +24,10 @@ interface VersionTagEditorProps {
   requiredMessage?: string;
   confirmAssignment?: (value: string) => boolean;
   onAssign?: (version: string) => Promise<void>;
+  editor?: {
+    state: Partial<VersionTagEditorState>;
+    update: (patch: Partial<VersionTagEditorState>) => void;
+  };
 }
 
 export function VersionTagEditor({
@@ -21,31 +39,37 @@ export function VersionTagEditor({
   requiredMessage = "Value is required.",
   confirmAssignment,
   onAssign,
+  editor,
 }: VersionTagEditorProps) {
   const inputId = useId();
-  const [value, setValue] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [localState, setLocalState] = useState(initialEditorState);
+  const { value, error, notice, isSubmitting } = editor
+    ? { ...initialEditorState, ...editor.state }
+    : localState;
+  const update =
+    editor?.update ??
+    ((patch: Partial<VersionTagEditorState>) =>
+      setLocalState((current) => ({ ...current, ...patch })));
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!onAssign || isSubmitting) return;
 
     const trimmed = value.trim();
-    setNotice("");
     if (!trimmed) {
-      setError(requiredMessage);
+      update({ notice: "", error: requiredMessage });
       return;
     }
 
     if (confirmAssignment && !confirmAssignment(trimmed)) return;
-    setIsSubmitting(true);
-    setError(null);
+    update({ isSubmitting: true, notice: "", error: null });
     try {
       await onAssign(trimmed);
-      setNotice(`Assigned ${trimmed}.`);
-      setValue("");
+      update({
+        notice: `Assigned ${trimmed}.`,
+        value: "",
+        isSubmitting: false,
+      });
     } catch (submitError) {
       const status =
         submitError instanceof Error && "status" in submitError
@@ -55,19 +79,19 @@ export function VersionTagEditor({
         submitError instanceof Error
           ? submitError.message
           : String(submitError);
-      setError(
-        status === 403
-          ? "Permission denied for this assignment."
-          : status === 404
-            ? "The assignment target was not found."
-            : status === 409
-              ? `Assignment conflict: ${detail}`
-              : status === 400
-                ? `Invalid assignment: ${detail}`
-                : `Assignment failed: ${detail}`,
-      );
-    } finally {
-      setIsSubmitting(false);
+      update({
+        isSubmitting: false,
+        error:
+          status === 403
+            ? "Permission denied for this assignment."
+            : status === 404
+              ? "The assignment target was not found."
+              : status === 409
+                ? `Assignment conflict: ${detail}`
+                : status === 400
+                  ? `Invalid assignment: ${detail}`
+                  : `Assignment failed: ${detail}`,
+      });
     }
   }
 
@@ -93,7 +117,7 @@ export function VersionTagEditor({
           <input
             id={inputId}
             value={value}
-            onChange={(event) => setValue(event.target.value)}
+            onChange={(event) => update({ value: event.target.value })}
             placeholder={placeholder}
             disabled={isSubmitting}
           />
