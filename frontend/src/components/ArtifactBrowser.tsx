@@ -10,7 +10,10 @@ import { artifactTypeLabel, formatFileSize } from "../utils/format";
 import { shortSHA } from "../utils/provenance";
 import { formatTime } from "../utils/time";
 import { StatusBadge } from "./StatusBadge";
-import { VersionTagEditor } from "./VersionTagEditor";
+import {
+  VersionTagEditor,
+  type VersionTagEditorState,
+} from "./VersionTagEditor";
 
 interface ArtifactBrowserProps {
   artifacts: ArtifactBrowseItem[];
@@ -247,6 +250,19 @@ export function ArtifactBrowser({
   onAssignVersion,
 }: ArtifactBrowserProps) {
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [editors, setEditors] = useState<
+    Record<string, Partial<VersionTagEditorState>>
+  >({});
+
+  function updateEditor(
+    artifactID: string,
+    patch: Partial<VersionTagEditorState>,
+  ) {
+    setEditors((current) => ({
+      ...current,
+      [artifactID]: { ...current[artifactID], ...patch },
+    }));
+  }
 
   if (isLoading) {
     return (
@@ -264,7 +280,11 @@ export function ArtifactBrowser({
   if (error) {
     return (
       <div className="empty-state artifact-empty-state artifact-error-state">
-        <p className="error-text">Failed to load artifacts: {String(error)}</p>
+        <p className="error-text" role="alert">
+          {error instanceof Error && "status" in error && error.status === 403
+            ? "Permission denied for these packages."
+            : `Failed to load artifacts: ${String(error)}`}
+        </p>
       </div>
     );
   }
@@ -275,13 +295,13 @@ export function ArtifactBrowser({
           {pageIndex > 0
             ? "No artifacts on this page."
             : hasActiveFilters
-              ? "No release artifacts matched the current filters."
-              : "No versioned artifacts or channels yet."}
+              ? "No packages matched the current filters."
+              : "No packages found."}
         </p>
         <p className="subtle-text">
           {hasActiveFilters
-            ? "Adjust the search or filters, or clear them to return to the full release view."
-            : "Publish artifact versions or channels from a build to populate this release view."}
+            ? "Adjust the search or filters to find other packages."
+            : "Collected build outputs appear here even without a version or channel."}
         </p>
       </div>
     );
@@ -301,6 +321,10 @@ export function ArtifactBrowser({
         const isExpanded = expandedKeys.includes(artifact.key);
         const latestVersion = artifact.versions[0];
         const latestTag = firstVersionTag(latestVersion);
+        const assignmentCount = artifact.versions.reduce(
+          (count, output) => count + versionTags(output).length,
+          0,
+        );
         const channels = isExpanded
           ? artifact.versions.flatMap((version) =>
               channelTags(version).map((tag) => ({ tag, version })),
@@ -343,23 +367,29 @@ export function ArtifactBrowser({
                     <span className="artifact-secondary-pill">
                       Project {artifactProjectLabel(artifact)}
                     </span>
-                    {artifact.job_id && (
+                    {artifact.job_id ? (
                       <span className="artifact-secondary-pill">
-                        Job {artifactJobLabel(artifact)}
+                        Job {artifactJobLabel(artifact)} ({artifact.job_id})
                       </span>
+                    ) : (
+                      latestVersion && (
+                        <span className="artifact-secondary-pill">
+                          Jobless build {latestVersion.build_id}
+                        </span>
+                      )
                     )}
                   </div>
                 </div>
                 <div className="artifact-card-summary">
                   <span className="artifact-summary-primary">
                     {latestVersion
-                      ? versionLabel(latestVersion)
-                      : "No versions"}
+                      ? `Newest matching output: ${versionLabel(latestVersion)}`
+                      : "No matching outputs"}
                   </span>
                   {latestVersion && (
                     <StatusBadge status={latestVersion.build_status} />
                   )}
-                  <span>{versionCountLabel(artifact.versions.length)}</span>
+                  <span>{versionCountLabel(assignmentCount)}</span>
                   <span>{channelCountLabel(channelCount)}</span>
                   <span>{formatTime(artifact.latest_created_at)}</span>
                   {latestVersion && (
@@ -367,7 +397,7 @@ export function ArtifactBrowser({
                   )}
                   {latestTag && (
                     <span className="version-tag-pill artifact-latest-tag">
-                      {latestTag}
+                      Version {latestTag}
                     </span>
                   )}
                 </div>
@@ -376,43 +406,6 @@ export function ArtifactBrowser({
 
             {isExpanded && (
               <div className="artifact-card-body">
-                <div className="artifact-detail-grid">
-                  <div>
-                    <strong>Name</strong>
-                    <span>{artifactHeading(artifact)}</span>
-                  </div>
-                  <div>
-                    <strong>Type</strong>
-                    <span>{artifactTypeLabel(artifact.artifact_type)}</span>
-                  </div>
-                  <div>
-                    <strong>Versions</strong>
-                    <span>{versionCountLabel(artifact.versions.length)}</span>
-                  </div>
-                  <div>
-                    <strong>Channels</strong>
-                    <span>{channelCountLabel(channelCount)}</span>
-                  </div>
-                  <div>
-                    <strong>Project</strong>
-                    <span>{artifactProjectLabel(artifact)}</span>
-                  </div>
-                  <div>
-                    <strong>Job</strong>
-                    <span>
-                      {artifact.job_id ? artifactJobLabel(artifact) : "—"}
-                    </span>
-                  </div>
-                  <div>
-                    <strong>Latest Update</strong>
-                    <span>{formatTime(artifact.latest_created_at)}</span>
-                  </div>
-                  <div className="artifact-version-meta-full">
-                    <strong>Path</strong>
-                    <span className="artifact-mono">{artifact.path}</span>
-                  </div>
-                </div>
-
                 <section className="artifact-release-section">
                   <div className="artifact-version-list-header artifact-release-section-header">
                     <h4>Channels</h4>
@@ -472,179 +465,201 @@ export function ArtifactBrowser({
                     </div>
                   ) : (
                     <p className="subtle-text artifact-release-empty">
-                      No channels currently point to this artifact package.
+                      No channels on matching outputs.
                     </p>
                   )}
                 </section>
 
-                <div className="artifact-version-list-header artifact-release-section-header">
-                  <h4>Versions</h4>
-                  <span className="subtle-text">
-                    Immutable releases, most recent first
-                  </span>
-                </div>
+                {[true, false].map((assigned) => {
+                  const outputs = artifact.versions.filter(
+                    (output) =>
+                      Boolean(versionTags(output).length) === assigned,
+                  );
+                  if (!assigned && !outputs.length) return null;
+                  return (
+                    <section
+                      key={String(assigned)}
+                      className="artifact-version-list"
+                    >
+                      <h4>
+                        {assigned
+                          ? "Immutable versions"
+                          : "Unversioned outputs"}
+                      </h4>
+                      {!outputs.length && (
+                        <p>No immutable versions on matching outputs.</p>
+                      )}
+                      {outputs.map((version) => {
+                        const releaseTags = versionTags(version);
+                        const channelsPointingHere = channelTags(version);
 
-                <div className="artifact-version-list">
-                  {artifact.versions.map((version) => {
-                    const releaseTags = versionTags(version);
-                    const channelsPointingHere = channelTags(version);
-
-                    return (
-                      <article
-                        key={version.artifact_id}
-                        className="artifact-version-row"
-                      >
-                        <div className="artifact-version-header">
-                          <div>
-                            <div className="artifact-version-title-row">
-                              <Link to={`/artifacts/${version.artifact_id}`}>
-                                {artifactHeading(artifact)}
-                              </Link>
-                              <StatusBadge status={version.build_status} />
-                            </div>
-                            <p className="subtle-text artifact-version-subtle">
-                              {versionContext(version)}
-                            </p>
-                          </div>
-                          <div className="artifact-actions artifact-version-actions">
-                            <Link to={`/artifacts/${version.artifact_id}`}>
-                              Open artifact
-                            </Link>
-                            <a
-                              href={artifactDownloadURL(
-                                version.download_url_path,
-                              )}
-                            >
-                              Download
-                            </a>
-                          </div>
-                        </div>
-
-                        <div className="artifact-version-badge-groups">
-                          <div className="artifact-version-badge-group">
-                            <strong>Versions</strong>
-                            <div
-                              className="version-tag-list"
-                              aria-label={`artifact-version-labels-${version.artifact_id}`}
-                            >
-                              {releaseTags.length > 0 ? (
-                                releaseTags.map((tag) => (
-                                  <span
-                                    key={tag.id}
-                                    className="version-tag-pill"
+                        return (
+                          <article
+                            key={version.artifact_id}
+                            className="artifact-version-row"
+                          >
+                            <div className="artifact-version-header">
+                              <div>
+                                <div className="artifact-version-title-row">
+                                  <Link
+                                    to={`/artifacts/${version.artifact_id}`}
                                   >
-                                    {tag.version}
+                                    {artifactHeading(artifact)}
+                                  </Link>
+                                  <StatusBadge status={version.build_status} />
+                                </div>
+                                <p className="subtle-text artifact-version-subtle">
+                                  {versionContext(version)}
+                                </p>
+                              </div>
+                              <div className="artifact-actions artifact-version-actions">
+                                <Link to={`/artifacts/${version.artifact_id}`}>
+                                  Open artifact
+                                </Link>
+                                <a
+                                  href={artifactDownloadURL(
+                                    version.download_url_path,
+                                  )}
+                                >
+                                  Download
+                                </a>
+                              </div>
+                            </div>
+
+                            <div className="artifact-version-badge-groups">
+                              <div className="artifact-version-badge-group">
+                                <strong>Versions</strong>
+                                <div
+                                  className="version-tag-list"
+                                  aria-label={`artifact-version-labels-${version.artifact_id}`}
+                                >
+                                  {releaseTags.length > 0 ? (
+                                    releaseTags.map((tag) => (
+                                      <span
+                                        key={tag.id}
+                                        className="version-tag-pill"
+                                      >
+                                        {tag.version}
+                                      </span>
+                                    ))
+                                  ) : (
+                                    <span className="subtle-text">
+                                      No versions yet
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="artifact-version-badge-group">
+                                <strong>Channels</strong>
+                                <div
+                                  className="version-tag-list"
+                                  aria-label={`artifact-version-channels-${version.artifact_id}`}
+                                >
+                                  {channelsPointingHere.length > 0 ? (
+                                    channelsPointingHere.map((tag) => (
+                                      <span
+                                        key={tag.id}
+                                        className="version-tag-pill artifact-channel-pill"
+                                      >
+                                        {tag.version}
+                                      </span>
+                                    ))
+                                  ) : (
+                                    <span className="subtle-text">
+                                      No channels yet
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="artifact-lineage-trail subtle-text">
+                              {artifactLineageSegments(version).map(
+                                (segment, index) => (
+                                  <span key={segment.key}>
+                                    {index > 0 ? (
+                                      <span
+                                        className="artifact-lineage-separator"
+                                        aria-hidden="true"
+                                      >
+                                        →
+                                      </span>
+                                    ) : null}
+                                    {segment.content}
                                   </span>
-                                ))
-                              ) : (
-                                <span className="subtle-text">
-                                  No versions yet
+                                ),
+                              )}
+                            </div>
+
+                            <div className="artifact-version-meta-grid">
+                              <div>
+                                <strong>Created</strong>
+                                <span>{formatTime(version.created_at)}</span>
+                              </div>
+                              <div>
+                                <strong>Build</strong>
+                                <span>
+                                  <Link to={`/builds/${version.build_id}`}>
+                                    {versionLabel(version)}
+                                  </Link>
                                 </span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="artifact-version-badge-group">
-                            <strong>Channels</strong>
-                            <div
-                              className="version-tag-list"
-                              aria-label={`artifact-version-channels-${version.artifact_id}`}
-                            >
-                              {channelsPointingHere.length > 0 ? (
-                                channelsPointingHere.map((tag) => (
-                                  <span
-                                    key={tag.id}
-                                    className="version-tag-pill artifact-channel-pill"
-                                  >
-                                    {tag.version}
-                                  </span>
-                                ))
-                              ) : (
-                                <span className="subtle-text">
-                                  No channels yet
+                              </div>
+                              <div>
+                                <strong>Project</strong>
+                                <span>{versionProjectLabel(version)}</span>
+                              </div>
+                              <div>
+                                <strong>Job</strong>
+                                <span>{versionJobLabel(version)}</span>
+                              </div>
+                              <div>
+                                <strong>Size</strong>
+                                <span>
+                                  {formatFileSize(version.size_bytes)}
                                 </span>
-                              )}
+                              </div>
+                              <div>
+                                <strong>Storage</strong>
+                                <span>{version.storage_provider}</span>
+                              </div>
+                              <div>
+                                <strong>Content Type</strong>
+                                <span>{version.content_type ?? "—"}</span>
+                              </div>
+                              <div className="artifact-version-meta-full">
+                                <strong>Digest</strong>
+                                <span
+                                  className="artifact-mono artifact-checksum-value"
+                                  title={version.checksum_sha256 ?? undefined}
+                                >
+                                  {version.checksum_sha256 ?? "—"}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        </div>
 
-                        <div className="artifact-lineage-trail subtle-text">
-                          {artifactLineageSegments(version).map(
-                            (segment, index) => (
-                              <span key={segment.key}>
-                                {index > 0 ? (
-                                  <span
-                                    className="artifact-lineage-separator"
-                                    aria-hidden="true"
-                                  >
-                                    →
-                                  </span>
-                                ) : null}
-                                {segment.content}
-                              </span>
-                            ),
-                          )}
-                        </div>
-
-                        <div className="artifact-version-meta-grid">
-                          <div>
-                            <strong>Created</strong>
-                            <span>{formatTime(version.created_at)}</span>
-                          </div>
-                          <div>
-                            <strong>Build</strong>
-                            <span>
-                              <Link to={`/builds/${version.build_id}`}>
-                                {versionLabel(version)}
-                              </Link>
-                            </span>
-                          </div>
-                          <div>
-                            <strong>Project</strong>
-                            <span>{versionProjectLabel(version)}</span>
-                          </div>
-                          <div>
-                            <strong>Job</strong>
-                            <span>{versionJobLabel(version)}</span>
-                          </div>
-                          <div>
-                            <strong>Size</strong>
-                            <span>{formatFileSize(version.size_bytes)}</span>
-                          </div>
-                          <div>
-                            <strong>Storage</strong>
-                            <span>{version.storage_provider}</span>
-                          </div>
-                          <div>
-                            <strong>Content Type</strong>
-                            <span>{version.content_type ?? "—"}</span>
-                          </div>
-                          <div className="artifact-version-meta-full">
-                            <strong>Digest</strong>
-                            <span
-                              className="artifact-mono artifact-checksum-value"
-                              title={version.checksum_sha256 ?? undefined}
-                            >
-                              {version.checksum_sha256 ?? "—"}
-                            </span>
-                          </div>
-                        </div>
-
-                        <VersionTagEditor
-                          tags={releaseTags}
-                          emptyText="No versions yet."
-                          inputLabel={`artifact-browser-version-${version.artifact_id}`}
-                          submitLabel="Assign version"
-                          onAssign={
-                            onAssignVersion && version.job_id
-                              ? (releaseVersion) =>
-                                  onAssignVersion(version, releaseVersion)
-                              : undefined
-                          }
-                        />
-                      </article>
-                    );
-                  })}
-                </div>
+                            <VersionTagEditor
+                              editor={{
+                                state: editors[version.artifact_id] ?? {},
+                                update: (patch) =>
+                                  updateEditor(version.artifact_id, patch),
+                              }}
+                              tags={releaseTags}
+                              emptyText="No versions yet."
+                              inputLabel={`artifact-browser-version-${version.artifact_id}`}
+                              submitLabel="Assign version"
+                              onAssign={
+                                onAssignVersion && version.job_id
+                                  ? (releaseVersion) =>
+                                      onAssignVersion(version, releaseVersion)
+                                  : undefined
+                              }
+                            />
+                          </article>
+                        );
+                      })}
+                    </section>
+                  );
+                })}
               </div>
             )}
           </section>

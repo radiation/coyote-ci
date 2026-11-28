@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ThemeProvider } from "../theme";
@@ -143,7 +149,7 @@ describe("ArtifactLogicalBrowserPage", () => {
     renderPage();
 
     expect(
-      await screen.findByRole("link", { name: "Artifact listing" }),
+      await screen.findByRole("link", { name: "Build outputs" }),
     ).toHaveAttribute("href", "/artifacts");
 
     const toggle = await screen.findByRole("button", {
@@ -169,17 +175,76 @@ describe("ArtifactLogicalBrowserPage", () => {
     fireEvent.change(
       await screen.findByLabelText("artifact-browser-version-artifact-1"),
       {
-        target: { value: "2026.04.25" },
+        target: { value: "stable" },
       },
     );
     fireEvent.click(screen.getByRole("button", { name: "Assign version" }));
 
     await waitFor(() => {
       expect(mockedCreateJobVersionTags).toHaveBeenCalledWith("job-1", {
-        version: "2026.04.25",
+        version: "stable",
+        kind: "version",
         artifact_ids: ["artifact-1"],
       });
     });
+  });
+
+  it("keeps assignment feedback on the output when refetch returns its first immutable version", async () => {
+    const item = buildBrowseItem(1);
+    const output = item.versions[0];
+    const firstTag = output.version_tags[0];
+    mockedListArtifacts
+      .mockResolvedValueOnce([
+        { ...item, versions: [{ ...output, version_tags: [] }] },
+      ])
+      .mockResolvedValue([
+        { ...item, versions: [{ ...output, version_tags: [firstTag] }] },
+      ]);
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /coyote-ci\/package-1/i }),
+    );
+    const unversioned = within(
+      screen
+        .getByRole("heading", { name: "Unversioned outputs" })
+        .closest("section")!,
+    );
+    fireEvent.change(unversioned.getByRole("textbox"), {
+      target: { value: firstTag.version },
+    });
+    fireEvent.click(
+      unversioned.getByRole("button", { name: "Assign version" }),
+    );
+
+    const versions = within(
+      screen
+        .getByRole("heading", { name: "Immutable versions" })
+        .closest("section")!,
+    );
+    const target = await versions.findByRole("link", { name: "Open artifact" });
+    expect(target).toHaveAttribute("href", "/artifacts/artifact-1");
+    await waitFor(() =>
+      expect(
+        within(target.closest("article")!).getByRole("status"),
+      ).toHaveTextContent(`Assigned ${firstTag.version}.`),
+    );
+  });
+
+  it("switches to outputs without package-only filters and expands matching results without fetching more rows", async () => {
+    renderPage([
+      "/artifacts/logical?project_id=project-1&job_id=job-1&q=latest&type=npm_package&page=2",
+    ]);
+    expect(
+      await screen.findByRole("link", { name: "Build outputs" }),
+    ).toHaveAttribute("href", "/artifacts?project_id=project-1&job_id=job-1");
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Newest matching output/ }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "Immutable versions" }),
+    ).toBeVisible();
+    expect(mockedListArtifacts).toHaveBeenCalledTimes(1);
+    expect(mockedListProjects).toHaveBeenCalledTimes(1);
   });
 
   it("renders logical browser metadata and sanitizes invalid type params", async () => {
@@ -188,13 +253,11 @@ describe("ArtifactLogicalBrowserPage", () => {
     expect(
       await screen.findByRole("heading", {
         level: 2,
-        name: "Repository view",
+        name: "Packages",
       }),
     ).toBeTruthy();
     expect(
-      screen.getByText(
-        /Grouped artifact repository view for versions and channels/,
-      ),
+      screen.getByText(/Matching outputs grouped by package/),
     ).toBeTruthy();
     expect(screen.getByDisplayValue("All types")).toBeTruthy();
 
@@ -396,9 +459,7 @@ describe("ArtifactLogicalBrowserPage", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("location-search").textContent).toBe("");
-      expect(
-        screen.getByText("No versioned artifacts or channels yet."),
-      ).toBeTruthy();
+      expect(screen.getByText("No packages found.")).toBeTruthy();
     });
   });
 
@@ -408,9 +469,7 @@ describe("ArtifactLogicalBrowserPage", () => {
     renderPage(["/artifacts/logical?q=pkg&type=npm_package"]);
 
     expect(
-      await screen.findByText(
-        "No release artifacts matched the current filters.",
-      ),
+      await screen.findByText("No packages matched the current filters."),
     ).toBeTruthy();
     await waitFor(() => {
       expect(screen.queryByLabelText("Loading artifacts")).toBeNull();
@@ -423,11 +482,9 @@ describe("ArtifactLogicalBrowserPage", () => {
 
     renderPage();
 
+    expect(await screen.findByText("No packages found.")).toBeTruthy();
     expect(
-      await screen.findByText("No versioned artifacts or channels yet."),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(/Publish artifact versions or channels/),
+      screen.getByText(/Collected build outputs appear here/),
     ).toBeTruthy();
   });
 
